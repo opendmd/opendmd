@@ -602,6 +602,30 @@ doesn't compile is kept as an unsaved draft), then opens it in the
 editor. There are no anonymous short links:
 sharing is submitting to the gallery.
 
+**A sprite from a picture** (`js/fimport.js`, imported only once a picture
+is chosen with Picture…, dropped on the code or pasted into it, or chosen
+from the picture editor's Replace from a picture…; it imports
+`js/fsprite.js`'s parsers): the file is read in the page and never sent or
+stored (only the dialog's last settings, `odmd.psi.import`). It is sniffed
+by its first bytes; an SVG is refused with a DOCTYPE, parsed as XML (never
+put in the page), stripped of scripts, foreign content, frames, media,
+animation, `on…` attributes, links other than `#parts` and styles that
+load, embedded pictures and what multiplies the drawing (masks, markers,
+filters, clip paths, patterns, dashes, CSS filters and blending); what is left
+is weighed (each part, its path's length, its text, through every `<use>`)
+and refused past a budget that draws in well under a second, then sized at
+512 × 256 at most. Every kind goes through one path: a
+blob URL, an image never attached, its size checked (4,096 a side) before it
+is drawn 1:1 and read. Resampling (an area average on premultiplied alpha,
+or centre samples) and the colour reduction (a median cut, at most 8 Lloyd
+passes, no randomness, no dithering) are its own, so the same picture makes
+the same text in one browser (decoders and colour handling may differ between
+browsers). A browser that adds noise to what a page reads off a canvas (a
+privacy setting) is found by a four-pixel test first and told so. The dialog compiles the Formula with the sprite on the
+editor's module (`still(src)` in the kit; pkg-psi `info()[19]` and `[20]`,
+the store's numbers and the paint colours in use) and only peeks; Add is
+one edit the browser's undo takes back.
+
 **Earlier versions and drafts** (`js/fhist.js`, imported when needed): a
 ring of the last 10 texts per Formula in the browser's `localStorage`
 (`odmd.psi.v.<key>`; the key is a saved Formula's id, `g<slug>` for one from

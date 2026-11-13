@@ -111,6 +111,8 @@ draw {
 
 `spr(heart, 61, 14)` paints it with its top left corner at column 61, row 14. Add a fourth value of 1 to flip it left to right, 2 to flip it upside down, or 3 for both.
 
+To start from a picture instead of typing one, press **Picture…** under the code: see [Make a sprite from a picture](editor.md).
+
 ## Layers
 
 A Formula can have several colour lines, each in its own `layer { … }`. Layers stack, the first at the bottom.

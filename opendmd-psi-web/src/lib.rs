@@ -74,6 +74,8 @@ struct State {
     seed: i32,
     /// The compiler level the last formula compiled needs (`Info::level`).
     level: u8,
+    /// Its store numbers and paint colours in use (`Info::store`, `Info::paint`).
+    used: [u32; 2],
     /// The built-in inputs the preview draws with ([`world_set`]):
     /// [`World::default`] until the editor's controls say otherwise.
     world: World,
@@ -114,6 +116,7 @@ fn state() -> &'static mut State {
         at: [0; 2],
         seed: 0,
         level: 0,
+        used: [0; 2],
         world: World::default(),
     })
 }
@@ -158,6 +161,7 @@ fn build(src: &str) -> bool {
         Ok(i) => {
             core::mem::swap(&mut s.prog, &mut s.next);
             s.level = i.level;
+            s.used = [i.store as u32, i.paint as u32];
             s.ok = true;
             s.err_len = 0;
             true
@@ -293,8 +297,11 @@ pub fn error_at() -> Vec<u32> {
 /// (`Program::opens_ms`: [10]'s, or 20 for a `smooth` one past the 32 ms
 /// every refresh allows), the compiler level it needs (`Info::level`: 0
 /// any, 1 OpenDMD 1.1's: the built-in `phase`, a `smooth` line, a
-/// declaration below a `loop`, `fps` or `smooth` line)]`; empty
-/// before anything compiled.
+/// declaration below a `loop`, `fps` or `smooth` line), the store's
+/// numbers it holds as laid out (`Info::store`: tables, sprites and texts,
+/// of `MAX_TABLE`, 1,024), the paint colours it uses (`Info::paint`: each
+/// `#hex` of `draw { }` and the sprites' keys once, a palette drawn with
+/// 32; of 127)]`; empty before anything compiled.
 #[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -323,6 +330,8 @@ pub fn info() -> Vec<u32> {
         p.panel_limit_us(p.inputs() & 32 != 0),
         p.opens_ms(),
         u32::from(s.level),
+        s.used[0],
+        s.used[1],
     ]
 }
 

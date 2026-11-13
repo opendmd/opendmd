@@ -86,6 +86,9 @@ function draw(f, ms, still, gms = ms) {
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
 // A scratch formula's top row, RGB (js/fsprite.js's palette strip: the panel's own colours), then what was held compiled again.
 const row = (src) => T(() => { const was = held; held = null; const r = P.compile(src) ? (P.frame(0, 10, 9, 30, Q(), Q(), Q()), new Uint8Array(P.mem.buffer, P.pixels(), 384).slice()) : null; take(was); return r; }, null);
+// A scratch formula compiled (js/fimport.js: a picture's sprite alone, the Formula with it): its info() and,
+// `pic`, its first frame, RGB, `{i, rgb}`, else the compiler's sentence, `{err}`; then what was held compiled again.
+const still = (src, pic) => T(() => { const was = held; held = null; const r = P.compile(src) ? { i: P.info(), rgb: pic && (P.frame(0, 10, 9, 30, Q(), Q(), Q()), new Uint8Array(P.mem.buffer, P.pixels(), 12288).slice()) } : { err: P.error() }; take(was); return r; }, null);
 // What it declares (pkg-psi controls(): its name, about, look, controls).
 const ctlOf = (f) => T(() => controls(P, f.src), null);
 // Its name and line about it: its own lines, else the record's.
@@ -513,6 +516,9 @@ function build(root) {
 
 // --- The editor (`#formulas/edit`)
 
+// A file dropped beside the code while the editor is up: not opened by the browser in place of the page (once, for the module).
+for (const k of ['dragover', 'drop']) addEventListener(k, (e) => { if (document.querySelector('#psi-src')?.offsetParent && !e.defaultPrevented && e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+
 function editor() {
   // The name is the formula's `name` line (typed here, written there).
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); }, onchange: () => setTimeout(nameIn) });
@@ -575,13 +581,25 @@ function editor() {
   const away = () => setTimeout(() => { const f = document.activeElement; if (pend && f && f !== document.body && f !== kp && f !== ta) done(); else swatch(); });
   const kp = h('input', { type: 'color', id: 'psi-kp', hidden: true, title: 'Pick a colour', 'aria-label': 'Pick a colour',
     onpointerdown: open, onclick: open, oninput: picked, onchange: () => { picked(); done(); }, onblur: away });
+  // A sprite from a picture (js/fimport.js, imported once one is chosen, dropped on the code or pasted
+  // into it; never sent anywhere): a new one, or over `pto`, the sprite whose picture editor asked.
+  let pto = null;
+  const pic = (x, name = null) => import('./fimport.js').then((m) => m.open(x, { ta, put, peek, still, name, at: picB }), () => toast('Couldn’t open pictures here: reload the page', 'bad'));
+  const pf = h('input', { type: 'file', id: 'psi-pic-file', accept: 'image/*,.svg', hidden: true, onchange: () => { const x = pf.files[0], n = pto; pf.value = ''; pto = null; if (x) pic(x, n); } });
+  const pick = (name = null) => { pto = name; pf.click(); };
+  const picB = h('button.sm', { id: 'psi-pic-btn', 'aria-haspopup': 'dialog', title: 'Make a sprite from a picture', onclick: () => pick() }, 'Picture…');
+  const file = (d, k) => [...(d?.files || [])].find((x) => k || /^image\//.test(x.type));
+  ta.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+  ta.addEventListener('drop', (e) => { const x = file(e.dataTransfer, 1); if (x) { e.preventDefault(); pic(x); } });
+  // (A picture pasted; text is pasted as ever, a picture beside it too, as a spreadsheet's copy puts one.)
+  ta.addEventListener('paste', (e) => { const x = !e.clipboardData?.getData('text/plain') && file(e.clipboardData); if (x) { e.preventDefault(); pic(x); } });
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
   const top = h('div.psi-top', canvas, trow, cap, under);
   top.addEventListener('keydown', (e) => { if ((e.key === ',' || e.key === '.') && e.target !== tr && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); step(e.key === '.' ? 1 : -1); } });
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
-      h('div.row.acts', help, learn, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
+      h('div.row.acts', help, learn, vers, picB, pf, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, boot, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
@@ -839,7 +857,7 @@ function editor() {
   let SP = null;
   function blocks() {
     if (SP) return SP.caret?.();
-    if (/^[ \t]*(sprite[ \t]+\w+[ \t]*\{|palette[ \t]+\w+[ \t]*=)/m.test(ta.value)) SP = import('./fsprite.js').then((m) => { SP = m.blocks({ ta, put, peek, measure, row }); SP.caret(); }, () => { SP = null; });
+    if (/^[ \t]*(sprite[ \t]+\w+[ \t]*\{|palette[ \t]+\w+[ \t]*=)/m.test(ta.value)) SP = import('./fsprite.js').then((m) => { SP = m.blocks({ ta, put, peek, measure, row, picture: pick }); SP.caret(); }, () => { SP = null; });
   }
   ta.addEventListener('blur', away);
   // Back in the text: the pick so far goes in as one undo step.

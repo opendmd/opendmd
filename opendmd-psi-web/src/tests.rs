@@ -38,7 +38,8 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
-    assert_eq!(i.len(), 19);
+    assert_eq!(i.len(), 21);
+    assert_eq!((i[19], i[20]), (0, 0), "no store, no paint");
     assert_eq!(i[18], 0, "nothing of OpenDMD 1.1's");
     assert_eq!(i[17], 20, "opens at the default 20 ms");
     assert_eq!(i[15], 1, "the JIT takes it");
@@ -83,6 +84,14 @@ fn formulas() {
     }
     #[cfg(not(target_arch = "wasm32"))]
     the_examples_need_1_1_only_for_phase_and_smooth();
+    // The store and the paint colours in use (the editor's picture import
+    // reads them off a candidate): a sprite of 3 keys 4 wide, 2 rows is 1 +
+    // 3 + 2 (16 a number), the table after it at the next 4 (6 -> 8, + 3);
+    // two colours, `#000` among them, and a palette drawn with, 32.
+    assert!(compile("sprite s {\n  key . 0, R #f00, K #000\n  .RK.\n  RRKK\n}\ntable t = 1, 2, 3\ndraw { spr(s, 0, 0) }\ngray(ink)"));
+    assert_eq!((info()[19], info()[20]), (11, 2));
+    assert!(compile("palette p = #000, #fff\ndraw { cls(pal(p, 0.5)) }\ngray(ink)"));
+    assert_eq!(info()[20], 32);
     assert!(compile("look\nlayer multiply { gray(x) }"));
     assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 

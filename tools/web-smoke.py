@@ -5322,6 +5322,7 @@ def mock_pass(browser) -> None:
         studio_smooth_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
         psi_sprite_phone(browser, base, errors)
+        psi_import_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
@@ -6161,6 +6162,646 @@ def psi_sprite_phone(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(300)
     check(w / 5 >= 20 and got == HEART.replace("..R..\n}", "..R.R\n}") and page.input_value("#psi-src") == HEART
           and len(loaded) == 1, f"sprites (phone): fsprite.js loaded, cells of {w / 5:.0f} px, a tap paints ({got[-40:]!r}), Undo takes it back")
+    page.context.close()
+
+
+# --- A sprite from a picture (js/fimport.js) --------------------------------
+# Fixtures are drawn here, in code (our own pixels, never a third-party
+# picture): a PNG writer of its own (no colour chunks, so the browser reads
+# exactly these bytes), Pillow for the GIF and JPEG.
+
+def imp_png(w: int, h: int, px: list, *, mode: int = 6, depth: int = 8, plte: bytes = b"", trns: bytes = b"", interlace: int = 0) -> bytes:
+    """A PNG of `px` (a row-major list: RGBA tuples for colour type 6, RGB
+    for 2, indices for 3), unfiltered, with no gAMA/sRGB/iCCP chunk. Only
+    non-interlaced images are written row by row here (interlaced ones come
+    from imp_png_adam7)."""
+    import struct
+
+    def chunk(t: bytes, d: bytes) -> bytes:
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    raw = bytearray()
+    n = {6: 4, 2: 3, 3: 1, 0: 1, 4: 2}[mode]
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            v = px[y * w + x]
+            v = (v,) if isinstance(v, int) else v
+            for c in v[:n]:
+                raw += struct.pack(">H", c) if depth == 16 else bytes([c])
+    out = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, mode, 0, 0, interlace))
+    if plte:
+        out += chunk(b"PLTE", plte)
+    if trns:
+        out += chunk(b"tRNS", trns)
+    return out + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
+
+
+# The 8 × 8 picture: four colours and see-through, each count its own (so
+# the key's order is the counts' alone): . 28, R 16, G 10, B 6, W 4.
+IMP_ROWS = ["..RRRR..", ".RRRRRR.", "RRGGGGRR", "RGGWWGGR", ".GBWWBG.", "..BBBB..", "........", "........"]
+IMP_RGBA = {".": (0, 0, 0, 0), "R": (255, 0, 0, 255), "G": (0, 255, 0, 255), "B": (0, 0, 255, 255), "W": (255, 255, 255, 255)}
+IMP_BASE = "loop 8\nhsv(x, 1, 1)"
+
+
+def imp_pixels(rows: list[str], cols: dict) -> list:
+    return [cols[c] for r in rows for c in r]
+
+
+def imp_gradient(w: int = 200, h: int = 100) -> bytes:
+    """A smooth two-way gradient: thousands of colours."""
+    return imp_png(w, h, [((x * 255) // (w - 1), (y * 255) // (h - 1), 128) for y in range(h) for x in range(w)], mode=2)
+
+
+def imp_scene() -> bytes:
+    """Our own little scene for the screenshots: a dusk sky, a sun, two hills
+    and a star or two (Den 16's colours)."""
+    import io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGBA", (160, 80), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for y in range(80):
+        k = y / 79
+        d.line([(0, y), (159, y)], fill=(int(22 + 200 * k), int(29 + 70 * k), int(82 + 20 * k), 255))
+    d.ellipse([96, 20, 136, 60], fill=(247, 165, 49, 255))
+    d.ellipse([-40, 50, 90, 140], fill=(47, 158, 79, 255))
+    d.ellipse([60, 58, 200, 150], fill=(20, 83, 45, 255))
+    for x, y in ((20, 10), (52, 22), (80, 8)):
+        d.point((x, y), fill=(255, 255, 255, 255))
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+def imp_pil(fmt: str, w: int = 32, h: int = 16, **kw) -> bytes:
+    import io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (w, h), (20, 30, 120))
+    ImageDraw.Draw(im).rectangle([w // 4, h // 4, 3 * w // 4, 3 * h // 4], fill=(240, 200, 40))
+    b = io.BytesIO()
+    im.save(b, fmt, **kw)
+    return b.getvalue()
+
+
+def imp_expected_block(rows: list[str], key: str, name: str = "pic") -> str:
+    return f"sprite {name} {{\n  key {key}\n" + "".join(f"  {r}\n" for r in rows) + "}"
+
+
+def imp_give(page: Page, data: bytes, name: str = "art.png", mime: str = "image/png", via: str = "file") -> None:
+    """A picture into the editor: chosen with Picture… (the file input), dropped on the code, or pasted."""
+    import base64
+    if via == "file":
+        page.set_input_files("#psi-pic-file", files=[{"name": name, "mimeType": mime, "buffer": data}])
+        return
+    page.evaluate("""([b, name, mime, via]) => {
+        const f = new File([Uint8Array.from(atob(b), (c) => c.charCodeAt(0))], name, { type: mime }), dt = new DataTransfer();
+        dt.items.add(f);
+        const ta = document.querySelector('#psi-src');
+        if (via === 'drop') { ta.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); ta.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); }
+        else { ta.focus(); ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }
+    }""", [base64.b64encode(data).decode(), name, mime, via])
+
+
+def imp_open(page: Page, data: bytes, name: str = "art.png", mime: str = "image/png", via: str = "file") -> None:
+    imp_give(page, data, name, mime, via)
+    page.wait_for_selector("#psi-imp", timeout=10000)
+    imp_settle(page)
+
+
+def imp_settle(page: Page) -> None:
+    """The dialog's next frame drawn (it updates once a frame)."""
+    page.wait_for_timeout(120)
+    page.evaluate("() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+
+def imp_pick(page: Page, sel: str, value: str) -> None:
+    page.select_option(sel, value)
+    imp_settle(page)
+
+
+def imp_add(page: Page) -> str:
+    page.click("#psi-imp-go")
+    page.wait_for_selector("#psi-imp", state="detached", timeout=5000)
+    page.wait_for_timeout(400)
+    return page.input_value("#psi-src")
+
+
+def imp_rows(page: Page) -> list[str]:
+    return page.get_attribute("#psi-imp-grid", "data-rows").split("\n")
+
+
+def imp_key(text: str, name: str = "pic") -> list[str]:
+    """The key entries of sprite `name` in `text`: ["R #f00", …]."""
+    m = re.search(rf"^[ \t]*sprite {name} \{{\n[ \t]*key ([^\n]*)", text, re.M)
+    return [e.strip() for e in m.group(1).split(",")] if m else []
+
+
+def imp_toast(page: Page) -> str:
+    page.wait_for_selector(".toast.bad", timeout=10000)
+    return page.locator(".toast.bad").last.inner_text()
+
+
+def psi_import_checks(browser, base: str, errors: list[str]) -> None:
+    """A sprite from a picture (js/fimport.js). Green: fimport.js is never
+    fetched before a picture comes; an 8 × 8 picture of four colours and
+    see-through "As it is" is exactly the block expected, placed after the
+    header with its draw line, compiles, and one undo takes it out; the same
+    import twice is the same text; a picture again over a sprite whose key
+    characters were renamed keeps them (Replace from a picture… in the
+    picture editor); a 200 × 100 gradient at 64 × 32 is 16 keys, 32 rows of
+    64, 273 numbers, and the 2 and 4 tiers 67 and 133; a palette's colours
+    only; an SVG with only a viewBox; a GIF and a JPEG; dropped and pasted
+    pictures; a text paste untouched. Red: sizes typed past 64 × 32 held to
+    it; a file past 8 MB and a picture past 4,096 pixels refused with a
+    sentence; 256 colours end at 16; a nearly full store and a paint limit
+    reached say so in red with Add off and the text as it was; a text file
+    called .png and an HTML page around an SVG refused; a corpus of hostile
+    SVGs loads nothing, runs nothing and leaves the page answering; Cancel
+    leaves the text and its undo alone."""
+    import base64
+    page = new_page(browser, "laptop", errors)
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.url))
+    page.goto(base + "/#formulas")
+    formula_editor(page, IMP_BASE)
+    check(page.locator("#psi-pic-btn").is_visible() and not any("fimport.js" in u for u in asked),
+          f"import: Picture… is in the code's toolbar and fimport.js isn't fetched before a picture comes ({[u for u in asked if 'fimport' in u]})")
+    art = imp_png(8, 8, imp_pixels(IMP_ROWS, IMP_RGBA))
+    imp_open(page, art, "my art.png")
+    imp_pick(page, "#psi-imp-size", "as")
+    want_key = ". 0, R #f00, G #0f0, B #00f, W #fff"
+    blk = imp_expected_block(IMP_ROWS, want_key)
+    want = f"loop 8\n{blk}\ndraw {{ spr(pic, 60, 12) }}\nhsv(x, 1, 1)"
+    cost_line = page.inner_text("#psi-imp-cost")
+    cap = page.inner_text("#psi-imp")
+    check("Use pictures you made or may share." in cap and "my art" not in cap and "my art" not in page.input_value("#psi-src"),
+          "import: the dialog says to use your own pictures, and the file's name is nowhere")
+    got = imp_add(page)
+    check(got == want and page.get_attribute("#psi-ed", "data-err") is None and any("fimport.js" in u for u in asked),
+          f"import: 8 x 8, four colours and see-through, As it is -> exactly the block, after the header, drawn in the middle; it compiles ({got!r})")
+    check(cost_line.startswith("This picture: 14 numbers. The Formula would use 14 of 1,024 · 4 of 127 colours"), f"import: its cost line ({cost_line!r})")
+    u = undos(page, 1)
+    check(u[0] == IMP_BASE, f"import: one undo takes the sprite out ({u[0]!r})")
+    imp_open(page, art, "my art.png")
+    imp_pick(page, "#psi-imp-size", "as")
+    again = imp_add(page)
+    check(again == got, "import: the same picture twice is the same text")
+    # Renamed in the text (R is now x), then the picture changed a little and
+    # put in again over it from its picture editor: x stays x.
+    renamed = again.replace("R #f00", "x #f00")
+    for r in IMP_ROWS:
+        renamed = renamed.replace("  " + r + "\n", "  " + r.replace("R", "x") + "\n", 1)
+    page.fill("#psi-src", renamed)
+    page.wait_for_timeout(400)
+    caret_at(page, renamed.index("key") + 1)
+    page.click("#psi-blk")
+    page.wait_for_selector("#psi-pic-ed", timeout=5000)
+    rows2 = IMP_ROWS[:7] + ["R......."]
+    with page.expect_file_chooser() as fc:
+        page.click("#psi-pic-imp")
+    fc.value.set_files(files=[{"name": "art2.png", "mimeType": "image/png", "buffer": imp_png(8, 8, imp_pixels(rows2, IMP_RGBA))}])
+    page.wait_for_selector("#psi-imp", timeout=10000)
+    imp_settle(page)
+    imp_pick(page, "#psi-imp-size", "as")
+    title = page.inner_text("#psi-imp-go")
+    re_got = imp_add(page)
+    want_re = renamed.replace("  ........\n}", "  x.......\n}")
+    check(title == "Replace pic" and re_got == want_re, f"import: again over a sprite whose keys were renamed: x kept, the new row in ({title!r}, {re_got!r})")
+
+    # The gradient: 64 × 32, 16 keys, 32 rows of 64, 273 numbers; the tiers 67 and 133.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(400)
+    imp_open(page, imp_gradient(), "gradient.png")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    rows = imp_rows(page)
+    c16 = page.inner_text("#psi-imp-cost")
+    page.click("#psi-imp-tier button[data-k='2']")
+    imp_settle(page)
+    c2 = page.inner_text("#psi-imp-cost")
+    page.click("#psi-imp-tier button[data-k='4']")
+    imp_settle(page)
+    c4 = page.inner_text("#psi-imp-cost")
+    page.click("#psi-imp-tier button[data-k='16']")
+    imp_settle(page)
+    grad = imp_add(page)
+    keys = imp_key(grad)
+    check(len(rows) == 32 and all(len(r) == 64 for r in rows) and len(keys) == 16 and c16.startswith("This picture: 273 numbers")
+          and c2.startswith("This picture: 67 numbers") and c4.startswith("This picture: 133 numbers") and page.get_attribute("#psi-ed", "data-err") is None,
+          f"import: a 200 x 100 gradient at 64 x 32 is 16 keys, 32 rows of 64, 273 numbers; 2 and 4 colours 67 and 133 ({len(keys)}, {c16[:30]!r}, {c2[:30]!r}, {c4[:30]!r})")
+    # The same twice (median cut and Lloyd passes in a fixed order).
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_open(page, imp_gradient(), "gradient.png")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    check(imp_add(page) == grad, "import: a gradient reduced twice is the same 16 colours, the same rows")
+
+    # A palette of the Formula's: only its colours.
+    pal_src = "palette p = #000, #f00, #0f0, #00f, #ff0\nloop 8\nhsv(x, 1, 1)"
+    page.fill("#psi-src", pal_src)
+    page.wait_for_timeout(400)
+    imp_open(page, imp_gradient(), "gradient.png")
+    imp_pick(page, "#psi-imp-size", "32x32")
+    imp_pick(page, "#psi-imp-pal", "p:p")
+    note = page.is_visible("#psi-imp-note")
+    pal_got = imp_add(page)
+    hexes = {k.split(" ")[1] for k in imp_key(pal_got)} - {"0"}
+    check(note and hexes and hexes <= {"#000", "#f00", "#0f0", "#00f", "#ff0"} and pal_got.index("sprite pic") > pal_got.index("palette p"),
+          f"import: with the palette p, only its colours ({sorted(hexes)}), after the palette, the note said")
+
+    # An SVG with only a viewBox (rasterised at its shape), sharp: red left, blue right.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><rect width="8" height="8" fill="#f00"/><rect x="8" width="8" height="8" fill="#00f"/></svg>'
+    imp_open(page, svg, "two.svg", "image/svg+xml")
+    imp_pick(page, "#psi-imp-size", "16x16")
+    imp_pick(page, "#psi-imp-fit", "fill")
+    imp_pick(page, "#psi-imp-samp", "sharp")
+    svg_got = imp_add(page)
+    check(set(imp_key(svg_got)) == {"R #f00", "B #00f"} and "  RRRRRRRRBBBBBBBB\n" in svg_got,
+          f"import: an SVG with only a viewBox, cropped to fill: red, then blue ({imp_key(svg_got)})")
+    # Drawn right: an Illustrator-style logo (its colours in <style> classes), a gradient named in a quoted url().
+    for what, svg2, want_hex in (
+        ("an Illustrator-style logo's <style> classes", '<svg xmlns="http://www.w3.org/2000/svg" id="Layer_1" data-name="Layer 1" viewBox="0 0 64 32"><defs><style>.cls-1{fill:#e4002b;}.cls-2{fill:#00a0e0;stroke-dasharray:2;filter:blur(1px)}</style></defs><title>logo</title><rect class="cls-1" width="32" height="32"/><rect class="cls-2" x="32" width="32" height="32"/></svg>', {"#e4002b", "#00a0e0"}),
+        ("a gradient in url('#g')", """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32"><defs><linearGradient id="g"><stop offset="0" stop-color="#0f0"/><stop offset="1" stop-color="#0f0"/></linearGradient><radialGradient id="h"><stop offset="0" stop-color="#ff0"/><stop offset="1" stop-color="#ff0"/></radialGradient></defs><rect width="32" height="32" style="fill:url('#g')"/><rect x="32" width="32" height="32" fill="url( &quot;#h&quot; )"/></svg>""", {"#0f0", "#ff0"})):
+        page.fill("#psi-src", IMP_BASE)
+        page.wait_for_timeout(300)
+        imp_open(page, svg2.encode(), "logo.svg", "image/svg+xml")
+        imp_pick(page, "#psi-imp-size", "16x16")
+        imp_pick(page, "#psi-imp-fit", "stretch")
+        imp_pick(page, "#psi-imp-samp", "sharp")
+        hexes2 = {k.split(" ")[1] for k in imp_key(imp_add(page))}
+        check(hexes2 == want_hex, f"import: {what} drawn in their colours ({sorted(hexes2)})")
+    # An SVG that is only a picture around a PNG: said so.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    import base64 as b64
+    imp_give(page, ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><image width="8" height="8" href="data:image/png;base64,' + b64.b64encode(art).decode() + '"/></svg>').encode(), "wrapped.svg", "image/svg+xml")
+    t_wrap = imp_toast(page)
+    clear_toasts(page)
+    check("holds a picture" in t_wrap, f"import: an SVG that only wraps a picture says to open the picture itself ({t_wrap!r})")
+
+    # A GIF (dropped) and a JPEG (pasted) decode; a text paste is pasted.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_open(page, imp_pil("GIF"), "art.gif", "image/gif", via="drop")
+    gif_rows = imp_rows(page)
+    page.keyboard.press("Escape")
+    imp_open(page, imp_pil("JPEG", quality=95), "art.jpg", "image/jpeg", via="paste")
+    jpg_rows = imp_rows(page)
+    page.keyboard.press("Escape")
+    check(len(gif_rows) == 16 and len(jpg_rows) == 16 and len(set("".join(gif_rows))) == 2, f"import: a dropped GIF and a pasted JPEG decode ({len(gif_rows)}, {len(jpg_rows)})")
+    page.focus("#psi-src")
+    page.evaluate("""() => { const dt = new DataTransfer(); dt.setData('text/plain', 'x'); const ta = document.querySelector('#psi-src');
+        window.__imp_paste = ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }""")
+    check(page.evaluate("window.__imp_paste") is True and page.locator("#psi-imp").count() == 0, "import: a text paste is the browser's as ever")
+    # A spreadsheet's copy: text with a picture of it beside: the text is pasted.
+    page.evaluate("""(b) => { const dt = new DataTransfer(); dt.setData('text/plain', 'a\\tb'); dt.items.add(new File([Uint8Array.from(atob(b), (c) => c.charCodeAt(0))], 'cells.png', { type: 'image/png' }));
+        const ta = document.querySelector('#psi-src'); window.__imp_paste = ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }""", base64.b64encode(art).decode())
+    page.wait_for_timeout(500)
+    check(page.evaluate("window.__imp_paste") is True and page.locator("#psi-imp").count() == 0, "import: text with a picture beside it (a spreadsheet's copy) is pasted as text")
+    # Enter right after a size typed: the size typed is the one added; a tier picked by keys keeps the focus.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_open(page, imp_gradient(), "gradient.png")
+    page.focus("#psi-imp-tier button[data-k='4']")
+    page.keyboard.press("Space")
+    imp_settle(page)
+    kept_focus = page.evaluate("document.activeElement.dataset.k === '4' && document.activeElement.getAttribute('aria-pressed') === 'true'")
+    page.uncheck("#psi-imp-lock")
+    page.fill("#psi-imp-w", "20")
+    page.press("#psi-imp-w", "Enter")
+    page.wait_for_selector("#psi-imp", state="detached", timeout=5000)
+    page.wait_for_timeout(300)
+    typed_rows = [l for l in page.input_value("#psi-src").split("\n") if re.fullmatch(r"  [^ ]{2,}", l) and "key" not in l]
+    check(kept_focus and typed_rows and all(len(r) == 22 for r in typed_rows), f"import: a tier button keeps the focus; Enter after typing 20 adds 20 wide ({kept_focus}, {len(typed_rows[0]) - 2 if typed_rows else None})")
+
+    # --- Red.
+    # Sizes typed past 64 × 32: held to it, never a block the compiler refuses (E915, E916).
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_open(page, imp_gradient(), "gradient.png")
+    page.uncheck("#psi-imp-lock")
+    page.fill("#psi-imp-w", "65")
+    page.dispatch_event("#psi-imp-w", "change")
+    page.fill("#psi-imp-h", "33")
+    page.dispatch_event("#psi-imp-h", "change")
+    page.focus("#psi-imp-src")  # (a field being typed in is left as typed)
+    imp_settle(page)
+    wh = (page.input_value("#psi-imp-w"), page.input_value("#psi-imp-h"))
+    big = imp_add(page)
+    brows = [l for l in big.split("\n") if re.fullmatch(r"  [^ ]{2,}", l) and "key" not in l]
+    check(wh == ("64", "32") and len(brows) == 32 and all(len(r) == 66 for r in brows) and page.get_attribute("#psi-ed", "data-err") is None,
+          f"import: 65 x 33 typed is held to 64 x 32, and the block compiles ({wh}, {len(brows)} rows)")
+    # Too big a file, too big a picture.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_give(page, b"\x89PNG\r\n\x1a\n" + bytes(8 * 1024 * 1024 - 7), "huge.png")
+    t_big = imp_toast(page)
+    clear_toasts(page)
+    imp_give(page, imp_png(4097, 1, [(9, 9, 9)] * 4097, mode=2), "wide.png")
+    t_wide = imp_toast(page)
+    clear_toasts(page)
+    check("8 MB" in t_big and "4,096 pixels" in t_wide and page.locator("#psi-imp").count() == 0 and page.input_value("#psi-src") == IMP_BASE,
+          f"import: past 8 MB and past 4,096 pixels refused with a sentence ({t_big!r}, {t_wide!r})")
+    # 256 colours end at 16.
+    imp_open(page, imp_png(16, 16, [((i * 37) % 256, (i * 91) % 256, i) for i in range(256)], mode=2), "many.png")
+    imp_pick(page, "#psi-imp-size", "as")
+    many = imp_add(page)
+    check(len(imp_key(many)) == 16, f"import: 256 colours end at 16 keys ({len(imp_key(many))})")
+    # A nearly full store: red, Add off, the text as it was after Escape.
+    # (Each table's numbers its own: the store keeps a run alike once.)
+    full = "\n".join(f"table t{k} = " + ", ".join(str(k * 256 + i) for i in range(256)) for k in range(4)) + "\ngray(t0[0] + t1[0] + t2[0] + t3[0])"
+    page.fill("#psi-src", full)
+    page.wait_for_timeout(500)
+    store_ok = page.get_attribute("#psi-ed", "data-err") is None
+    imp_open(page, art, "art.png")
+    red = page.evaluate("document.querySelector('#psi-imp-cost').classList.contains('bad')")
+    line = page.inner_text("#psi-imp-cost")
+    off = page.is_disabled("#psi-imp-go")
+    page.keyboard.press("Escape")
+    check(store_ok and red and off and "1024 numbers in all" in line.replace(",", "") and page.input_value("#psi-src") == full,
+          f"import: the store full -> the compiler's sentence in red, Add off, the text as it was ({line!r})")
+    # The paint colours used up: three palettes drawn (96) and a sprite of 16 colours, then 16 more.
+    keys16 = ", ".join(f"{c} #{(k * 15):02x}{(255 - k * 15):02x}{(k * 7):02x}" for k, c in enumerate("ABCDEFGHIJKLMNOP"))
+    paint = ("palette p1 = #000, #fff\npalette p2 = #f00, #0f0\npalette p3 = #00f, #ff0\n"
+             f"sprite old {{\n  key {keys16}\n  ABCDEFGHIJKLMNOP\n}}\n"
+             "draw { cls(pal(p1, 0.5)); cls(pal(p2, 0.5)); cls(pal(p3, 0.5)); spr(old, 0, 0) }\ngray(0)")
+    page.fill("#psi-src", paint)
+    page.wait_for_timeout(500)
+    paint_ok = page.get_attribute("#psi-ed", "data-err") is None
+    imp_open(page, imp_gradient(), "gradient.png")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    pline = page.inner_text("#psi-imp-cost")
+    poff = page.is_disabled("#psi-imp-go")
+    page.keyboard.press("Escape")
+    check(paint_ok and poff and "127 colours at most" in pline and page.input_value("#psi-src") == paint,
+          f"import: the paint colours used up -> said, Add off, the text as it was ({paint_ok}, {pline!r})")
+    # Not pictures: a text file called .png, an HTML page around an SVG.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_give(page, b"hello, I am text", "notes.png")
+    t_txt = imp_toast(page)
+    clear_toasts(page)
+    imp_give(page, b'<!DOCTYPE html><html><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg></body></html>', "page.svg", "image/svg+xml")
+    t_html = imp_toast(page)
+    clear_toasts(page)
+    check("isn’t a picture" in t_txt and "isn’t a picture" in t_html and page.locator("#psi-imp").count() == 0,
+          f"import: a text file called .png and an HTML page around an SVG are refused ({t_txt!r}, {t_html!r})")
+    imp_hostile_svgs(page, base, asked)
+    imp_purple(page, base, asked)
+    # Cancel: the text as it was, and its undo (the typing before it still undoes).
+    t = typed_first(page, IMP_BASE)
+    imp_open(page, imp_gradient(), "gradient.png")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    page.click("#psi-imp-tier button[data-k='4']")
+    imp_settle(page)
+    page.click("#psi-imp-cancel")
+    page.wait_for_timeout(300)
+    same = page.input_value("#psi-src")
+    u = undos(page, 1)
+    # (The undo is the typing's own: the dialog put nothing on it.)
+    check(same == t and u[0] != t and t.startswith(u[0]) and u[0].startswith(IMP_BASE), f"import: Cancel leaves the text ({same == t}) and its undo ({u[0]!r})")
+    page.context.close()
+    psi_import_phone(browser, base, errors)
+
+
+# Hostile SVGs: each must load nothing (the canary, on the mock and off it),
+# run nothing (no window flag, no alert) and leave the page answering. Some
+# are refused, some import as harmless pictures.
+CANARY = "/imp-canary"
+
+
+def imp_hostile_corpus(base: str) -> list[tuple[str, bytes]]:
+    c, ext = base + CANARY, "http://imp-canary.invalid/x"
+    head = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 16 16"'
+    return [
+        ("script", f'{head}><script>window.__pwned=1;fetch("{c}?s")</script><rect width="16" height="16" fill="#f00"/></svg>'.encode()),
+        ("onload", f'{head} onload="window.__pwned=2;fetch(\'{c}?o\')"><rect width="16" height="16" fill="#0f0" onmouseover="window.__pwned=3"/></svg>'.encode()),
+        ("image href", f'{head}><image href="{c}?i" width="16" height="16"/><image xlink:href="{ext}" width="16" height="16"/><rect width="8" height="8" fill="#00f"/></svg>'.encode()),
+        ("foreignObject", f'{head}><foreignObject width="16" height="16"><iframe xmlns="http://www.w3.org/1999/xhtml" src="{c}?f"></iframe><img xmlns="http://www.w3.org/1999/xhtml" src="{ext}" onerror="window.__pwned=4"/></foreignObject><rect width="4" height="4" fill="#fff"/></svg>'.encode()),
+        ("css import", f'{head}><style>@import url("{c}?c"); rect {{ fill: url({ext}) }}</style><rect width="16" height="16" fill="#ff0" style="background:url({c}?st)"/></svg>'.encode()),
+        ("external use", f'{head}><use href="{c}?u#x"/><use xlink:href="{ext}#y"/><rect width="16" height="16" fill="#0ff"/></svg>'.encode()),
+        ("entity bomb", ('<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">'
+                         '<!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;"><!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">]>'
+                         f'{head}><text>&e;&e;&e;&e;&e;&e;&e;&e;</text></svg>').encode()),
+        ("huge size", f'<svg xmlns="http://www.w3.org/2000/svg" width="1e9" height="1e9"><rect width="1e9" height="1e9" fill="#f0f"/></svg>'.encode()),
+        ("animate href", f'{head}><a href="javascript:window.__pwned=5"><rect width="16" height="16" fill="#888"><set attributeName="fill" to="url({c}?a)"/></rect></a><animate href="#r" attributeName="href" to="{c}?an"/></svg>'.encode()),
+        # The review's: what would hold the page up drawing it (each must answer in 2 s).
+        ("use via another xlink prefix", imp_chain(5, 10, "x:href=").encode()),
+        ("use with a decoy id after it", imp_chain(5, 10, "href=", decoy=True).encode()),
+        ("use with a space before #", imp_chain(5, 10, 'href=" ').replace('" "#', '" #').encode()),
+        ("nested masks", imp_masks(4, 10).encode()),
+        ("marker on every vertex", imp_marker(2000, 1000).encode()),
+        ("nested patterns", imp_patterns(5, 10).encode()),
+        ("filters and feImage", f'{IMP_H}<defs><filter id="f"><feGaussianBlur stdDeviation="500"/><feImage href="#r"/><feTurbulence baseFrequency="0.01" numOctaves="10"/></filter><rect id="r" width="64" height="64" fill="#f00"/></defs><g filter="url(#f)" clip-path="url(#r)"><use href="#r"/></g></svg>'.encode()),
+        ("embedded 16000 x 16000 PNG", imp_embedded(16000, 16000).encode()),
+        ("CSS escapes and image-set", f'{IMP_H}<style>@\\69mport "{c}?e1"; rect{{fill:\\75rl({c}?e2#x)}}</style><rect width="9" height="9" style="mask-image:image-set(\'{c}?e3\' 1x)" fill="\\75rl({c}?e4#p) red"/></svg>'.encode()),
+        ("non-finite viewBox", b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 Infinity 1e400"><rect width="16" height="16" fill="#0f0"/></svg>'),
+        # The second review's: drawing that weighs more than it counts.
+        ("percent-encoded links", imp_chain(6, 10, "href=").replace('"#L', '"#%4C').encode()),
+        ("a long path copied 1,000 times", (IMP_H + f'<defs><path id="p" d="{imp_rpath(1000)}"/></defs>' + '<use href="#p" fill="#f00" fill-opacity=".02" fill-rule="evenodd"/>' * 1000 + "</svg>").encode()),
+        ("one path of 100,000 segments", (IMP_H + f'<path fill="#f00" fill-rule="evenodd" d="{imp_rpath(100000)}"/></svg>').encode()),
+        ("CSS blur on 8,000 rects", (IMP_H + '<rect width="64" height="32" fill="#f00" filter="blur(4px)" style="filter:blur(4px) drop-shadow(1px 1px 2px #000);mix-blend-mode:multiply"/>' * 8000 + "</svg>").encode()),
+        ("6,000 dashed paths", (IMP_H + "".join(f'<path fill="none" stroke="#f00" stroke-width="3" stroke-dasharray=".02" style="stroke-dasharray:.01" d="{imp_rpath(4)}"/>' for _ in range(6000)) + "</svg>").encode()),
+        ("dashed text copied 9,900 times", (IMP_H + '<defs><text id="t" y="20" font-size="30" fill="none" stroke="#f00" stroke-dasharray=".01">' + "@" * 20000 + "</text></defs>" + '<use href="#t"/>' * 9900 + "</svg>").encode()),
+        ("15,000 gradient rects", (IMP_H + '<defs><radialGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></radialGradient></defs>' + '<rect width="64" height="32" fill="url(#g)" opacity=".5"/>' * 15000 + "</svg>").encode()),
+    ]
+
+
+IMP_H = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:x="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">'
+
+
+def imp_rpath(n: int, seed: int = 7) -> str:
+    import random
+    r = random.Random(seed * 100003 + n)
+    return "M0 0" + "".join(f"L{r.randint(0, 64)} {r.randint(0, 32)}" for _ in range(n))
+
+
+def imp_chain(levels: int, fan: int, attr: str, decoy: bool = False) -> str:
+    """<use> copies of copies: fan ** levels parts (with `decoy`, empty groups of the same ids after it)."""
+    s = IMP_H + '<defs><rect id="L0" width="1" height="1" fill="#f00"/>'
+    for k in range(1, levels + 1):
+        s += f'<g id="L{k}">' + f'<use {attr}"#L{k - 1}"/>' * fan + "</g>"
+    s += "</defs>" + f'<use {attr}"#L{levels}"/>'
+    if decoy:
+        s += "<defs>" + "".join(f'<g id="L{k}"/>' for k in range(levels + 1)) + "</defs>"
+    return s + "</svg>"
+
+
+def imp_masks(levels: int, fan: int) -> str:
+    s = IMP_H + '<defs><mask id="M0"><rect width="64" height="64" fill="#fff"/></mask>'
+    for k in range(1, levels + 1):
+        s += f'<mask id="M{k}">' + f'<rect width="64" height="64" fill="#fff" mask="url(#M{k - 1})"/>' * fan + "</mask>"
+    return s + f'</defs><rect width="64" height="64" fill="#f00" mask="url(#M{levels})"/></svg>'
+
+
+def imp_marker(verts: int, parts: int) -> str:
+    return (IMP_H + '<defs><marker id="m" markerWidth="2" markerHeight="2">' + '<rect width="1" height="1" fill="#0f0"/>' * parts
+            + '</marker></defs><path marker-mid="url(#m)" fill="none" stroke="#fff" d="M0 0' + "l1 0" * verts + '"/></svg>')
+
+
+def imp_patterns(levels: int, fan: int) -> str:
+    s = IMP_H + '<defs><pattern id="P0" width="1" height="1" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#fff"/></pattern>'
+    for k in range(1, levels + 1):
+        s += (f'<pattern id="P{k}" width="8" height="8" patternUnits="userSpaceOnUse">'
+              + "".join(f'<rect x="{i % 8}" width="1" height="8" fill="url(#P{k - 1})"/>' for i in range(fan)) + "</pattern>")
+    return s + f'</defs><rect width="64" height="64" fill="url(#P{levels})"/></svg>'
+
+
+def imp_embedded(w: int, h: int) -> str:
+    """A tiny file holding a huge picture: a 1-bit PNG of w x h in an <image>."""
+    import base64
+    import struct
+
+    def ch(t: bytes, d: bytes) -> bytes:
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    row, co, out = b"\0" + b"\xff" * ((w + 7) // 8), zlib.compressobj(9), b""
+    for _ in range(h):
+        out += co.compress(row)
+    out += co.flush()
+    png = b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 1, 0, 0, 0, 0)) + ch(b"IDAT", out) + ch(b"IEND", b"")
+    return IMP_H + f'<image width="64" height="64" href="data:image/png;base64,{base64.b64encode(png).decode()}"/><rect width="8" height="8" fill="#00f"/></svg>'
+
+
+def imp_hostile_svgs(page: Page, base: str, asked: list[str]) -> None:
+    dialogs: list[str] = []
+    page.on("dialog", lambda d: dialogs.append(d.message))
+    page.evaluate("window.__pwned = 0")
+    said = []
+    for name, svg in imp_hostile_corpus(base):
+        n0 = len(asked)
+        # (`took`: from the file given to the dialog or the refusal, and the page answering after.)
+        t0 = time.monotonic()
+        imp_give(page, svg, name.replace(" ", "-") + ".svg", "image/svg+xml")
+        try:
+            page.wait_for_selector("#psi-imp, .toast.bad", timeout=10000)
+            alive = page.evaluate("1 + 1") == 2
+        except PlaywrightTimeoutError:
+            alive = False
+        took = time.monotonic() - t0
+        opened = page.locator("#psi-imp").count() > 0
+        if opened:
+            imp_settle(page)
+            page.keyboard.press("Escape")
+        else:
+            clear_toasts(page)
+        page.wait_for_timeout(300)
+        hit = [u for u in asked[n0:] if "imp-canary" in u]
+        said.append((name, "imported" if opened else "refused"))
+        print(f"  ..   {name}: {took:.2f} s")
+        check(alive and took < 2 and not hit and page.evaluate("window.__pwned") == 0 and not dialogs and page.input_value("#psi-src") == IMP_BASE,
+              f"import: hostile SVG ({name}): nothing loaded, nothing run, the page answers ({'imported harmless' if opened else 'refused'}, {hit})")
+    check(dict(said)["entity bomb"] == "refused", f"import: the hostile SVGs ({said})")
+
+
+def imp_purple(page: Page, base: str, asked: list[str]) -> None:
+    """The red team's corpus (tools/imp_hostile.py, written without seeing
+    js/fimport.js): each picture imports or is refused as its contract says
+    ("either": both are fine), loads nothing (the canary), runs nothing
+    and leaves the page answering."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from imp_hostile import hostile_fixtures
+    dialogs: list[str] = []
+    page.on("dialog", lambda d: dialogs.append(d.message))
+    page.evaluate("window.__pwned = 0")
+    wrong, hits, slow = [], [], []
+    turned = ""
+    fx = hostile_fixtures(base + CANARY)
+    for f in fx:
+        n0 = len(asked)
+        t1 = time.monotonic()
+        imp_give(page, f["data"], f["file"], f["mime"])
+        try:
+            page.wait_for_selector("#psi-imp, .toast.bad", timeout=15000)
+        except PlaywrightTimeoutError:
+            slow.append(f["name"])
+            continue
+        t0 = time.monotonic()
+        page.evaluate("1")
+        if time.monotonic() - t0 > 2:
+            slow.append(f["name"])
+        opened = page.locator("#psi-imp").count() > 0
+        if opened:
+            imp_settle(page)
+            if f["name"] == "jpeg-exif-orient6":
+                turned = page.inner_text("#psi-imp-crop")
+            page.keyboard.press("Escape")
+        clear_toasts(page)
+        page.wait_for_timeout(150)
+        got = "import" if opened else "refuse"
+        if time.monotonic() - t1 > 3:
+            print(f"  ..   red team: {f['name']} took {time.monotonic() - t1:.1f} s")
+        if os.environ.get("IMP_TRACE"):
+            print(f"  ..   {f['name']}: {got}")
+        if f["expect"] != "either" and f["expect"] != got:
+            wrong.append(f"{f['name']}: {got}, wanted {f['expect']}")
+        hits += [f"{f['name']}: {u}" for u in asked[n0:] if "imp-canary" in u]
+    check(turned.endswith("of 24 × 40"), f"import (red team): a JPEG whose EXIF says it is turned comes in upright ({turned!r})")
+    check(not wrong, f"import (red team): {len(fx)} hostile pictures import or are refused as the contract says ({wrong})")
+    check(not hits and page.evaluate("window.__pwned") == 0 and not dialogs and not slow and page.input_value("#psi-src") == IMP_BASE,
+          f"import (red team): nothing loaded, nothing run, no dialog, the page answered every time ({hits}, {dialogs}, slow {slow})")
+
+
+def imp_touch_drag(page: Page, sel: str, x0: float, y0: float, x1: float, y1: float) -> None:
+    """A one-finger drag on `sel` (CDP touch events: the pointer events a finger makes)."""
+    b = page.locator(sel).bounding_box()
+    s = page.context.new_cdp_session(page)
+    pt = lambda x, y: [{"x": b["x"] + x, "y": b["y"] + y}]
+    s.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": pt(x0, y0)})
+    for k in range(1, 6):
+        s.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": pt(x0 + (x1 - x0) * k / 5, y0 + (y1 - y0) * k / 5)})
+    s.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    s.detach()
+
+
+def psi_import_phone(browser, base: str, errors: list[str]) -> None:
+    """On a phone the dialog is a sheet; a finger drags the crop (the page
+    doesn't scroll with it); the keys of the crop work on a laptop (arrows
+    move it, Alt and arrows size it). Screenshots of the dialog, our own art."""
+    page = new_page(browser, "phone", errors)
+    page.goto(base + "/#formulas")
+    formula_editor(page, IMP_BASE)
+    imp_open(page, imp_scene(), "scene.png")
+    sheet = page.evaluate("document.querySelector('#psi-imp').classList.contains('sheet')")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    before = page.inner_text("#psi-imp-crop")
+    b = page.locator("#psi-imp-src").bounding_box()
+    imp_touch_drag(page, "#psi-imp-src", 4, 4, b["width"] * 0.6, b["height"] * 0.7)
+    imp_settle(page)
+    after = page.inner_text("#psi-imp-crop")
+    ta = page.evaluate("getComputedStyle(document.querySelector('#psi-imp-src')).touchAction")
+    shot(page, "formulas-sprite-import", "phone")
+    check(sheet and before.startswith("160 × 80") and after != before and ta == "none",
+          f"import (phone): a sheet; a finger drew a new crop ({before!r} -> {after!r}, touch-action {ta})")
+    page.keyboard.press("Escape")
+    page.context.close()
+    # A 320 px phone: the picture fits the sheet at its own shape.
+    page = new_page(browser, "phone", errors)
+    page.set_viewport_size({"width": 320, "height": 640})
+    page.goto(base + "/#formulas")
+    formula_editor(page, IMP_BASE)
+    imp_open(page, imp_scene(), "scene.png")
+    fit = page.evaluate("""() => { const c = document.querySelector('#psi-imp-src'), d = document.querySelector('#psi-imp'), r = c.getBoundingClientRect(), q = d.getBoundingClientRect();
+        return [r.left >= q.left, r.right <= q.right, Math.abs(r.width / r.height - 2) < 0.05, d.scrollWidth <= d.clientWidth + 1]; }""")
+    check(all(fit), f"import (320 px phone): the picture fits the sheet at its shape, nothing wider ({fit})")
+    page.keyboard.press("Escape")
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    formula_editor(page, IMP_BASE)
+    imp_open(page, imp_scene(), "scene.png")
+    imp_pick(page, "#psi-imp-size", "64x32")
+    page.focus("#psi-imp-src")
+    page.keyboard.press("Alt+ArrowLeft")
+    page.keyboard.press("Shift+Alt+ArrowUp")
+    page.keyboard.press("Shift+ArrowRight")
+    imp_settle(page)
+    crop = page.inner_text("#psi-imp-crop")
+    shot(page, "formulas-sprite-import", "laptop")
+    check(crop.startswith("159 × 70"), f"import: the crop's keys: Alt and arrows size it, arrows move it ({crop!r})")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#psi-imp", state="detached", timeout=5000)
+    page.wait_for_timeout(300)
+    check("sprite pic {" in page.input_value("#psi-src") and page.get_attribute("#psi-ed", "data-err") is None, "import: Enter adds the sprite")
     page.context.close()
 
 
@@ -10955,6 +11596,8 @@ def www_update_pass(browser) -> None:
 # A section that takes a page gets a fresh one on Now.
 ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "now_sent": now_sent_checks, "thumbs_dark": thumbs_dark_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
+# (A sprite from a picture, on its own: WEB_SMOKE_ONLY=psi_import.)
+ONLY_BROWSER["psi_import"] = psi_import_checks
 
 
 def only_pass(browser, names: list[str], repeat: int) -> None:

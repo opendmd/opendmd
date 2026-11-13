@@ -235,6 +235,14 @@ the editor.
 | `name` / `about` / a control's label | 60 / 120 / 24 characters |
 <!-- psi-builtins end -->
 
+The store's 1,024 numbers hold every table and sprite, each starting at a
+multiple of 4 (a run already there, alike, is used again). A sprite of `K`
+key characters (see-through ones counted), `w` wide and `h` tall takes
+1 + K + h × ⌈w / P⌉ numbers, P being 32 characters a number for a key of
+up to 2, 16 for up to 4 and 8 for up to 16: a 64 × 32 sprite takes 67,
+133 or 273. Each `#hex` colour in a key is one of the 127 paint colours
+a formula has (a palette drawn with in `draw { }` takes 32).
+
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
 refuses a formula past 40 ms a frame by the plain VM estimate, or past

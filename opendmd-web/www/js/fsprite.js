@@ -19,16 +19,16 @@ const HEX = /^#([\da-f]{3}|[\da-f]{6})$/i;
 const code = (l) => l.replace(/(--|\/\/).*/, (c) => ' '.repeat(c.length));
 const lineEnd = (s, p) => { const n = s.indexOf('\n', p); return n < 0 ? s.length : n; };
 const touch = () => matchMedia('(pointer:coarse)').matches;
-const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase();
+export const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase();
 // A colour picked, written as the one it replaces was: #rgb when it fits, upper case kept.
-const as = (v, w) => { const x = w?.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w || '') ? x.toUpperCase() : x; };
+export const as = (v, w) => { const x = w?.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w || '') ? x.toUpperCase() : x; };
 
 // The sprite blocks, to a `}` alone on its line: {k: 's', name, s, e (the
 // block), key {s, e, le, ents [{ch, v}]}, rows [{s, e, le, t}] (the text of
 // each, its line's end), ind, ok}; `ok` only with a key, at most 32 rows of
 // at most 64 of its characters (else not this editor's: the compiler says
 // what is wrong).
-function sprites(s) {
+export function sprites(s) {
   const out = [];
   for (const b of s.matchAll(/^([ \t]*)sprite[ \t]+(\w+)[ \t]*\{[^\n]*\n([\s\S]*?)^[ \t]*\}[ \t]*(?:(?:--|\/\/)[^\n]*)?$/gm)) {
     const o = { k: 's', name: b[2], s: b.index, e: b.index + b[0].length, key: null, rows: [] };
@@ -49,7 +49,7 @@ function sprites(s) {
 // The palettes of colours (not tweens): {k: 'p', name, s, e (to the end of
 // its statement: lines on while one ends with a comma, up to a `;`), ents
 // [{s, e, lab, hex}]}; `bad` when an entry is not a colour.
-function palettes(s) {
+export function palettes(s) {
   const out = [];
   for (const m of s.matchAll(/^[ \t]*palette[ \t]+(\w+)[ \t]*=/gm)) {
     const a = m.index + m[0].length;
@@ -119,8 +119,9 @@ const CSS = `#psi-blk{position:absolute;z-index:2;min-height:24px;padding:0 8px;
 // The editor's half (`kit`: {ta, put(t, text): typed in, one undo step,
 // peek(src): a text tried in the code and the preview without touching
 // the textarea (peek() back to it), measure(), row(src): a scratch
-// formula's top row, RGB, or null}): `caret()` after the caret moves or the
-// text changes.
+// formula's top row, RGB, or null, picture(name): a picture chosen to
+// replace sprite `name`}): `caret()` after the caret moves or the text
+// changes. The parsers are js/fimport.js's too.
 export function blocks(kit) {
   const { ta } = kit;
   document.head.append(h('style', CSS));
@@ -285,7 +286,9 @@ export function blocks(kit) {
     read();
     swatches();
     const el = Object.assign(el0, { ariaLabel: `The picture of ${name}` });
-    el.append(h('div.mh', `The picture of ${name}`), keys, grid, h('div.row', size, addC, delC, addR, delR, pan),
+    // (A picture made into this sprite instead: js/fimport.js, its key's characters kept where they fit.)
+    const pic = kit.picture && h('button.sm', { id: 'psi-pic-imp', onclick: () => { closeMenu(); kit.picture(name); } }, 'Replace from a picture…');
+    el.append(h('div.mh', `The picture of ${name}`), keys, grid, h('div.row', size, addC, delC, addR, delR, pan, pic),
       h('p.cap', touch() ? 'Pick a character from the key, then tap or drag on the picture. Scroll moves the picture instead.' : 'Pick a character from the key, then click or drag on the picture.'), foot());
     draw();
     return el;
