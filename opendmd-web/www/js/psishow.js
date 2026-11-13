@@ -37,6 +37,8 @@ export function show(f) {
   pump();
   mark();
 }
+// The Formula last shown from here (Now's preview of `@formula:~sent`).
+export const current = () => shown;
 export function follow(f) { if (f === shown && !next) { next = [f, true]; pump(); } }
 export function drop(f) { if (shown === f) { shown = null; mark(); } }
 

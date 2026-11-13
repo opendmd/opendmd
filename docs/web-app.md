@@ -57,7 +57,14 @@ button lands on them.
   and **Replay**, a grid of four on a phone, and a brightness slider. A
   **panel-look preview** of the same file plays alongside, kept in step with
   the panel by clock. It fetches the file's prepared copy first (cheap for
-  the device; one 404 when there is none) and can be switched off (Settings
+  the device; one 404 when there is none). A Formula on the panel is drawn
+  in the browser instead, at the panel's position (`js/nowpsi.js`, loaded
+  only then: pkg-psi over the Formula's text — a bundled one's from
+  `formulas.json`, one of yours from its `.psi`, an inline one matched to
+  a saved or bundled one, the one this page sent); one it can't find or
+  compile says "Preview not available for this Formula". Captions and
+  names are plain words, never a path or the player's error. The preview
+  can be switched off (Settings
   → Panel → *Mirror the panel on Now*, per browser). The device's figures
   (uptime, memory, late frames) are Settings → Device → Status. The LED-look controls (gain,
   bloom, gamma, flat: **Preview look**, this page's drawing only, never
