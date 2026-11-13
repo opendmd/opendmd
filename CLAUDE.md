@@ -155,8 +155,9 @@ make emu-s3-nocard emu-s3-probe   # the ESP32-S3 preview (VARIANT=s3, not releas
   example names in docs use made-up author handles.
 - The only bundled third-party assets are two fonts, both OFL: Silkscreen
   (the web app and the site) and Fraunces (the site's headings,
-  `site/fonts/`). The home page's scene (`site/theme/den*.webp`) is our own,
-  drawn by `tools/site-scene.py`.
+  `site/fonts/`). The home page's scenes (`site/theme/den*.webp`) are our own,
+  drawn by `tools/site-scene-alt.py` and `tools/site-scene.py`
+  (`site/theme/SCENES.md`).
   Third-party notices are generated (`make notices`, checked by
   `fw-release` and CI); after a dependency or IDF bump, regenerate and read
   the diff.

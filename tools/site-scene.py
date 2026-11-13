@@ -2,9 +2,13 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy==2.2.6", "pillow==11.3.0"]
 # ///
-"""Draw the home page's scene: the games den the hero's panel hangs in.
+"""Draw the home page's first scene: the games den at night (style `night`).
 
     uv run tools/site-scene.py [--preview DIR]      # make site-scene
+
+Everyone's scene is now `synth`, one of the styles tools/site-scene-alt.py
+draws; this one is shown to a viewer who asks for it (?scene=night,
+site/theme/SCENES.md).
 
 Original pixel art, drawn here from rectangles, lines and gradients: no
 photograph, no model, no third-party art, no game's characters or logos.
@@ -13,14 +17,15 @@ cool (the room) and warm (what is lit), and an ordered 4x4 Bayer dither
 brings it down to the eleven colours of PALETTE. The live LED panel is not
 in the picture: the page lays it over the bare middle of the wall
 (site/theme/site.css `.hero`), so the middle third stays quiet.
+tools/site-scene-alt.py --style day draws this same room on bright ramps.
 
 Writes (committed; run this only to change the drawing):
 
-  site/theme/den.webp         480x372 art pixels at x4 (1920x1488): the wide
-                              scene, laid `cover` behind the hero.
-  site/theme/den-phone.webp   195x180 at x4 (780x720): the foot of the same
-                              room for a narrow screen, its top row the flat
-                              wall colour WALL (the hero's background there).
+  site/theme/den-night.webp        480x372 art pixels at x4 (1920x1488): the wide
+                                   scene, laid `cover` behind the hero.
+  site/theme/den-night-phone.webp  195x180 at x4 (780x720): the foot of the same
+                                   room for a narrow screen, its top row the flat
+                                   wall colour WALL (the hero's background there).
 
 Lossless WebP, so every art pixel stays a clean square.
 """
@@ -39,7 +44,7 @@ SCALE = 4
 COOL = ["#07080c", "#10121b", "#1b1f31", "#2e3454", "#575b8c", "#e8e1cf"]
 WARM = ["#07080c", "#10121b", "#5e2c14", "#b9601a", "#f7a531", "#ffe7b0"]
 PALETTE = sorted(set(COOL + WARM))
-WALL = COOL[1]  # site.css --den, the flat wall above the phone's picture
+WALL = COOL[1]  # site.css [data-scene=night] --den, the flat wall above the phone's picture
 
 BAYER = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], dtype=np.float32) / 16 + 1 / 32
 N = len(COOL) - 1
@@ -181,7 +186,7 @@ def cabinet(c: Canvas, x: int, fy: int, seed: int = 3, dim: float = 0.0):
     c.rect(x + 4, top + 20, x + 60, top + 70, d(0.5))
     sx0, sx1, sy0, sy1 = x + 9, x + 55, top + 25, top + 64
     scr = c.box(sx0, sy0, sx1, sy1) & ~(c.box(sx0, sy0, sx0 + 1, sy0 + 1) | c.box(sx1 - 1, sy0, sx1, sy0 + 1)
-                                       | c.box(sx0, sy1 - 1, sx0 + 1, sy1) | c.box(sx1 - 1, sy1 - 1, sx1, sy1))
+                                 | c.box(sx0, sy1 - 1, sx0 + 1, sy1) | c.box(sx1 - 1, sy1 - 1, sx1, sy1))
     c.put(scr, lv(1.2) + 0.25 * (c.yy - sy0) / (sy1 - sy0) - (0.06 if dim else 0) - np.where(c.yy % 2 == 0, 0.05, 0))
     rnd = random.Random(seed)
     for _ in range(16):
@@ -403,7 +408,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--preview", type=Path, help="write PNGs here instead of the site's WebP files")
     args = ap.parse_args()
-    for name, im in (("den", wide()), ("den-phone", phone())):
+    for name, im in (("den-night", wide()), ("den-night-phone", phone())):
         colours = {c for _, c in im.getcolors(1 << 16)}
         want = {tuple(int(p[i:i + 2], 16) for i in (1, 3, 5)) for p in PALETTE}
         assert colours <= want, f"{name}: colours off the palette"

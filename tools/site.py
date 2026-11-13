@@ -309,7 +309,9 @@ TOC_PAGES = ("dev/api.html", "guide/web-app.html", "dev/psi/index.html", "dev/ps
 # drawing; both copied to the root): the demo's Psi again, so CSP["home"].
 # Its hero plays a little show (hero.js, imported by home.js once it runs):
 # Formulas, the site's own GIFs and a look, with the panel's transitions.
-HOME_HEAD = '<script type="module" src="home.js"></script>'
+# Before them, scene.js (site/theme/, a classic script, so it runs before the first paint) names
+# the viewer's scene on <html>, if they asked for one.
+HOME_HEAD = '<script src="scene.js"></script>\n<script type="module" src="home.js"></script>'
 ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js", PSI_SCRIPT)  # from opendmd-web/share/ref/
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
 # on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
@@ -404,6 +406,8 @@ betas over WiFi as well, switch on Get beta updates in the web app's Settings, F
 {offline}
 </details>"""
 # Other files published as they are: repo path -> published path.
+# The home page's scenes: the first is everyone's (den.webp), the others are den-NAME.webp.
+SCENES = ("synth", "night", "day", "chunky", "shelf", "neon", "arcade")
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
     "LICENSE-APACHE": "LICENSE-APACHE.txt",
@@ -413,9 +417,12 @@ FILES = {
     # The headings' display face (tools/site-font.py), the site's alone, and its licence.
     "site/fonts/fraunces.woff2": "fonts/fraunces.woff2",
     "site/fonts/OFL-Fraunces.txt": "fonts/OFL-Fraunces.txt",
-    # The home page's scene, the den its panel hangs in (tools/site-scene.py draws it).
+    # The home page's scenes (tools/site-scene-alt.py and site-scene.py draw them; site/theme/SCENES.md):
+    # everyone's, then the ones a viewer can ask for with ?scene=NAME (scene.js; fetched only when asked for).
     "site/theme/den.webp": "den.webp",
     "site/theme/den-phone.webp": "den-phone.webp",
+    **{f"site/theme/den-{name}{size}.webp": f"den-{name}{size}.webp" for name in SCENES[1:] for size in ("", "-phone")},
+    "site/theme/scene.js": "scene.js",
     # The third-party notices (tools/notices.py, `make notices`).
     "licenses/THIRD-PARTY-LICENSES-firmware.txt": "licenses/THIRD-PARTY-LICENSES-firmware.txt",
     "licenses/THIRD-PARTY-LICENSES-web.txt": "licenses/THIRD-PARTY-LICENSES-web.txt",
@@ -589,7 +596,7 @@ CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release
 # later app.js would ask for an earlier wasm module (js/wasm.js).
 CACHE_APP = "no-cache"
 APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/studio/*", "/dev/psi/*", "/panel.js",
-             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "psiref.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
+             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "psiref.js", "scene.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
 CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
 

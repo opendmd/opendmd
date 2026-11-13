@@ -23,6 +23,11 @@ build URL serves. There the art index must also carry
   under the page's _headers policy; and none of the words users never see
   (cache, ODM, bucket, manifest, pack, bundle) on the home, install, guide
   and gallery pages;
+- the home page's scenes (scene.js, site/theme/SCENES.md): each of them at
+  /?scene=NAME, laptop, tablet and phone, light and dark: its own picture behind
+  the hero and no other scene's fetched, the hero's words legible over it,
+  nothing wider than a phone; the name remembered, forgotten by `synth`,
+  untouched by a name that isn't one; the address working with no storage;
 - the home page's hero show (hero.js): live on its first item, on to the
   second with its caption, no layout shift, no console errors; stopped
   off-screen and by a click; the still kept when less motion is asked for;
@@ -7287,6 +7292,100 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
             page.context.close()
 
 
+# The scenes tools/site.py publishes (its SCENES, read from its source: the first is everyone's).
+SCENES = tuple(re.findall(r'"(\w+)"', re.search(r"^SCENES = \(([^)]*)\)", (ROOT / "tools/site.py").read_text(), re.M).group(1)))
+
+
+def luminance(rgb) -> float:
+    """WCAG relative luminance of an (r, g, b) of 0..255."""
+    lin = [(c / 255 / 12.92) if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in rgb[:3]]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def ink_contrast(page: Page, selector: str) -> float:
+    """The contrast of an element's ink against what is really behind it: the
+    element is photographed with its words hidden, and the ink is set against
+    the worst of that picture (its lightest twentieth for light ink, its
+    darkest for dark)."""
+    ink = luminance([int(float(x)) for x in re.findall(r"[\d.]+", page.evaluate(f"getComputedStyle(document.querySelector({selector!r})).color"))[:3]])
+    box = page.evaluate(f"(e => {{ e.style.visibility = 'hidden'; const r = e.getBoundingClientRect(); return [r.left + scrollX, r.top + scrollY, r.width, r.height]; }})(document.querySelector({selector!r}))")
+    shot = page.screenshot(clip={"x": box[0], "y": box[1], "width": box[2], "height": box[3]}, full_page=True)
+    page.evaluate(f"document.querySelector({selector!r}).style.visibility = ''")
+    im = Image.open(io.BytesIO(shot)).convert("RGB")
+    im.thumbnail((240, 240))
+    lums = sorted(luminance(px) for px in im.getdata())
+    behind = lums[int(len(lums) * 0.95)] if ink > 0.3 else lums[int(len(lums) * 0.05)]
+    hi, lo = max(ink, behind), min(ink, behind)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def scenes(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The home page's scenes (site/theme/SCENES.md): /?scene=NAME shows each
+    of them, with its own picture and no other's fetched, its words legible
+    over it in both themes and nothing wider than a phone; the name is
+    remembered, `synth` forgets it, a name that isn't one changes nothing,
+    and with no storage the address still works."""
+    css, js = (site / "site.css").read_text(), (site / "scene.js").read_text()
+    listed = re.search(r"all = \[([^\]]*)\]", js)
+    check(listed is not None and tuple(re.findall(r'"(\w+)"', listed.group(1))) == SCENES
+          and all(f"[data-scene={n}]" in css and (site / f"den-{n}.webp").is_file() and (site / f"den-{n}-phone.webp").is_file() for n in SCENES[1:]),
+          f"scenes: scene.js, site.css and the pictures agree with tools/site.py's list ({', '.join(SCENES)})")
+
+    def open_at(page: Page, address: str) -> list[str]:
+        """Go there; the scene pictures the page fetched, by name (and anything that went wrong with one)."""
+        got: list[str] = []
+        seen = lambda r: re.search(r"/den[^/]*\.webp$", r.url) and got.append(r.url.rsplit("/", 1)[1] + ("" if r.status == 304 or r.ok and "image/webp" in r.headers.get("content-type", "") else f" ({r.status})"))
+        page.on("response", seen)
+        page.goto(base + address, wait_until="load")
+        wait_js(page, "document.fonts.status === 'loaded' && getComputedStyle(document.querySelector('.hero')).backgroundImage !== 'none'")
+        page.wait_for_timeout(300)
+        page.remove_listener("response", seen)
+        return got
+
+    named = "document.documentElement.getAttribute('data-scene')"
+    for scene in SCENES:
+        for size in ("laptop", "tablet", "phone"):
+            want = "den" + ("" if scene == SCENES[0] else f"-{scene}") + ("-phone" if size == "phone" else "") + ".webp"
+            for scheme in ("light", "dark"):
+                page = new_page(browser, "laptop" if size == "tablet" else size, errors, scheme)
+                if size == "tablet":  # between the two: the wide picture, the words on fewer, longer lines
+                    page.set_viewport_size({"width": 820, "height": 1180})
+                got = open_at(page, f"/?scene={scene}")
+                bg = page.evaluate("getComputedStyle(document.querySelector('.hero')).backgroundImage")
+                check(got == [want] and want in bg and page.evaluate(named) == (None if scene == SCENES[0] else scene),
+                      f"scene {scene} ({size}, {scheme}): the hero has {want} behind it, the only scene fetched {got}")
+                low = {sel: round(c, 1) for sel in (".hero h1", ".hero .lead", ".hero .proof li", ".hero .proof li + li", ".hero .ticks", ".hero-panel .cap")
+                       if (c := ink_contrast(page, sel)) < (3 if sel == ".hero h1" else 4.5)}
+                check(not low, f"scene {scene} ({size}, {scheme}): the hero's words read over it (contrast under 4.5, a heading's under 3: {low or 'none'})")
+                if size == "phone":
+                    wide = page.evaluate("[document.documentElement.scrollWidth, innerWidth]")
+                    check(wide[0] <= wide[1], f"scene {scene} (phone, {scheme}): nothing wider than the screen {wide}")
+                page.context.close()
+    # The switch: asked for, remembered, an unknown name, back to everyone's, no storage.
+    page = new_page(browser, "laptop", errors)
+    first = open_at(page, "/")
+    check(first == ["den.webp"] and page.evaluate(named) is None, f"scenes: a first visit gets everyone's scene {first}")
+    asked, kept = open_at(page, "/?scene=shelf"), open_at(page, "/")
+    check(asked == kept == ["den-shelf.webp"] and page.evaluate(named) == "shelf", f"scenes: ?scene=shelf shows it, and the next visit remembers {asked} {kept}")
+    odd = open_at(page, "/?scene=no-such-scene")
+    odd_name, after = page.evaluate(named), open_at(page, "/")
+    check(odd == ["den.webp"] and odd_name is None and after == ["den-shelf.webp"],
+          f"scenes: a name that isn't one shows everyone's scene {odd} and leaves the remembered one alone {after}")
+    back, then = open_at(page, f"/?scene={SCENES[0]}"), open_at(page, "/")
+    check(back == then == ["den.webp"] and page.evaluate(named) is None, f"scenes: ?scene={SCENES[0]} goes back to everyone's and forgets {back} {then}")
+    page.evaluate("localStorage.setItem('opendmd-scene', 'gone-since')")
+    stale = open_at(page, "/")
+    check(stale == ["den.webp"] and page.evaluate(named) is None, f"scenes: a remembered name that is no longer a scene falls back to everyone's {stale}")
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('no storage', 'SecurityError'); } })")
+    bare, plain = open_at(page, "/?scene=neon"), None
+    name = page.evaluate(named)
+    plain = open_at(page, "/")
+    check(bare == ["den-neon.webp"] and name == "neon" and plain == ["den.webp"], f"scenes: with no storage the address still works {bare}, nothing is remembered {plain}")
+    page.context.close()
+
+
 def hero_show(browser, base: str, errors: list[str]) -> None:
     """The home page's hero plays its little show (hero.js): it goes live,
     moves on to the next item with its caption and no layout shift and no
@@ -8019,6 +8118,8 @@ def main() -> int:
         structure(browser, base, a.site, errors)
         print("the home page's hero show")
         hero_show(browser, base, errors)
+        print("the home page's scenes (?scene=)")
+        scenes(browser, base, a.site, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
         f_drafts(browser, base, errors, a.shots)
