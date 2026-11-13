@@ -408,11 +408,13 @@ font:
 
 # The site's own pieces, committed like the font: its heading face (Fraunces,
 # OFL 1.1, from google/fonts at a pinned commit: site/fonts/) and the home
-# page's scene (original pixel art drawn by the script: site/theme/den*.webp).
+# page's scenes (original pixel art drawn by the scripts: site/theme/den*.webp,
+# everyone's and the ones a viewer can ask for: site/theme/SCENES.md).
 # Only needed to change them; `make site` uses the committed files.
 site-font:
 	uv run tools/site-font.py
 site-scene:
+	uv run tools/site-scene-alt.py
 	uv run tools/site-scene.py
 
 # The OpenDMD mark and what is made from it (tools/logo.py): docs/images/
