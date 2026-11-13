@@ -332,7 +332,7 @@ export function make(s, o, old) {
 
 // --- The dialog.
 
-const CSS = `.menu.psi-imp{width:min(820px,calc(100vw - 16px))}.menu.psi-imp.sheet{width:auto}.psi-imp-c{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.sheet .psi-imp-c{grid-template-columns:minmax(0,1fr)}.psi-imp label{display:inline-flex;align-items:center;gap:4px}.psi-imp input[type=number]{width:60px}.psi-imp .row{flex-wrap:wrap}
+const CSS = `.menu.psi-imp{width:min(820px,calc(100vw - 16px))}.menu.psi-imp.sheet{width:auto}.psi-imp-c{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.sheet .psi-imp-c{grid-template-columns:minmax(0,1fr)}.psi-imp label{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;max-width:100%}.psi-imp select{max-width:100%}.psi-imp input[type=number]{width:60px}.psi-imp .row{flex-wrap:wrap}
 #psi-imp-src{display:block;touch-action:none;cursor:crosshair;background:#0a0b0c;border-radius:4px;max-width:100%}#psi-imp-src:focus-visible{outline:2px solid var(--acc)}
 #psi-imp-grid{display:block;max-width:100%}.psi-imp .psi-chk{border-radius:4px;overflow:auto;max-height:40vh}#psi-imp-pv{display:block;width:384px;max-width:100%;image-rendering:pixelated;background:#000;border-radius:4px}
 #psi-imp-cost{flex-basis:100%;margin:0}#psi-imp-tier button{min-height:40px}#psi-imp-tier button[aria-pressed=true]{outline:3px solid var(--acc);outline-offset:1px}@media (pointer:coarse){.psi-imp select,.psi-imp input,.psi-imp button{min-height:44px}}`;
