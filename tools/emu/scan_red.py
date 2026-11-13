@@ -7,6 +7,11 @@ lane's log as it is (it must pass) and doctored the ways an unmodelled scan woul
 fail): the scan line replaced by "scan: not modelled", by "scan: no refresh in 150 ms", by an
 implausible refresh, or missing; and for nocard, the address-pin check's lines missing.
 
+The address-pin check is judged only for being logged: its k/n is meaningless in the emulator
+(esp32sim does not loop the LCD_CAM's output back to GPIO_IN: ~1/16 for every register). On the
+bench the current register agrees ~97% (misses as "ahead"), one a descriptor early ~95% (~13
+"behind"), one late ~80%.
+
     uv run tools/emu/scan_red.py --mode smoke|nocard --image FULL.bin --log PASSING.log
 
 Prints SCAN_RED_OK when the judge passes the original and fails every doctored copy.

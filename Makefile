@@ -1578,9 +1578,10 @@ emu-s3-nocard: emu-build
 	uv run --quiet tools/emu/scan_red.py --mode nocard --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) --log $(EMU_DIR)/logs/s3-nocard-last.log
 # emu-s3-power-safe: the brownout-loop guard (firmware/src/s3board.rs) on the
 #   nocard-test image seeded with `ps_test` (tools/emu/powersafe_lane.py):
-#   three faked brownout resets in a row, the third boot power-safe (no
-#   panel; /api/status, read from the host, says so), a restart back to
-#   normal with the scan in /api/status. EMU_POWER_SAFE_OK.
+#   a faked brownout whose boot outlives safe start (the guard clears), then
+#   three in a row, the third boot power-safe (no panel, its pins inputs;
+#   /api/status, read from the host, says so), a restart back to normal
+#   with the scan in /api/status. EMU_POWER_SAFE_OK.
 emu-s3-power-safe: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
 	uv run --quiet tools/emu/run.py power-safe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-power-safe-last.log $(EMU_ARGS)
@@ -1631,7 +1632,9 @@ emu-s3-probe: emu-build
 #               bf0, bf1 or state, or OPENDMD_S3_SCAN_REG=<one> at the build,
 #               picks another), the address-pin check of all four at boot
 #               (`scan: register … agrees with the address pins k/n`,
-#               bench), and the brownout-loop guard (src/s3board.rs)
+#               bench: the current register ~97%, one a descriptor early
+#               ~95%, one late ~80%; meaningless in the emulator, which has
+#               no pin loopback), and the brownout-loop guard (src/s3board.rs)
 #
 # `make fw-s3-image S3_IMAGE=<name>` (or `fw-s3-images`, all of them) builds;
 # `make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=<name>` writes one to a board

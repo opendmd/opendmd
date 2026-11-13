@@ -38,8 +38,9 @@ heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 30
        pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
        `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
 power-safe: (--chip s3, the S3 nocard-test image, make emu-s3-power-safe) the brownout-loop guard:
-       three faked brownout resets in a row, the third boot power-safe (no panel, /api/status
-       reset_note says so), a restart after it back to normal (powersafe_lane.py); EMU_POWER_SAFE_OK.
+       faked brownout resets: the first boot lives past safe start and the guard clears, then
+       three in a row, the third boot power-safe (no panel, /api/status reset_note says so), a
+       restart after it back to normal (powersafe_lane.py); EMU_POWER_SAFE_OK.
 api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy of the image's NVS,
        the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
        (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
@@ -107,7 +108,11 @@ NOCARD = [
 # The S3 (smoke and nocard): the beam's scan modelled through the LCD's GDMA channel
 # (hub75_scan_init: the layout check and four wraps timed, within 0.67-2x of the driver's
 # rate), and the nocard image's address-pin check of the four registers (bench and test
-# builds); a line saying the scan is not modelled fails at once.
+# builds): only that its lines are logged. Its k/n is meaningless here: esp32sim does not
+# loop the LCD_CAM's output back to GPIO_IN, so every register agrees ~1/16 (~18/500). On
+# the bench the current register agrees ~97% (misses as "ahead"), one a descriptor early
+# ~95% (~13 "behind"), one late ~80% (hub75_shim.cpp, s3_pins_check). A line saying the
+# scan is not modelled fails at once.
 S3_SCAN = [("scan modelled", re.compile(r"hub75_shim: scan: \d+ descriptors, \d+ per row pair, refresh \d+ us"))]
 S3_PINS = [("address-pin check", re.compile(r"hub75_shim: scan: register OUT_STATE agrees with the address pins \d+/\d+"))]
 S3_SCAN_BAD = re.compile(r"scan: (not modelled|layout not modelled|no refresh|refresh \d+ us measured.*implausible|no GDMA channel)")
@@ -473,6 +478,8 @@ def main():
         for n, _ in nocard_want:
             print(f"pass  {n}: {seen[n][:170]}")
         if a.chip == "s3":
+            print("      (the address-pin k/n below is meaningless in the emulator, which does not loop the panel's"
+                  " output back to the pins; bench: the current register ~97%, one early ~95%, one late ~80%)")
             for l in lines:
                 if "scan: register " in l or "scan: the racer reads" in l:
                     print(f"      {l[:200]}")
@@ -635,7 +642,7 @@ def power_safe(a, sim, rom, want_sha):
     if os.environ.get("EMU_API_NETNS") != "1":
         try:
             # Seeded before the namespace (its nvs_partition_gen needs nothing from it).
-            api_lane.seeded_image(a.image, EMU_DIR / "power-safe", extra={"ps_test": "3"})
+            api_lane.seeded_image(a.image, EMU_DIR / "power-safe", extra={"ps_test": "4"})
         except api_lane.LaneFail as e:
             sys.exit(f"EMU_POWER_SAFE_FAIL: {e}")
         if not shutil.which("unshare"):
