@@ -172,7 +172,7 @@ sprite boom3 {
 -- (the world starts over after 4,096: 87 minutes), f64 how far through
 -- it; s0 its slot (16 px, 0.32 s), fs how far through that. The ship is
 -- drawn at column 16.
-Xs = floor(t*50) + floor(seed*4000)*64 + 160
+Xs = floor(t*50) + floor(seed*256)*1024 + 160
 n0 = floor(Xs/64)%4096
 us = Xs%64
 f64 = (us + frac(t*50)) / 64
@@ -218,10 +218,10 @@ flame = 2 + floor(hash(floor(t*25)%64, 1)*3)
 -- shoot at it (as bits), how long the last shot flies (slots), how far it
 -- weaves, how much further in the open, how fast
 table K = 13, 20, 16, 7, 22,
-  62, 42, 17, 252, 8,
+  62, 42, 17, 60, 8,
   0, 0, .7125, 1.14, 0,
   1.5, 1.5, 0, 1, 0,
-  4, 6, 0, 3, 0,
+  2, 3, 0, 3, 0,
   .17, .06, 0, .1, 0
 
 draw {
@@ -235,7 +235,7 @@ draw {
     hr = hash(c, 8 + seed)
     rx = (c - n0*2)*32 - us + 16 + hr*18
     if tz(floor(c/32)) == 3 {
-      spr(crag, rx, hr > .5 ? 26 + frac(hr*8)*4 : -4 - frac(hr*8)*4, floor(hr*32)%4)
+      spr(crag, rx, hr > .5 ? 28 + frac(hr*8)*3 : -6 - frac(hr*8)*3, floor(hr*32)%4)
     }
   }
   -- every slot's shot and what it is aimed at, the furthest ahead first:
