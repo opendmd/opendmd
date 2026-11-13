@@ -1097,16 +1097,19 @@ def s_blur(page: Page) -> None:
 
 
 def s_new(page: Page) -> None:
-    """A new, empty piece (the one before it kept)."""
-    was = s_data(page).get("id", "")
+    """A new, empty piece. The piece before it keeps its row in the drafts
+    if it was ever stored (one never drawn on has no row to keep), so the
+    rows are one more, or as many. Both are read before the click: read
+    after it, `saved` is the old piece's or the new one's as the race goes."""
+    n = page.locator("#s-list li").count()
+    before = s_data(page)
+    was = before.get("id", "")
     if page.is_hidden("#s-new") and page.is_visible("#s-tabs"):
         page.click("#s-tabs [data-tab=piece]")  # a phone: New piece is under the Piece tab
     page.click("#s-new")
-    # The new piece up and the drafts drawn again for it (its row the open one). Not a count of rows worked out from
-    # `saved` read after the click: that read raced the change of piece (the old piece's state, or the new one's).
-    wait_js(page, f"document.getElementById('studio').dataset.saved === 'new' && document.getElementById('studio').dataset.id !== '{was}' "
-                  "&& !document.getElementById('studio').hasAttribute('aria-busy') "
-                  "&& (document.querySelector('#s-list li.on .s-open')?.dataset.id === document.getElementById('studio').dataset.id || !document.querySelector('#s-list li'))")  # (no rows: no storage)
+    wait_js(page, f"document.querySelectorAll('#s-list li').length === {n + (1 if before['saved'] != 'new' else 0)} && "
+                  f"document.getElementById('studio').dataset.saved === 'new' && document.getElementById('studio').dataset.id !== '{was}' "
+                  "&& !document.getElementById('studio').hasAttribute('aria-busy')")
     s_blur(page)
     page.mouse.move(0, 0)
 
@@ -3972,7 +3975,9 @@ def studio_dark(browser, base: str, site: Path, errors: list[str], shots: Path |
         if shots:
             page.screenshot(path=str(shots / f"studio-stage-{scheme}.png"))
         ctx.close()
-    for (w, h), under in (((1280, 800), False), ((1728, 1117), True), ((1920, 1080), True), ((2048, 1152), True), ((2560, 1440), True)):
+    # (the window, whether it has the row, Fit: 1710 x 917 is the owner's; 1920 x 940, 1536 x 864 and 1440 x 820 keep the row by a step of Fit)
+    for (w, h), under, fit in (((1280, 800), False, 7), ((1440, 820), True, 7), ((1536, 864), True, 8), ((1710, 917), True, 10), ((1920, 940), True, 11),
+                               ((1728, 1117), True, 10), ((1920, 1080), True, 12), ((2048, 1152), True, 13), ((2560, 1440), True, 16)):
         ctx = p_ctx(browser, w, h, "dark")
         page = s_page(browser, base, site, errors, ctx=ctx)
         page.evaluate(S_WHOLE, [S_TWO])
@@ -3980,14 +3985,14 @@ def studio_dark(browser, base: str, site: Path, errors: list[str], shots: Path |
         page.wait_for_timeout(300)
         m = page.evaluate(S_ROOM)
         if under:
-            check(m["band"] <= 24 and m["canvas"] >= 0.7 and m["bezel"] >= 0.85 and m["scale"] > 8 and m["scale"] == int(m["scale"]) and m["used"] >= 0.97
+            check(m["band"] <= 24 and m["canvas"] >= 0.7 and m["bezel"] >= 0.8 and m["scale"] == fit and m["used"] >= 0.97
                   and len(m["under"]) == 2 and all(u[1] >= 200 for u in m["under"]) and m["inWin"] and not m["meets"] and m["fits"] and m["wide"] <= 0
                   and m["docks"] == {"tools": "l", "colours": "r", "layers": "b", "stamps": "b", "piece": "r"},
-                  f"/studio/ room ({w}x{h}): no empty band in the stage, Fit a whole step past 8x, Layers and Stamps in a row under the frames, the column used, one screen ({m})")
+                  f"/studio/ room ({w}x{h}): no empty band in the stage ({m['band']:.0f} px), Fit at {fit}x, Layers and Stamps in a row under the frames, the column used, one screen ({m})")
         else:
-            check(not m["under"] and m["scale"] == 7 and m["fits"] and set(m["docks"].values()) == {"l", "r"},
+            check(not m["under"] and m["scale"] == fit and m["fits"] and set(m["docks"].values()) == {"l", "r"},
                   f"/studio/ room ({w}x{h}): no room under the canvas, so the panels in the right column, Fit at 7x ({m})")
-        if w == 1728:
+        if (w, h) == (1728, 1117):
             # Colours dragged by its bar onto the title bars of the row under the canvas docks there, first in it (This piece
             # dropped lower over that row floats), kept over a reload; a smaller
             # window shows that row's panels in the right column, and back; its menu docks it right again.
@@ -4025,11 +4030,84 @@ def studio_dark(browser, base: str, site: Path, errors: list[str], shots: Path |
             check(not lib[0]["under"] and set(lib[0]["docks"].values()) <= {"l", "r", "f"} and lib[0]["fits"] and lib[1]["docks"] == d4["docks"] and len(lib[1]["under"]) == 2 and lib[1]["fits"],
                   f"/studio/ room: the window resized while the Library shows, the piece comes back laid out for the window as it is ({lib[0]['docks']}, {lib[1]['docks']})")
             check(d1["docks"]["colours"] == "b" and first == "colours" and len(d1["under"]) == 3 and stored.get("v") == 2 and stored["w"]["p"]["colours"]["at"] == "b"
-                  and d2["docks"] == d1["docks"] and set(small["docks"].values()) == {"l", "r"} and small["fits"] and not any("under" in t for t in items)
+                  and d2["docks"] == d1["docks"] and set(small["docks"].values()) == {"l", "r"} and small["fits"] and "✓Dock right" in items and any(t.startswith("Dock under the canvas (in a larger window") for t in items)
                   and d3["docks"] == d1["docks"] and d4["docks"]["colours"] == "r" and len(d4["under"]) == 2 and floats["fixed"] and floats["dock"] == "f",
-                  f"/studio/ room: Colours dragged onto the row under the canvas docks there ({d1['docks']}, first: {first}), kept (v{stored.get('v')}) over a reload; at 1280 x 800 that row's panels "
-                  f"are in the right column ({small['docks']}, its menu {items}), and back; Dock right from its menu ({d4['docks']})")
-        if w == 1920:
+                  f"/studio/ room: Colours dragged onto the row under the canvas docks there ({d1['docks']}, first: {first}), kept (v{stored.get('v')}) over a reload; at 1280 x 800 (that size's own layout, the default) "
+                  f"every panel is in a column ({small['docks']}, Colours' menu {items}), and back; Dock right from its menu ({d4['docks']})")
+        if (w, h) in ((1280, 800), (1440, 820), (1920, 1080)):
+            # Select (M) shows its bar and moves nothing: with the row, the bar lies between the picture and the chin's controls.
+            geo = """() => { const r = (e) => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom].map(Math.round); }, q = (s) => document.querySelector(s);
+                const meet = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3], bar = q('#s-selbar'), st = r(q('.s-stage'));
+                const at = bar.getClientRects().length ? r(bar) : null;
+                return { boxes: ['.s-stage', '#s-work', '.s-chin', '.s-strip', '.s-du', '.s-bench'].map((s) => q(s) && q(s).getClientRects().length ? r(q(s)) : null), at,
+                  clear: !at || (!meet(at, r(q('#s-work'))) && ![...document.querySelectorAll('.s-chin button, #s-xy, #s-z')].some((e) => meet(at, r(e))) && at[0] >= st[0] && at[2] <= st[2] && at[1] >= st[1] && at[3] <= st[3]),
+                  all: [...bar.querySelectorAll('button')].every((b) => { const x = r(b); return x[0] >= at?.[0] && x[2] <= at?.[2] && x[3] - x[1] >= 24; }) }; }"""
+            s_blur(page)
+            g0 = page.evaluate(geo)
+            page.keyboard.press("m")
+            page.wait_for_timeout(200)
+            g1 = page.evaluate(geo)
+            page.keyboard.press("b")
+            page.wait_for_timeout(100)
+            check(g0["at"] is None and g1["at"] and g1["boxes"] == g0["boxes"] and g1["clear"] and g1["all"],
+                  f"/studio/ room ({w}x{h}): Select shows its bar and moves nothing (the stage, the canvas, the chin, the frames, the row, the column: {g1['boxes'] == g0['boxes']}); "
+                  f"the bar is inside the stage, off the picture and the chin's controls, every button whole and 24 px or more ({g1['at']}, {g1['clear']}, {g1['all']})")
+        if (w, h) == (1440, 820):
+            # The last panel dragged out of the row: the row is kept as it is until the drop; over its place it is the target, lit;
+            # dropped away, the panel floats and the row goes; then the stage's foot is the target, and its lit edge says so.
+            page.click("[data-panel=stamps] [data-pa=close]")
+            hold = """() => { const r = (s) => { const e = document.querySelector(s), b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom].map(Math.round); };
+                return { du: r('.s-du'), strip: r('.s-strip'), stage: r('.s-stage'), under: document.getElementById('studio').hasAttribute('data-under'),
+                  hot: document.querySelector('.s-stage').dataset.hot || '', lit: document.querySelector('.s-du').classList.contains('hot') }; }"""
+            h0 = page.evaluate(hold)
+            gx, gy = p_grip(page, "layers")
+            page.mouse.move(gx, gy)
+            page.mouse.down()
+            page.mouse.move(gx + 200, gy - 300, steps=6)
+            page.wait_for_timeout(80)
+            h1 = page.evaluate(hold)
+            page.mouse.move(h0["du"][0] + 300, h0["du"][1] + 20, steps=4)
+            page.wait_for_timeout(80)
+            h2 = page.evaluate(hold)
+            page.mouse.up()
+            page.wait_for_timeout(150)
+            back = p_box(page, "layers")["dock"]
+            p_drag(page, p_grip(page, "layers"), (gx + 200, gy - 300))
+            h3 = page.evaluate(hold)
+            away = p_box(page, "layers")["dock"]
+            gx, gy = p_grip(page, "layers")
+            page.mouse.move(gx, gy)
+            page.mouse.down()
+            page.mouse.move(gx + 10, h3["stage"][3] - 80, steps=5)
+            page.wait_for_timeout(80)
+            h4 = page.evaluate(hold)
+            page.mouse.move(gx + 10, h3["stage"][3] - 20, steps=3)
+            page.wait_for_timeout(80)
+            h5 = page.evaluate(hold)
+            page.mouse.up()
+            page.wait_for_timeout(150)
+            foot = p_box(page, "layers")["dock"]
+            # The row wins over the left column's edge where they meet: Colours dropped in the row's first 28 px docks in the row, first.
+            u = page.locator(".s-du").bounding_box()
+            p_drag(page, p_grip(page, "colours"), (u["x"] + 10, u["y"] + 20))
+            edge = [p_box(page, "colours")["dock"], page.evaluate("document.querySelector('.s-du > .s-panel').dataset.panel")]
+            check(h1["under"] and h1["du"] == h0["du"] and h1["strip"] == h0["strip"] and h1["stage"] == h0["stage"] and not h1["hot"] and h2["hot"] == "b" and h2["lit"] and h2["du"] == h0["du"]
+                  and back == "b" and away == "f" and not h3["under"] and not h4["hot"] and h5["hot"] == "b" and foot == "b" and edge == ["b", "colours"],
+                  f"/studio/ room: the last panel dragged out of the row, the row kept until the drop ({h1['du']} = {h0['du']}), lit as the target over its bars ({h2['hot']}, {h2['lit']}), dropped there docked ({back}); "
+                  f"dropped away it floats and the row goes ({away}, {h3['under']}); the stage's foot then the target ({h4['hot']!r} above it, {h5['hot']!r} on it: {foot}); the row's first 28 px is the row's, not the left column's ({edge})")
+            # A window with no room for the row: the menu says where a row panel is docked (under the canvas, shown right till then), and Dock right is a choice.
+            page.set_viewport_size({"width": 1280, "height": 800})
+            page.wait_for_timeout(300)
+            order = page.evaluate("[...document.querySelectorAll('.s-bench > .s-panel')].filter((p) => p.getClientRects().length).map((p) => p.dataset.panel)")
+            page.click("[data-panel=layers] [data-pa=menu]")
+            items = page.evaluate("[...document.querySelectorAll('.s-pmenu button')].map((b) => [b.textContent, b.getAttribute('aria-checked')])")
+            page.click(".s-pmenu button:has-text('Dock right')")
+            page.wait_for_timeout(100)
+            st = page.evaluate(P_STORED)
+            check(["Dock right", "false"] in items and any(t.startswith("✓Dock under the canvas (in a larger window") and c == "true" for t, c in items)
+                  and st["n"]["p"]["layers"]["at"] == "r" and st["n"]["p"]["colours"]["at"] == "b" and p_box(page, "layers")["dock"] == "r",
+                  f"/studio/ room: at 1280 x 800 a row panel is shown in the right column ({order}) and its menu says it is docked under the canvas, not right ({items}); Dock right chosen docks it right ({st['n']['p']['layers']['at']})")
+        if w == 1920 and h == 1080:
             # Zoomed in, the stage grows no further than leaves the row under it 200 px, and scrolls in itself; H gives the stage the column.
             for _ in range(3):
                 page.click("#s-z-in")

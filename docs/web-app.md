@@ -529,11 +529,15 @@ the height for. Its colours are the site's theme tokens in both themes
 (`--bg2`, `--bg3`, `--line`, `--mut`, `--ink`), never a home-page scene's
 (`--den*`). `panels.js` (loaded at that size only, before the page shows)
 makes Tools, Colours, Layers, Stamps and This piece panels: each docks
-left, right or **under the canvas**, or floats. A window with 220 px or
-more to spare below the canvas and the frames (by the window's size alone:
-1440 × 900 and up, not 1280 × 800) makes the stage only as tall as the
-canvas and puts a row of panels under the frames, Layers and Stamps to
-begin with; in a smaller window those panels sit in the right column. A
+left, right or **under the canvas**, or floats. A window with 200 px to
+spare below the canvas at Fit and the frames, or with it once Fit gives up
+one step (never below 7×), makes the stage only as tall as the canvas and
+puts a row of panels under the frames, Layers and Stamps to begin with
+(by the window's size alone: 1440 × 820 and up, 1710 × 917, not
+1280 × 800, whose 7× leaves a little under 200 px). In a window without
+that room the row's panels sit in the right column, and their menus still
+say they are docked under the canvas. With the row, the selection bar
+lies over the bezel's chin, so picking Select moves nothing. A
 piece's colours past 23 are a grid that scrolls in itself, so Swatches and
 Layers stay in reach. A panel is dragged by its title bar (to the stage's
 edge or onto that row to dock it), moved by

@@ -162,14 +162,16 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
    from 240 to 300 px so the canvas lands on a whole zoom step).
    A window with room under the canvas (panels.js: data-under): the stage is as tall as the canvas
    and no taller, the frames under it, and under them a row of panels (.s-du) with the height that
-   is left, 200 px at least; the selection bar keeps a foot of its own in the stage. */
+   is left, 200 px at least; the selection bar lies over the bezel's chin, between the picture and
+   the chin's controls, so picking Select moves nothing. */
 @media (min-width:1000px) and (min-height:620px){
   .spage .wrap{max-width:none;padding:0 12px}
   .spage main{padding:10px 0 0}
   #studio{display:grid;grid-template:"doc doc doc" auto "l stage r" minmax(0,1fr) "l strip r" auto/auto minmax(0,1fr) auto;gap:0 8px;
   height:calc(100dvh - var(--top,77px) - 8px);margin-bottom:8px}
   #studio[data-under]{grid-template:"doc doc doc" auto "l stage r" minmax(0,auto) "l strip r" auto "l under r" minmax(200px,1fr)/auto minmax(0,1fr) auto}
-  #studio[data-under]:has(#s-selbar:not([hidden])) .s-scroll{padding-bottom:50px}
+  #studio[data-under] .s-selbar{box-sizing:border-box;flex-wrap:nowrap;gap:4px;height:32px;margin-bottom:32px;padding:3px;border-radius:9px}
+  #studio[data-under] .s-selbar .s-pill{height:24px;padding:0 8px;border-radius:6px}
   #studio[data-view=library]{display:block;height:auto}
   #studio[aria-busy][data-laid] .s-tray,#studio[aria-busy][data-laid] .s-bench{visibility:hidden} /* (a stored layout: shown once panels.js has put it in place) */
   .s-doc{grid-area:doc;padding:0 2px 8px}

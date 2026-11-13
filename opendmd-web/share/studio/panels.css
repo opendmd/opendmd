@@ -8,6 +8,7 @@
 /* Under the canvas (a window with the room: panels.js roomy): a row, each panel a share of its width and all its height */
 .s-du{grid-area:under;display:flex;gap:8px;min-height:0;padding-top:8px}
 #studio:not([data-under]) .s-du{display:none}
+#studio .s-du.held.empty{display:flex}
 #studio .s-du>.s-panel{flex:1 1 0;max-height:100%}
 #studio .s-du>.s-panel.col,#studio .s-du>.s-tray{flex:none;align-self:flex-start}
 .s-du .s-list{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
