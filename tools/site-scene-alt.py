@@ -303,12 +303,14 @@ def cabinet(a: Art, x, fy, P, body, side, trim, kind=0, w=44, h=118):
     # The marquee: lit shapes, no words.
     a.orect(x + 5, top + 4, x + w - 5, top + 16, P["lit"])
     for i, sx in enumerate(range(x + 8, x + w - 10, 9)):
-        if (i + kind) % 3 == 0:
-            a.fill(a.disc(sx + 3, top + 10, 3), trim)
-        elif (i + kind) % 3 == 1:
-            a.fill(a.quad(sx + 3, sx + 4, top + 6, sx, sx + 7, top + 14), P["hot"])
-        else:
-            a.rect(sx + 1, top + 7, sx + 6, top + 13, P["cool"])
+        if (i + kind) % 3 == 0:  # a diamond
+            a.fill(np.abs(a.xx - sx - 3) + np.abs(a.yy - top - 10) <= 3, trim)
+        elif (i + kind) % 3 == 1:  # a chevron
+            a.seg(sx, top + 7, sx + 5, top + 10, P["hot"], 1.8)
+            a.seg(sx + 5, top + 10, sx, top + 13, P["hot"], 1.8)
+        else:  # three bars
+            for bx in (sx, sx + 3, sx + 6):
+                a.rect(bx, top + 7, bx + 2, top + 13, P["cool"])
     # The hood and the screen.
     a.rect(x + 3, top + 18, x + w - 3, top + 54, P["dark"])
     screen_game(a, kind, x + 7, top + 22, x + w - 7, top + 50, P)
@@ -602,7 +604,7 @@ ARCADE = dict(
 
 
 def carpet(a: Art, floor: int, P, seed=6):
-    """The carpet: scattered triangles, squiggles, rings and dots."""
+    """The carpet: scattered wedges, squiggles, dashes and dots."""
     a.rect(0, floor, a.w, a.h, P["carpet"])
     a.rect(0, floor - 3, a.w, floor, P["skirt"])
     rnd = random.Random(seed)
@@ -617,7 +619,8 @@ def carpet(a: Art, floor: int, P, seed=6):
             elif k == 1:
                 a.cable([(x, y), (x + 2, y - 2), (x + 4, y), (x + 6, y - 2)], col)
             elif k == 2:
-                a.fill(a.disc(x + 2, y, 2.4, 1.8) & ~a.disc(x + 2, y, 1.1, 0.7), col)
+                a.rect(x, y, x + 2, y + 1, col)
+                a.rect(x + 3, y + 1, x + 5, y + 2, col)
             elif k == 3:
                 a.rect(x, y, x + 2, y + 2, col)
             else:
@@ -625,12 +628,11 @@ def carpet(a: Art, floor: int, P, seed=6):
 
 
 def wall_neon(a: Art, x, y, P):
-    """Shapes of light on the wall: a ring, a triangle, a zigzag. No words."""
-    ring = a.disc(x + 8, y + 8, 8) & ~a.disc(x + 8, y + 8, 6)
-    a.fill(ring, P["hot"])
-    tri = a.quad(x + 31, x + 32, y, x + 22, x + 41, y + 17)
-    edge = tri & ~(a.quad(x + 31, x + 32, y + 4, x + 26, x + 37, y + 15))
-    a.fill(edge, P["cool"])
+    """Shapes of light on the wall: an arch of three bands, a bolt, a zigzag. No words, no symbols."""
+    for r, col in ((9, P["hot"]), (6, P["lit"]), (3, P["cool"])):
+        a.fill(a.disc(x + 10, y + 12, r) & ~a.disc(x + 10, y + 12, r - 1.6) & (a.yy <= y + 12), col)
+    for (x0, y0), (x1, y1) in zip(pts := [(x + 34, y), (x + 27, y + 9), (x + 33, y + 9), (x + 26, y + 18)], pts[1:]):
+        a.seg(x0, y0, x1, y1, P["cool"], 1.8)
     pts = [(x + 2, y + 26), (x + 9, y + 21), (x + 16, y + 26), (x + 23, y + 21), (x + 30, y + 26), (x + 37, y + 21)]
     for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
         a.seg(x0, y0, x1, y1, P["lit"], 1.8)

@@ -24,7 +24,7 @@ build URL serves. There the art index must also carry
   (cache, ODM, bucket, manifest, pack, bundle) on the home, install, guide
   and gallery pages;
 - the home page's scenes (scene.js, site/theme/SCENES.md): each of them at
-  /?scene=NAME, laptop and phone, light and dark: its own picture behind
+  /?scene=NAME, laptop, tablet and phone, light and dark: its own picture behind
   the hero and no other scene's fetched, the hero's words legible over it,
   nothing wider than a phone; the name remembered, forgotten by `synth`,
   untouched by a name that isn't one; the address working with no storage;
@@ -7292,7 +7292,8 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
             page.context.close()
 
 
-SCENES = ("synth", "night", "day", "chunky", "shelf", "neon", "arcade")  # tools/site.py SCENES: the first is everyone's
+# The scenes tools/site.py publishes (its SCENES, read from its source: the first is everyone's).
+SCENES = tuple(re.findall(r'"(\w+)"', re.search(r"^SCENES = \(([^)]*)\)", (ROOT / "tools/site.py").read_text(), re.M).group(1)))
 
 
 def luminance(rgb) -> float:
@@ -7328,7 +7329,7 @@ def scenes(browser, base: str, site: Path, errors: list[str]) -> None:
     listed = re.search(r"all = \[([^\]]*)\]", js)
     check(listed is not None and tuple(re.findall(r'"(\w+)"', listed.group(1))) == SCENES
           and all(f"[data-scene={n}]" in css and (site / f"den-{n}.webp").is_file() and (site / f"den-{n}-phone.webp").is_file() for n in SCENES[1:]),
-          f"scenes: scene.js, site.css and the pictures agree on {', '.join(SCENES)}")
+          f"scenes: scene.js, site.css and the pictures agree with tools/site.py's list ({', '.join(SCENES)})")
 
     def open_at(page: Page, address: str) -> list[str]:
         """Go there; the scene pictures the page fetched, by name (and anything that went wrong with one)."""
@@ -7343,15 +7344,17 @@ def scenes(browser, base: str, site: Path, errors: list[str]) -> None:
 
     named = "document.documentElement.getAttribute('data-scene')"
     for scene in SCENES:
-        for size in SIZES:
+        for size in ("laptop", "tablet", "phone"):
             want = "den" + ("" if scene == SCENES[0] else f"-{scene}") + ("-phone" if size == "phone" else "") + ".webp"
             for scheme in ("light", "dark"):
-                page = new_page(browser, size, errors, scheme)
+                page = new_page(browser, "laptop" if size == "tablet" else size, errors, scheme)
+                if size == "tablet":  # between the two: the wide picture, the words on fewer, longer lines
+                    page.set_viewport_size({"width": 820, "height": 1180})
                 got = open_at(page, f"/?scene={scene}")
                 bg = page.evaluate("getComputedStyle(document.querySelector('.hero')).backgroundImage")
                 check(got == [want] and want in bg and page.evaluate(named) == (None if scene == SCENES[0] else scene),
                       f"scene {scene} ({size}, {scheme}): the hero has {want} behind it, the only scene fetched {got}")
-                low = {sel: round(c, 1) for sel in (".hero h1", ".hero .lead", ".hero .proof", ".hero .ticks", ".hero-panel .cap")
+                low = {sel: round(c, 1) for sel in (".hero h1", ".hero .lead", ".hero .proof li", ".hero .proof li + li", ".hero .ticks", ".hero-panel .cap")
                        if (c := ink_contrast(page, sel)) < (3 if sel == ".hero h1" else 4.5)}
                 check(not low, f"scene {scene} ({size}, {scheme}): the hero's words read over it (contrast under 4.5, a heading's under 3: {low or 'none'})")
                 if size == "phone":
