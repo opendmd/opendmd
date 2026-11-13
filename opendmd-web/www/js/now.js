@@ -9,7 +9,8 @@
 // kept in step with the panel by clock (elapsed_ms at the device's t_ms,
 // offset estimated NTP-style; CLAUDE.md, "The Now preview is in step"). In
 // local mode, a simulator over the picked folder that plays one file at a
-// time with the firmware's dwell.
+// time with the firmware's dwell. A panel that can't be reached, or has no
+// card, leaves the preview dimmed and still under its caption (`dim`).
 
 import { app, playlistLabel, platName } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
@@ -171,6 +172,14 @@ function mountDevice(el) {
   let base = null;   // this file's first sample, for the rate its position runs at
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
+  // Not reachable (offline), or no card: the preview dims and stops where it was, under its caption.
+  let lost = false, nocard = false;
+  const held = () => !!app.status?.paused || lost || nocard;
+  const still = () => {
+    canvas.classList.toggle('dim', lost || nocard);
+    if (preview.paused !== held()) preview.setPaused(held());
+  };
+
   let mirrored = mirror();
   if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Panel)';
   const sendBright = debounce(async (v) => {
@@ -243,7 +252,7 @@ function mountDevice(el) {
     if (!last || last.path !== p || off == null) return null;
     if (last.paused) return (frozen = last.elapsed);
     const e = last.elapsed + (performance.now() + off - last.t) * last.rate;
-    if (!app.status?.paused) { frozen = null; return e; }
+    if (!held()) { frozen = null; return e; }
     return (frozen ??= e);
   }
   // When (page clock) the panel started `p`, or null: its position at
@@ -349,7 +358,8 @@ function mountDevice(el) {
     if (b) clear(banner, b);
     sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
     sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
-    if (preview.paused !== s.paused) preview.setPaused(s.paused);
+    nocard = !sd.mounted && !np.path;
+    still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
     follow_(np.path, fkey(np.path, np));
   }
@@ -357,6 +367,7 @@ function mountDevice(el) {
   const good = () => {
     if (failures && cap.textContent == UNREACH) cap.textContent = '';
     failures = 0;
+    if (lost) { lost = false; still(); }
     conn.className = 'dot ok';
     conn.title = live ? 'Live' : 'Live (polling)';
   };
@@ -386,8 +397,9 @@ function mountDevice(el) {
       good();
     } catch (e) {
       conn.className = 'dot bad';
-      conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
+      conn.title = (lost = ++failures > 1) ? 'Offline' : 'Retrying';
       if (shownPath) cap.textContent = UNREACH;
+      still();
     } finally {
       // Polling (no stream): less often while a file goes to or from the card.
       if (!live && shown) app.watch('now', app.status?.transfer ? SLOW_MS : POLL_MS, poll);
@@ -582,9 +594,6 @@ function mountLocal(el) {
     await preview.show(path, (p) => app.previewBytes(p));
   }
 
-  // The demo's player (js/demo.js) sets the playlist, the platforms and
-  // shuffle from its settings, and starts it.
-  if (app.demo) app.demo.drive({ listSel, plats, shuffle, play, preview });
   return { show() {}, hide() {} };
 }
 

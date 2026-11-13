@@ -5501,6 +5501,8 @@ def mock_pass(browser) -> None:
         font_checks(page, base, "laptop")
         phone_pass(browser, base, errors)
         recent_demo_pass(browser, base, errors)
+        demo_world_pass(browser, base, errors)
+        now_dim_checks(browser, base, errors)
         formulas_phone_pass(browser, base, errors)
         formulas_demo_pass(browser, base, errors)
         json_type_checks(base)
@@ -8779,9 +8781,10 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     app.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
     wait_lit(app, "#psi-ed-panel", "formulas (demo): a Formula from the site's page")
     # (Saved in this browser as it arrived: its name is its name line now.)
+    # (The demo is a display: Show on panel plays it on the demo's panel.)
     check(app.input_value("#psi-name") == "Demo rings" and "loop 4\nrings" in app.input_value("#psi-src")
-          and app.locator("#psi-ed-show, #psi-show").count() == 0 and app.locator("#psi-ed-share").count() == 0,
-          f"formulas (demo): it opened '{app.input_value('#psi-name')}', no Show on panel, no share link")
+          and app.locator("#psi-ed-show").count() == 1 and app.locator("#psi-ed-share").count() == 0,
+          f"formulas (demo): it opened '{app.input_value('#psi-name')}', Show on panel, no share link")
     page.context.close()
 
 
@@ -8968,6 +8971,189 @@ def location_hash(page: Page) -> str:
     return page.evaluate("location.hash")
 
 
+def demo_card_routes(page: Page, sets: dict[str, list[str]] | None = None) -> list[str]:
+    """The web demo (status `{}`) over a card of three 128x32 GIFs, one
+    colour each, drawn here; `sets`: playlists of theirs. Its GIF paths."""
+    import io
+    from PIL import Image
+    gifs = {}
+    for name, rgb in (("Clock", (255, 170, 0)), ("Mid", (0, 200, 80)), ("Hi", (40, 90, 255))):
+        buf = io.BytesIO()
+        Image.new("RGB", (128, 32), rgb).save(buf, "GIF")
+        gifs[f"/gifs/Demo/{name}.gif"] = buf.getvalue()
+    texts = {"/filelist.txt": "".join(n + "\n" for n in gifs), **{f"/sets/{k}.txt": "".join(n + "\n" for n in v) for k, v in (sets or {}).items()}}
+    index = [{"path": p, "size": len(b)} for p, b in {**texts, **gifs}.items()]
+    page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
+    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body=json.dumps(index), headers={"content-type": "application/json"}))
+    def serve(text: str):
+        return lambda r: r.fulfill(status=200, body=text, headers={"content-type": "text/plain"})
+    for p, text in texts.items():
+        page.route(f"**/demo{p}", serve(text))
+    page.route("**/demo/gifs/Demo/*.gif", lambda r: r.fulfill(status=200, body=gifs[urllib.parse.urlsplit(r.request.url).path.split("/demo", 1)[1]],
+                                                            headers={"content-type": "image/gif"}))
+    return list(gifs)
+
+
+def demo_world_pass(browser, base: str, errors: list[str]) -> None:
+    """The web demo as a display (js/demo.js, `window.opendmdDemo`), driven
+    from JS as the site's desk scene drives it: power off (Now Offline, the
+    panel dark), on (the start-up show, then the playlist, Now Live again by
+    itself), the card out (No card, the core's status card on the panel)
+    and in (it plays); and the device paths of the Library, Playlists and
+    Formulas answered by its player. Console errors fail it."""
+    page = new_page(browser, "laptop", errors)
+    paths = demo_card_routes(page, {"Two": ["/gifs/Demo/Mid.gif", "/gifs/Demo/Hi.gif"]})
+    page.goto(base + "/#now")
+    page.wait_for_function("window.opendmdDemo && ['Clock', 'Mid', 'Hi'].includes(document.querySelector('#now-title')?.textContent)"
+                           " && document.querySelector('#now-conn').classList.contains('ok')", timeout=20000)
+    lit_js = """(() => { const c = opendmdDemo.state.canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 60 || d[i+1] > 60 || d[i+2] > 60) n++; return n; })()"""
+    st = lambda: page.evaluate("(({ canvas, ...s }) => s)(opendmdDemo.state)")  # noqa: E731
+    on_ = lambda: page.evaluate("(c => [c.classList.contains('dim'), document.querySelector('#now-conn').title, document.querySelector('#now-cap').textContent])(document.querySelector('#now-panel'))")  # noqa: E731
+    seen = page.evaluate("(() => { const s = []; opendmdDemo.on((w) => s.push([w.power, w.card, w.up])); window.seen = s; return s.length; })()")
+    check(st() == {"power": True, "card": True, "up": True, "b": 96} and page.evaluate(lit_js) > 1000 and seen == 1,
+          f"demo world: the display is on, with its card, on the network, its panel lit ({st()}; on() calls at once: {seen})")
+    # Power off: every call fails like a dropped connection; Now says so, its mirror dims; the panel goes dark.
+    page.evaluate("opendmdDemo.power(false)")
+    page.wait_for_function("document.querySelector('#now-conn').title === 'Offline'", timeout=6000)
+    off, n, err = on_(), page.evaluate(lit_js), page.evaluate("import('./js/state.js').then(({ app }) => app.src.status().then(() => 'answered', (e) => e.constructor.name + ' ' + !!e.link))")
+    check(off == [True, "Offline", "Panel not reachable"] and n == 0 and err == "TypeError true" and st()["power"] is False,
+          f"demo world: power off -> Offline, 'Panel not reachable', the mirror dimmed, the panel dark ({off}, {n} lit, a call: {err})")
+    # Power on: a fresh start, the show within 2 s, Live again by itself.
+    t0 = time.time()
+    page.evaluate("opendmdDemo.power(true)")
+    page.wait_for_function(f"{lit_js} > 200", timeout=2000)
+    t_show = time.time() - t0
+    page.wait_for_function("document.querySelector('#now-conn').classList.contains('ok')", timeout=6000)
+    t_live = time.time() - t0
+    page.wait_for_function("['Clock', 'Mid', 'Hi'].includes(document.querySelector('#now-title').textContent) && !document.querySelector('#now-panel').classList.contains('dim')", timeout=6000)
+    s = page.evaluate("import('./js/state.js').then(({ app }) => app.src.status(true))")
+    check(t_show < 2 and t_live < 6 and s["uptime_secs"] < 10 and s["now_playing"]["ordinal"] <= 2 and s["recent"] == [s["now_playing"]["path"]],
+          f"demo world: power on -> the start-up show lit in {t_show:.1f} s, Live in {t_live:.1f} s, a fresh start (up {s['uptime_secs']} s, "
+          f"played {s['now_playing']['ordinal']}, recently played {s['recent']})")
+    # The card out: a restart, then the status card (the core's, as Settings > Start-up previews it).
+    page.evaluate("opendmdDemo.card(false)")
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'No card' && document.querySelector('#now-conn').classList.contains('ok')", timeout=12000)
+    page.wait_for_timeout(1500)
+    s = page.evaluate("import('./js/state.js').then(({ app }) => app.src.status())")
+    same = page.evaluate("""async () => {
+        const web = (await import('./js/web.js')).default, { app } = await import('./js/state.js'), s = app.status, pc = opendmdDemo.state.canvas, k = pc.width / 128;
+        const c = document.createElement('canvas'); c.width = pc.width;
+        const p = new web.Preview(c, 2.2, 1, web.defaultBloom(), false);
+        p.load('@boot?' + new URLSearchParams({ len: 'card', v: s.version, ip: s.ip, note: 'Insert a microSD card' }), new Uint8Array());
+        p.syncTo(0, performance.now() - 3000, 1); p.frame();
+        const on = (cv) => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data, o = [];
+            for (let y = 0; y < 32; y++) for (let x = 0; x < 128; x++) { const i = ((y * k + (k >> 1)) * cv.width + x * k + (k >> 1)) * 4; o.push(d[i] + d[i+1] + d[i+2] > 90); } return o; };
+        const a = on(pc), b = on(c), lit = b.filter(Boolean).length;
+        p.free(); return [a.filter((v, i) => v === b[i]).length / a.length, lit]; }""")
+    check(s["sd"]["mounted"] is False and s["entries"] == 0 and s["now_playing"]["path"] == "" and on_()[0] and same[0] > 0.97 and same[1] > 100,
+          f"demo world: the card out -> No card (mounted {s['sd']['mounted']}, {s['entries']} entries, path {s['now_playing']['path']!r}), "
+          f"the mirror dimmed, the panel the core's status card ({same[0]:.1%} of the LEDs alike, {same[1]} lit)")
+    page.evaluate("opendmdDemo.card(true)")
+    page.wait_for_function("['Clock', 'Mid', 'Hi'].includes(document.querySelector('#now-title').textContent)", timeout=8000)
+    s = page.evaluate("import('./js/state.js').then(({ app }) => app.src.status())")
+    check(s["entries"] == 3 and s["sd"]["mounted"] and not on_()[0], f"demo world: the card in -> it plays again ({s['entries']} entries)")
+    seen = page.evaluate("window.seen.map(String)")
+    page.evaluate("opendmdDemo.scale(6)")
+    page.wait_for_timeout(300)
+    w = page.evaluate("opendmdDemo.state.canvas.width")
+    check(seen[1:3] == ["false,true,false", "true,true,false"] and "true,false,true" in seen and w == 768 and page.evaluate(lit_js) > 1000,
+          f"demo world: on() hears each change ({seen[:6]}…); scale(6) -> {w} px wide, still lit")
+    # Brightness in effect: the setting's, night mode's.
+    b = page.evaluate("""async () => { const { app } = await import('./js/state.js'); await app.src.putConfig({ brightness: 30 }); const a = opendmdDemo.state.b;
+        await app.src.putSchedule({ rules: [], night: { from: '00:00', to: '00:00', mode: 'off' } }); const n = opendmdDemo.state.b;
+        await app.src.putSchedule({ rules: [], night: null }); await app.src.putConfig({ brightness: 96 }); return [a, n, opendmdDemo.state.b]; }""")
+    check(b == [30, 0, 96], f"demo world: state.b is the brightness in effect (30, night mode off 0, back to 96: {b})")
+    # The device paths: Send to panel (Library), Play (Playlists), Show on panel (Formulas), and the card's calls.
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-list .vdir", timeout=20000)
+    page.click("#lib-list .vdir >> nth=0")
+    page.click("#lib-list .vrow:not([hidden]) >> nth=1")
+    page.wait_for_selector("#lib-play:not([disabled])", timeout=10000)
+    want = page.get_attribute("#lib-play", "data-path")
+    page.click("#lib-play")
+    page.wait_for_function(f"import('./js/state.js').then(({{ app }}) => app.src.now()).then((s) => s.now_playing.path === {json.dumps(want)})", timeout=8000)
+    toast = last_toast(page, "ok")
+    goto_view(page, "sets")
+    page.click("#sets-list [data-path='/sets/Two.txt'] button.more")
+    page.click("#sets-menu [data-do=activate]")
+    page.wait_for_function("import('./js/state.js').then(({ app }) => app.src.status()).then((s) => s.manifest === '/sdcard/sets/Two.txt' && s.entries === 2)", timeout=8000)
+    goto_view(page, "formulas")
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
+    page.click("#psi-ex .psi-tile >> nth=0")
+    page.wait_for_selector("#psi-side.open #psi-show", timeout=20000)
+    page.click("#psi-show")
+    page.wait_for_function("import('./js/state.js').then(({ app }) => app.src.now()).then((s) => s.now_playing.path.startsWith('@formula:~sent'))", timeout=8000)
+    page.wait_for_function(f"{lit_js} > 200", timeout=5000)
+    fname = page.inner_text("#psi-d-title")
+    goto_view(page, "now")
+    page.wait_for_function(f"document.querySelector('#now-title').textContent === {json.dumps(fname)} && document.querySelector('#now-cap').textContent === ''", timeout=10000)
+    calls = page.evaluate("""async () => { const { app } = await import('./js/state.js'), s = app.src, o = {};
+        o.stat = (await s.stat('/gifs/Demo/Mid.gif')).exists;
+        await s.move('/gifs/Demo/Mid.gif', '/gifs/Demo/Moved.gif');
+        o.moved = (await s.list('/gifs/Demo')).map((e) => e.name).sort().join(',');
+        o.move404 = await s.move('/gifs/Demo/Nope.gif', '/gifs/Demo/X.gif').then(() => 0, (e) => e.status);
+        o.new409 = await s.writeFile('/gifs/Demo/Hi.gif', new Uint8Array([1]), { createNew: true }).then(() => 0, (e) => e.status);
+        await s.cacheFail('/gifs/Demo/Hi.gif', 'more than 256 colours: plays as it is');
+        o.failed = (await s.cacheFailed()).length;
+        o.forget = (await s.forget('/gifs/Demo/Hi.gif')).ok;
+        o.ov = (await s.overrides('Two')).overrides.length;
+        await s.saveSet('Mine', '/gifs/Demo/Hi.gif\\n');
+        o.sets = (await s.list('/sets')).map((e) => e.name).sort().join(',');
+        o.skip = (await s.skip()).ok;
+        o.back = (await s.skip(true)).ok;
+        o.pause = (await s.pause()).paused && !(await s.pause()).paused;
+        o.reboot = await s.reboot().then(() => '', (e) => e.message);
+        return o; }""")
+    check(want and "on the panel" in toast and calls == {"stat": True, "moved": "Clock.gif,Hi.gif,Moved.gif", "move404": 404, "new409": 409, "failed": 1, "forget": True,
+                                                       "ov": 0, "sets": "Mine.txt,Two.txt", "skip": True, "back": True, "pause": True,
+                                                       "reboot": "The demo can’t restart: on a display, Reboot restarts it"},
+          f"demo world: Send to panel ({toast!r}), Play a playlist, Show on panel ({fname}) play on its panel; the card's calls ({calls})")
+    page.context.close()
+
+
+def now_dim_checks(browser, base: str, errors: list[str]) -> None:
+    """Now against the mock with no stream (polling): the display not
+    reachable, or with no card, leaves the mirror dimmed and still under
+    its caption, not playing on; back as it was once the display answers."""
+    expected.extend(["/api/events", "/api/status"])
+    try:
+        page = new_page(browser, "laptop", errors)
+        page.route("**/api/events", lambda r: r.fulfill(status=404, body="{}", headers={"content-type": "application/json"}))
+        page.goto(base + "/#now")
+        page.wait_for_function("document.querySelector('#now-conn')?.title === 'Live (polling)' && !!document.querySelector('#now-panel').preview?.path"
+                               " && document.querySelector('#now-cap').textContent === ''", timeout=20000)
+        dim = lambda: page.evaluate("import('./js/state.js').then(({ app }) => (c => [c.classList.contains('dim'), c.preview.paused === true, c.preview.paused === !!app.status.paused])(document.querySelector('#now-panel')))")  # noqa: E731
+        d0 = dim()
+        page.route(STATUS_RE, lambda r: r.abort())
+        page.wait_for_function("document.querySelector('#now-conn').title === 'Offline'", timeout=10000)
+        page.wait_for_timeout(600)  # (the dimming's transition)
+        d1, cap, op = dim(), page.inner_text("#now-cap"), page.eval_on_selector("#now-panel", "c => +getComputedStyle(c).opacity")
+        page.unroute(STATUS_RE)
+        page.wait_for_function("document.querySelector('#now-conn').title.startsWith('Live')", timeout=10000)
+        d2 = dim()
+        check(d0 == [False, d0[1], True] and d1[:2] == [True, True] and cap == "Panel not reachable" and op < 0.5 and d2 == [False, d2[1], True],
+              f"now: not reachable, the mirror dims and stops under 'Panel not reachable' ({d0} -> {d1}, opacity {op}) and comes back ({d2})")
+
+        def nocard(route):
+            r = route.fetch()
+            j = r.json()
+            route.fulfill(response=r, json={**j, "entries": 0, "index_state": "unavailable",
+                                            "sd": {**j["sd"], "mounted": False, "readable": False, "attempts": 2, "error": "no card"},
+                                            "now_playing": {**j["now_playing"], "path": "", "title": "", "ordinal": 0}})
+        page.route(STATUS_RE, nocard)
+        page.wait_for_function("document.querySelector('#now-title').textContent === 'No card'", timeout=8000)
+        d3 = dim()
+        page.unroute(STATUS_RE)
+        page.wait_for_function("document.querySelector('#now-title').textContent !== 'No card'", timeout=8000)
+        d4 = dim()
+        check(d3[:2] == [True, True] and d4 == [False, d4[1], True], f"now: no card, the mirror dims and stops; back once it plays ({d3} -> {d4})")
+        page.context.close()
+    finally:
+        for e in ("/api/events", "/api/status"):
+            expected.remove(e)
+
+
 def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     """Recently played in the web demo (local mode): a playlist of three
     GIFs (one 128x32 picture drawn here), Next twice, Previous twice back
@@ -8989,19 +9175,25 @@ def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/")
     page.wait_for_function("document.querySelector('#now-title')?.textContent === 'Clock'", timeout=20000)
     titles = lambda: page.eval_on_selector_all("#now-recent > div", "els => els.map(e => (e.classList.contains('cur') ? '*' : '') + e.querySelector('.grow').textContent)")
+    # (The demo is a display: Recently played is read after the title changes, as on one; asked for again until it says what is wanted.)
+    def settled(want: list[str]) -> list[str]:
+        end = time.time() + 5
+        while (got := titles()) != want and time.time() < end:
+            page.wait_for_timeout(100)
+        return got
     page.click("#now-skip")
     page.click("#now-skip")
     page.wait_for_function("document.querySelector('#now-title').textContent === 'Hi'", timeout=10000)
-    t1 = titles()
+    t1 = settled(["*Hi", "Mid", "Clock"])
     page.click("#now-prev")
     page.click("#now-prev")
     page.wait_for_function("document.querySelector('#now-title').textContent === 'Clock'", timeout=10000)
-    t2 = titles()
+    t2 = settled(["Hi", "Mid", "*Clock"])
     check(t1 == ["*Hi", "Mid", "Clock"] and t2 == ["Hi", "Mid", "*Clock"] and page.is_disabled("#now-prev"),
           f"recent (demo): Next twice {t1}, Previous twice {t2}, Previous disabled at the oldest")
     page.click("#now-recent > div:nth-child(2)")
     page.wait_for_function("document.querySelector('#now-title').textContent === 'Mid'", timeout=10000)
-    t3 = titles()
+    t3 = settled(["*Mid", "Clock", "Hi"])
     check(t3 == ["*Mid", "Clock", "Hi"], f"recent (demo): a tap plays the entry, the one on screen before it next ({t3})")
     page.context.close()
 
@@ -11604,6 +11796,8 @@ ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 # (A sprite from a picture, on its own: WEB_SMOKE_ONLY=psi_import.)
 ONLY_BROWSER["psi_import"] = psi_import_checks
+# (The web demo's display and Now's dimmed mirror: WEB_SMOKE_ONLY=demo_world,now_dim,recent_demo,formulas_demo.)
+ONLY_BROWSER.update(demo_world=demo_world_pass, now_dim=now_dim_checks, recent_demo=recent_demo_pass, formulas_demo=formulas_demo_pass)
 
 
 def only_pass(browser, names: list[str], repeat: int) -> None:

@@ -55,7 +55,8 @@ export async function load() {
   cache = [];
   if (app.device) {
     const sd = (app.status || await app.src.status())?.sd;
-    card = !!sd?.mounted && sd.readable !== false;
+    // (The web demo's card is in memory, gone at a reload: yours stay in this browser.)
+    card = !!sd?.mounted && sd.readable !== false && !app.src.memory;
     known = true;
   }
   if (!card) return (cache = local());

@@ -542,13 +542,18 @@ STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscree
 STUDIO_WASM_GZ_BUDGET = 32 * 1024
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
-# The web demo's player (js/demo.js: the settings API answered in the page,
-# the schedule, what settings do to the demo's panel): imported by app.js
+# The web demo's display (js/demo.js: a simulated player, its panel, the
+# device API answered in the page, its power and card): imported by app.js
 # only for the site's demo and left out of the pack (opendmd-pack www.rs
 # SITE_ONLY), so outside the 60 KB line.
+# 12 KB since demo-player (2026-11-13, owner-approved, site-only): the demo
+# became a device — its own panel and player (playlist, transport, Show on
+# panel, Formulas), the device calls the Library, Playlists and Formulas
+# make, the status stream, and the world the site's desk scene drives
+# (power, card, network): ~6.5 -> ~11 KB gz.
 # 9 KB since formula-refs (2026-10-29): a look named `@formula:<stem>`
 # resolved from formulas.json, as the player has the bundled ones built in.
-DEMO_GZ_BUDGET = 9 * 1024
+DEMO_GZ_BUDGET = 12 * 1024
 DEMO = {"js/demo.js"}
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),

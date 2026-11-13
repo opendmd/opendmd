@@ -61,6 +61,7 @@ export class PanelPreview {
     let w = -1;
     new ResizeObserver(([e]) => { if (e.contentRect.width !== w) { w = e.contentRect.width; requestAnimationFrame(fit); } }).observe(out || card);
     this.p = new Preview(canvas, look.gamma, look.gain, look.bloom, look.flat);
+    canvas.preview = this; // (the web demo's player draws its look on Now's too: js/demo.js)
     trans(this.p);
     this.onDwellEnd = onDwellEnd;
     this.onError = onError;

@@ -7457,7 +7457,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     """The demo's Settings run the device's code against its player in the
     page (js/demo.js): every tab and control there; brightness, colour, the
     Formula look, how long each GIF stays, the playlist and the schedule
-    shown on the demo's panel (Now); panel timing tried and kept; what only
+    shown on the demo's panel (Now's mirror of it); panel timing tried and kept; what only
     a player can do (firmware, WiFi, restarting) shown with a line saying
     so; kept for the session (a reload), not beyond (a new one). Every tab
     at laptop and phone sizes in `shots`."""
@@ -7479,7 +7479,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
 
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
-    wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
+    wait_js(page, "(t => t && t !== '…')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     tab("look")
     check(all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-look", "#st-glow")),
           "demo settings: Panel has the brightness, its maximum, the colour and the glow")
@@ -7497,9 +7497,11 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.select_option("#st-set", "Demoscene")
     saved("#st-set")
     now()
-    cap = page.inner_text("#view-now .capl .cap")
-    check("brightness(0.5" in filt() and "2–5 s" in cap and page.input_value("#sim-list") == "/sets/Demoscene.txt",
-          f"demo settings: brightness 30 dims the panel ({filt()}), each GIF 2–5 s ('{cap}'), the playlist Demoscene plays (of {sets})")
+    play = lambda: page.evaluate("import('./js/state.js').then(({ app }) => [app.status.manifest, app.status.now_playing.path, app.config.dwell_min, app.config.dwell_max])")
+    wait_js(page, "import('./js/state.js').then(({ app }) => app.status.now_playing.path.startsWith('/gifs/Demoscene/'))", timeout=10000)
+    p = play()
+    check("brightness(0.5" in filt() and p[2:] == [2, 5] and p[0] == "/sdcard/sets/Demoscene.txt" and p[1].startswith("/gifs/Demoscene/"),
+          f"demo settings: brightness 30 dims the panel ({filt()}), each GIF 2–5 s, the playlist Demoscene plays ({p}, of {sets})")
     tab("look")
     page.select_option("#st-look", "amber")
     saved("#st-look")
@@ -7575,9 +7577,10 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.click("#sc-rule-save")
     page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
     now()
+    wait_js(page, "import('./js/state.js').then(({ app }) => app.status.now_playing.path.startsWith('/gifs/Kenney/'))", timeout=10000)
     rule = page.inner_text("#now-banner") if page.is_visible("#now-banner") else ""
-    check(rule.startswith("Schedule: Sprites") and page.input_value("#sim-list") == "/sets/Sprites.txt",
-          f"demo settings: a rule's playlist plays, with Now's banner ('{rule}')")
+    check(rule.startswith("Schedule: Sprites") and play()[0] == "/sdcard/sets/Sprites.txt",
+          f"demo settings: a rule's playlist plays, with Now's banner ('{rule}', {play()})")
     tab("time")
     page.click("#sc-rules [data-rule='0'] button:has-text('Delete')")
     tab("replay")  # (Follow RePlayOS: a tab of its own)
@@ -7658,7 +7661,7 @@ def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
     local mode with no errors."""
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
-    wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
+    wait_js(page, "(t => t && t !== '…')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     # Night mode now, so the demo's banner is up before the swap.
     page.evaluate("""() => import('./js/state.js').then(async ({ app }) => {
         await app.src.putSchedule({ rules: [], night: { from: '00:00', to: '00:00', mode: 'dim', brightness: 8 } }); })""")
