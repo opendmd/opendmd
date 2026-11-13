@@ -568,7 +568,7 @@ fn main() -> Result<()> {
         Tuner::boot(saved.as_deref(), staged.as_deref())
     };
     let panel_cfg = PanelConfig::new(&tuner.running.effective()); #[cfg(esp32s3)] s3board::before_panel(reset, &nvs_config); // (the S3 board's, on this line: the classic's lines stay put; s3board.rs)
-    let mut panel = Panel::new(&panel_cfg)?;
+    let mut panel = Panel::new(&panel_cfg)?; #[cfg(esp32s3)] s3panel::self_test(&mut panel); // (test builds' buffer check; s3panel.rs)
     heapmap::cp("hub75 panel up (dma)");
     log::info!(
         "panel up: {}x{} ({} x {}x{}), timing {} ({}), double_buff={}, hub75_refresh_rate={} Hz",
@@ -3917,3 +3917,8 @@ fn heartbeat(
 // guard): last in the file, so the classic's lines stay where they were.
 #[cfg(esp32s3)]
 mod s3board;
+
+// The ESP32-S3's panel output, double-buffered (s3panel.rs): last in the
+// file, as s3board.
+#[cfg(esp32s3)]
+mod s3panel;

@@ -165,7 +165,7 @@ mod counters {
 /// row-pair time × the 16 pairs: what racing Formulas lock onto), µs; 0
 /// when it could not be measured. `/api/status` `refresh_us`, beside the
 /// driver's nominal `refresh_hz`.
-pub fn refresh_us() -> u32 {
+pub fn refresh_us() -> u32 { #[cfg(esp32s3)] if let Some(r) = crate::s3panel::refresh_us() { return r; } // (double-buffered; on this line: s3panel.rs)
     counters::ROW_US.load(Relaxed) * opendmd_core::scan::PAIRS as u32
 }
 
@@ -174,7 +174,7 @@ pub fn refresh_us() -> u32 {
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",
 /// "spin_us","retimed","beam"}`
 /// (counts since boot; `beam` [`beam::json`]).
-pub fn scan_json() -> String {
+pub fn scan_json() -> String { #[cfg(esp32s3)] if let Some(j) = crate::s3panel::scan_json(beam::json) { return j; } // (the buffers; on this line: s3panel.rs)
     use counters::*;
     let row_us = ROW_US.load(Relaxed);
     if row_us == 0 {
@@ -743,7 +743,7 @@ impl Panel {
 
     /// Blank the DMA buffer. The canvas does not know: a caller that clears
     /// the panel under a canvas it keeps blitting must `mark_all` it.
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self) { #[cfg(esp32s3)] crate::s3panel::clear_wait(); // (its wait for the last flip: the next push's; s3panel.rs)
         // Dark: nothing to fade, and the copy's 12 KB goes back.
         if self.glow.is_held() {
             self.glow.release();
@@ -843,7 +843,7 @@ fn push(
             fits.then_some(next)
         });
     let mut judge = pacer.map_or(Judge::new(sync.row_us), |p| Judge::with_clock(p.clock()));
-    let mut waited = 0;
+    let mut waited = 0; #[cfg(esp32s3)] { waited += crate::s3panel::wait_back(); } // (the last flip's switch; on this line: s3panel.rs)
     let mut pushed = 0;
     // The first pass: every dirty pair, or only the top rows when split.
     let first = if bottom.is_some() { top_rows } else { pairs };

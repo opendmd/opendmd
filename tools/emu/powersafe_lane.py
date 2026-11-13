@@ -14,9 +14,12 @@ a brownout reset, four times; the first faked boot lives past safe start first.
   boot 4   two in a row: the same
   boot 5   three in a row: power-safe: "power-safe: panel not started", the driver's own
            power-safe line (pins inputs, OE pulled up), "panel: not started (power-safe)" in
-           place of main's "panel up:", no driver, no scan; WiFi and the httpd up; GET
+           place of main's "panel up:", no driver, no scan; WiFi's TX power capped for the boot
+           (never put back); WiFi and the httpd up; GET
            /api/status answers with reset_note the power-safe note and scan null
-  boot 6   POST /api/reboot (a software restart breaks the run): the panel and the scan back,
+  boot 6   POST /api/reboot (a software restart breaks the run): the panel and the scan back
+           (single-buffered, the plain build's default with WiFi: the scan's row_us; or, with
+           --buffers 2, `buffers` 2, the refresh timed, `flips`),
            /api/status scan non-null (with beam.late_frames), reset_note not power-safe
 
 Prints EMU_POWER_SAFE_OK. Correctness only, like every emulator lane.
@@ -36,9 +39,14 @@ SHIM_SAFE = re.compile(r"hub75_shim: power-safe: the panel driver is not started
 NOT_STARTED = re.compile(r"panel: not started \(power-safe\)")
 PANEL_UP = re.compile(r"opendmd_firmware: panel up: 128x32")
 DRIVER_UP = re.compile(r"hub75_shim: panel 128x32 up")
-SCAN = re.compile(r"hub75_shim: scan: \d+ descriptors, \d+ per row pair, refresh \d+ us")
+# The scan modelled (single-buffered, the beam raced) or the double-buffered start (the S3's
+# default, s3panel.rs): either is the panel's scan line here.
+SCAN = re.compile(r"hub75_shim: (scan: \d+ descriptors, \d+ per row pair, refresh \d+ us|panel: double-buffered: 2 frame buffers)")
 RESET = re.compile(r"reset reason: (\w+)")
 HTTPD = re.compile(r"httpd started on port")
+# WiFi's TX power (s3board.rs tx_cap): capped for the whole power-safe boot, never put back in it.
+TX_CAPPED = re.compile(r"wifi: TX power capped at 11 dBm for this boot \(power-safe\)")
+TX_BACK = re.compile(r"wifi: connected: TX power back to")
 
 
 def run(a, sim, rom, fail_rx) -> int:
@@ -55,7 +63,7 @@ def run(a, sim, rom, fail_rx) -> int:
 
     emu = None
     try:
-        image = seeded_image(a.image, a.emu_dir / "power-safe", extra={"ps_test": "4"})
+        image = seeded_image(a.image, a.emu_dir / "power-safe", extra={"ps_test": "4", "panel_bufs": str(a.buffers)})
         cmd = [*machine(sim, "s3", image, rom, []), "--max-seconds", str(a.seconds or 900), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
         emu = Emulator(cmd, dict(os.environ), log, fail_rx, "power-safe")
@@ -80,7 +88,7 @@ def run(a, sim, rom, fail_rx) -> int:
             k, _ = emu.wait_for(SCAN, 240, i, what=f"boot {boot}'s scan line")
             if emu.find(POWER_SAFE, i, max(j, k)):
                 raise LaneFail(f"boot {boot}: power-safe after {n} brownout(s)")
-            ok(f"boot {boot}", f"{n} brownout{'s' if n > 1 else ''} in a row: the panel started, {emu.lines[k][emu.lines[k].index('scan:'):][:90]}")
+            ok(f"boot {boot}", f"{n} brownout{'s' if n > 1 else ''} in a row: the panel started, {SCAN.search(emu.lines[k])[1][:90]}")
             i = max(j, k)
             if boot == 2:
                 # Safe start over, the guard cleared, before the next fake.
@@ -106,10 +114,16 @@ def run(a, sim, rom, fail_rx) -> int:
         if st.get("scan") is not None:
             raise LaneFail(f"boot 5: /api/status scan is {st.get('scan')!r} with no panel started")
         later = emu.mark()
-        for rx, what in ((DRIVER_UP, "the panel driver"), (SCAN, "a scan line"), (PANEL_UP, "main's \"panel up:\" line")):
+        capped = emu.find(TX_CAPPED, i, later)
+        if not capped:
+            raise LaneFail("boot 5 (power-safe): WiFi's TX power not capped for the boot")
+        t_i = capped[0][0]
+        for rx, what in ((DRIVER_UP, "the panel driver"), (SCAN, "a scan line"), (PANEL_UP, "main's \"panel up:\" line"),
+                         (TX_BACK, "WiFi's TX power put back")):
             if emu.find(rx, i, later):
                 raise LaneFail(f"boot 5 (power-safe) logged {what}")
         ok("power-safe pins and log", f"{emu.lines[s_i][emu.lines[s_i].index('power-safe:'):][:110]}; {emu.lines[n_i][emu.lines[n_i].index('panel:'):][:40]}, no \"panel up:\"")
+        ok("power-safe TX cap", emu.lines[t_i][emu.lines[t_i].index("wifi:"):][:100] + ", not put back")
         ok("power-safe status", f"/api/status answers on 127.0.0.1:{PORT}: reset_note {note!r}, scan null, no driver started")
 
         # Boot 6: a software restart ends the run of brownouts.
@@ -130,9 +144,12 @@ def run(a, sim, rom, fail_rx) -> int:
                 raise LaneFail(f"boot 6: /api/status reset_note {note!r}, scan {st.get('scan')!r}")
             time.sleep(2)
         scan = st["scan"]
-        if not (scan.get("row_us", 0) > 0 and "late_frames" in (scan.get("beam") or {})):
+        double = scan.get("buffers") == 2
+        timed = scan.get("refresh_us", 0) > 0 and "flips" in scan if double else scan.get("row_us", 0) > 0
+        if not (timed and "late_frames" in (scan.get("beam") or {})):
             raise LaneFail(f"boot 6: /api/status scan is incomplete: {scan}")
-        ok("boot 6", f"reset {m[1]}: the panel started again; /api/status scan row_us {scan['row_us']}, beam.late_frames {scan['beam']['late_frames']}, reset_note {note or None!r}")
+        said = f"buffers 2, refresh_us {scan['refresh_us']}, flips {scan['flips']}" if double else f"row_us {scan['row_us']}"
+        ok("boot 6", f"reset {m[1]}: the panel started again; /api/status scan {said}, beam.late_frames {scan['beam']['late_frames']}, reset_note {note or None!r}")
     except LaneFail as e:
         print(f"EMU_POWER_SAFE_FAIL: {e}")
         if emu:

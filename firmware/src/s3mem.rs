@@ -215,6 +215,7 @@ pub fn tick() {
     }
     LAST.store(now.max(1), Relaxed);
     log::info!("{}", line());
+    log::info!("{}", crate::s3panel::line());
     // Once, the first time: what the image is and what its sdkconfig says.
     if last == 0 {
         log::info!(r#"s3mem: image "{IMAGE}" ({SWITCHES}), facts {}"#, facts_json());
@@ -224,5 +225,6 @@ pub fn tick() {
 /// `GET /api/debug/mem`, registered before the catch-all (`http::start`).
 pub fn routes(server: &mut Server) -> anyhow::Result<()> {
     server.route("/api/debug/mem", Method::Get, |req| req.json(&json()))?;
+    crate::s3panel::routes(server)?;
     Ok(())
 }

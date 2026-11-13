@@ -22,6 +22,13 @@
 //!   banner for it). The bench's brownout loops (2026-11-13) came from
 //!   driving the panel's lines into an unpowered panel; this lets such a
 //!   board be reached instead of looping.
+//! - **WiFi's TX power capped while it connects** ([`tx_cap`]): the bench's
+//!   two brownouts of 2026-11-13 came ~9.3 s after boot, right after
+//!   `wifi:state: assoc -> run` (the handshake and the first TX burst), on a
+//!   USB supply, not at the panel's start. From WiFi's start until it has an
+//!   address (and again from each disconnect) the TX power is capped at
+//!   11 dBm, then put back to what it was; a power-safe boot keeps it capped
+//!   all boot (a TX brownout loop would otherwise go on looping).
 
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering::Relaxed};
 use std::time::Duration;
@@ -36,7 +43,7 @@ pub const POWER_SAFE_AT: u32 = 3;
 
 /// `reset_note` of a power-safe boot (the web app's banner keys on its
 /// `power-safe:` prefix).
-pub const NOTE: &str = "power-safe: the panel was not started after 3 brownouts in a row: its power supply is missing or too weak";
+pub const NOTE: &str = "power-safe: the power supply dipped repeatedly (the panel was not started; a weak USB supply can do this too)";
 
 /// This boot is power-safe.
 static POWER_SAFE: AtomicBool = AtomicBool::new(false);
@@ -84,7 +91,7 @@ pub fn before_panel(reset: Reset, nvs: &Config) {
         // SAFETY: a flag the shim reads in hub75_init, which has not run.
         unsafe { hub75::hub75_set_power_safe(true) };
         log::warn!(
-            "power-safe: panel not started: {n} brownout resets in a row{}, each within safe start: the panel's power supply is missing or too weak (WiFi and the web app as ever; a power-on or any other restart tries the panel again)",
+            "power-safe: panel not started: {n} brownout resets in a row{}, each within safe start: the power supply dipped repeatedly (a weak USB supply can do this too; WiFi's TX power capped for this boot; WiFi and the web app as ever; a power-on or any other restart tries the panel again)",
             if faked { " (faked: nocard-test)" } else { "" }
         );
     } else if n > 0 {
@@ -97,6 +104,7 @@ pub fn before_panel(reset: Reset, nvs: &Config) {
     if n > 0 {
         arm_clear();
     }
+    tx_cap::arm();
 
     let (src, from) = match nvs.s3_string("scan_reg").as_deref().and_then(scan_source) {
         Some(s) => (s, "NVS scan_reg"),
@@ -106,6 +114,7 @@ pub fn before_panel(reset: Reset, nvs: &Config) {
         },
     };
     log::info!("scan: the racer reads GDMA's {} ({from})", SCAN_REGS[src as usize].1);
+    crate::s3panel::before_panel(nvs);
     // SAFETY: plain flags the shim reads in hub75_scan_init, not yet run.
     unsafe {
         hub75::hub75_scan_set_source(src);
@@ -260,14 +269,16 @@ pub fn ps_test() -> bool {
     PS_TEST.load(Relaxed)
 }
 
-/// The logger's hook (`logring`'s `log`, S3 only): on a power-safe boot,
-/// `main`'s "panel up: …" line (it follows `Panel::new`, which started no
-/// panel) is replaced by one saying the panel was not started. True: the
-/// record is not to be logged.
+/// The logger's hook (`logring`'s `log`, S3 only): `main`'s "panel up: …"
+/// line is replaced: on a power-safe boot (it follows `Panel::new`, which
+/// started no panel) by one saying the panel was not started; else by the
+/// same line with the buffers the panel runs with (`s3panel`) where it says
+/// the panel config's `double_buff=false` (the S3's double buffering is the
+/// shim's, not that config's). True: the record is not to be logged.
 pub fn swallow(record: &log::Record) -> bool {
     use core::fmt::Write;
     static DONE: AtomicBool = AtomicBool::new(false);
-    if !POWER_SAFE.load(Relaxed) || DONE.load(Relaxed) || record.level() != log::Level::Info
+    if DONE.load(Relaxed) || record.level() != log::Level::Info
         || record.target() != "opendmd_firmware"
     {
         return false;
@@ -292,7 +303,12 @@ pub fn swallow(record: &log::Record) -> bool {
         return false;
     }
     DONE.store(true, Relaxed);
-    log::warn!("panel: not started (power-safe): no driver, no DMA, every HUB75 pin an input with OE pulled up; WiFi and the web app as ever");
+    if POWER_SAFE.load(Relaxed) {
+        log::warn!("panel: not started (power-safe): no driver, no DMA, every HUB75 pin an input with OE pulled up; WiFi and the web app as ever");
+        return true;
+    }
+    let line = format!("{}", record.args());
+    log::info!(target: "opendmd_firmware", "{}", line.replace("double_buff=false", crate::s3panel::mode()));
     true
 }
 
@@ -301,3 +317,77 @@ pub fn swallow(record: &log::Record) -> bool {
 // hub75_shim.cpp) keep the classic's line tables byte-identical; unfold
 // them into ordinary statements the next time the classic build may change
 // anyway (a release that moves those files' lines for other reasons).
+
+/// WiFi's TX power capped from the station's start (and each disconnect)
+/// until it has an address, then put back; capped all boot when power-safe.
+/// Handlers on the default event loop (`main` has taken it before
+/// `before_panel`), run on the event task.
+mod tx_cap {
+    use super::*;
+    use std::sync::atomic::AtomicI32;
+
+    /// 11 dBm, in esp_wifi_set_max_tx_power's quarter dBm.
+    const CAP: i8 = 44;
+    /// What the power was before the first cap (quarter dBm; 0: not read).
+    static SAVED: AtomicI32 = AtomicI32::new(0);
+
+    fn cap(why: &str) {
+        let mut now: i8 = 0;
+        // SAFETY: plain calls into the WiFi driver after its start.
+        unsafe {
+            if sys::esp_wifi_get_max_tx_power(&mut now) == sys::ESP_OK && now > CAP && SAVED.load(Relaxed) == 0 {
+                SAVED.store(i32::from(now), Relaxed);
+            }
+            let e = sys::esp_wifi_set_max_tx_power(CAP);
+            if e == sys::ESP_OK {
+                log::info!("wifi: TX power capped at {} dBm {why} (was {} dBm; brownout mitigation)", CAP / 4, now / 4);
+            } else {
+                log::warn!("wifi: TX power cap {why} refused ({e})");
+            }
+        }
+    }
+
+    fn restore() {
+        let saved = SAVED.load(Relaxed);
+        if saved <= 0 || POWER_SAFE.load(Relaxed) {
+            return;
+        }
+        // SAFETY: as above.
+        if unsafe { sys::esp_wifi_set_max_tx_power(saved as i8) } == sys::ESP_OK {
+            log::info!("wifi: connected: TX power back to {} dBm", saved / 4);
+        }
+    }
+
+    unsafe extern "C" fn on_event(
+        _arg: *mut core::ffi::c_void,
+        base: sys::esp_event_base_t,
+        id: i32,
+        _data: *mut core::ffi::c_void,
+    ) {
+        // SAFETY: the event bases are the driver's statics.
+        let (wifi, ip) = unsafe { (sys::WIFI_EVENT, sys::IP_EVENT) };
+        if base == wifi && id == sys::wifi_event_t_WIFI_EVENT_STA_START as i32 {
+            cap(if POWER_SAFE.load(Relaxed) { "for this boot (power-safe)" } else { "until connected" });
+        } else if base == wifi && id == sys::wifi_event_t_WIFI_EVENT_STA_DISCONNECTED as i32 {
+            // (Quietly: a reconnect loop would say it every few seconds.)
+            // SAFETY: as above.
+            unsafe { sys::esp_wifi_set_max_tx_power(CAP) };
+        } else if base == ip && id == sys::ip_event_t_IP_EVENT_STA_GOT_IP as i32 {
+            restore();
+        }
+    }
+
+    pub fn arm() {
+        // SAFETY: handlers for the default loop's events, registered once;
+        // the bases are the driver's statics.
+        let ok = unsafe {
+            let h = Some(on_event as unsafe extern "C" fn(_, _, _, _));
+            sys::esp_event_handler_register(sys::WIFI_EVENT, sys::wifi_event_t_WIFI_EVENT_STA_START as i32, h, core::ptr::null_mut()) == sys::ESP_OK
+                && sys::esp_event_handler_register(sys::WIFI_EVENT, sys::wifi_event_t_WIFI_EVENT_STA_DISCONNECTED as i32, h, core::ptr::null_mut()) == sys::ESP_OK
+                && sys::esp_event_handler_register(sys::IP_EVENT, sys::ip_event_t_IP_EVENT_STA_GOT_IP as i32, h, core::ptr::null_mut()) == sys::ESP_OK
+        };
+        if !ok {
+            log::warn!("wifi: no TX power cap (the event handlers could not be registered)");
+        }
+    }
+}
