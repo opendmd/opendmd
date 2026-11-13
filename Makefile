@@ -183,7 +183,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
-	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe fw-s3-image fw-s3-images fw-s3-flash \
+	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1570,10 +1570,20 @@ emu-image-s3-probe:
 	$(call EMU_S3_BUILD,s3probe,psi-probe,$(EMU_PROBE_SPARE))
 emu-s3-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3 &&) \
-	uv run --quiet tools/emu/run.py smoke --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+	uv run --quiet tools/emu/run.py smoke --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-smoke-last.log $(EMU_ARGS) && \
+	uv run --quiet tools/emu/scan_red.py --mode smoke --image $(or $(FW_IMAGE),$(EMU_S3_IMAGE)) --log $(EMU_DIR)/logs/s3-smoke-last.log
 emu-s3-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
-	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-nocard-last.log $(EMU_ARGS) && \
+	uv run --quiet tools/emu/scan_red.py --mode nocard --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) --log $(EMU_DIR)/logs/s3-nocard-last.log
+# emu-s3-power-safe: the brownout-loop guard (firmware/src/s3board.rs) on the
+#   nocard-test image seeded with `ps_test` (tools/emu/powersafe_lane.py):
+#   three faked brownout resets in a row, the third boot power-safe (no
+#   panel; /api/status, read from the host, says so), a restart back to
+#   normal with the scan in /api/status. EMU_POWER_SAFE_OK.
+emu-s3-power-safe: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
+	uv run --quiet tools/emu/run.py power-safe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-power-safe-last.log $(EMU_ARGS)
 emu-s3-probe: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-probe &&) \
 	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-probe-last.log $(EMU_ARGS) && \
@@ -1616,7 +1626,12 @@ emu-s3-probe: emu-build
 #               (OPENDMD_CONNECT_ENABLED=0: POST
 #               /api/debug/connect/config?enabled=1 starts it); the card at
 #               20 MHz (card_speed safe only on the S3), the panel clock the
-#               panel timing's i2s_speed exactly (8 MHz by default; 16, 20)
+#               panel timing's i2s_speed exactly (8 MHz by default; 16, 20);
+#               the beam raced off GDMA's OUT_DSCR (NVS `scan_reg` dscr,
+#               bf0, bf1 or state, or OPENDMD_S3_SCAN_REG=<one> at the build,
+#               picks another), the address-pin check of all four at boot
+#               (`scan: register … agrees with the address pins k/n`,
+#               bench), and the brownout-loop guard (src/s3board.rs)
 #
 # `make fw-s3-image S3_IMAGE=<name>` (or `fw-s3-images`, all of them) builds;
 # `make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=<name>` writes one to a board

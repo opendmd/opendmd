@@ -514,6 +514,8 @@ OTA_SIGNED_LEN = 76
 OTA_FACTORY_BYTES = {"4mb": 0x2C0000}   # partitions.csv (v4)
 OTA_BOARDS = {"4mb": "DevKit (4 MB)"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
+# `reset_note` of an ESP32-S3 in power-safe (`--power-safe`; firmware src/s3board.rs NOTE).
+POWER_SAFE_NOTE = "power-safe: the panel was not started after 3 brownouts in a row: its power supply is missing or too weak"
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).
 RESTART_NOTES = {"api_reboot": "restarted on request",
                  "firmware_update": "restarted to install a firmware update",
@@ -3050,6 +3052,8 @@ class Context:
         # Firmware update: the running version, the updater's last line, the
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
         self.version = MOCK_VERSION
+        # --power-safe: the S3's brownout-loop guard left the panel off.
+        self.power_safe = False
         self.fw_last = None
         self.fw_log = None
         self.down_until = 0.0
@@ -3681,8 +3685,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "misses": player.misses_json(),
                     "gifs_started": player.gifs_started,
                     "sd": sd_fields(ctx),
-                    "reset_reason": ctx.restarts[0]["reset"],
-                    "reset_note": RESTART_NOTES.get(ctx.restarts[0]["reason"]),
+                    "reset_reason": "brownout" if ctx.power_safe else ctx.restarts[0]["reset"],
+                    "reset_note": POWER_SAFE_NOTE if ctx.power_safe else RESTART_NOTES.get(ctx.restarts[0]["reason"]),
                     "restarts": ctx.restarts,
                     "overrides": player.overrides_count,
                     "mode": ctx.schedule.mode,
@@ -3703,8 +3707,9 @@ def make_handler(ctx: Context, quiet: bool):
                     "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
                     "safe_start_until": SAFE_START_SECS
                     if time.monotonic() - player.boot_time < SAFE_START_SECS else None,
-                    # The panel's scan (no seams counted: there is no panel).
-                    "scan": {"row_us": 499, "sync": ctx.settings["panel_sync"], "blits": 0, "torn": 0,
+                    # The panel's scan (no seams counted: there is no panel; none
+                    # at all when power-safe left the panel off).
+                    "scan": None if ctx.power_safe else {"row_us": 499, "sync": ctx.settings["panel_sync"], "blits": 0, "torn": 0,
                              "in_pair": 0, "waited": 0, "wait_us": 0, "wait_max_us": 0, "gave_up": 0,
                              "split_on": ctx.settings["panel_sync"] and ctx.settings["panel_split"],
                              "split": 0, "split_ok": 0, "unsplit": 0, "spin_us": 0,
@@ -5527,6 +5532,9 @@ def parse_args():
     ap.add_argument("--no-formulas", action="store_true",
                     help="a firmware build without Formulas (features [], psi_abi null: /api/play of one a 501, "
                          "look_formula a 400, a playlist's Formula lines skipped)")
+    ap.add_argument("--power-safe", action="store_true",
+                    help="an ESP32-S3 in power-safe (its brownout-loop guard): the panel not started, reset_note "
+                         "the firmware's power-safe note (src/s3board.rs NOTE), scan null")
     ap.add_argument("--flash-size", type=int, default=0,
                     help="GET /api/firmware's flash_size, bytes (default: the layout's)")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
@@ -5575,6 +5583,7 @@ def main():
         ctx.name_query = args.name_query
         ctx.variant = args.variant
         ctx.formulas = not args.no_formulas
+        ctx.power_safe = args.power_safe
         if args.no_formulas:
             ctx.player.rebuild_playlist()
         ctx.flash_size = args.flash_size or 4 << 20

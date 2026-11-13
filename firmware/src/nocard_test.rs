@@ -15,6 +15,13 @@ use std::time::Duration;
 const MARK: u8 = 37;
 
 pub fn spawn(ctx: Arc<Ctx>) {
+    // The S3's power-safe lane boots this image with `ps_test` (s3board):
+    // its restarts are its own.
+    #[cfg(esp32s3)]
+    if crate::s3board::ps_test() {
+        log::info!("nocard-test: the power-safe lane's boot (ps_test): not run");
+        return;
+    }
     let _ = crate::task::spawn_core0(b"nocard-test\0", 8 * 1024, 2, Box::new(move || run(&ctx)));
 }
 

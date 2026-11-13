@@ -295,6 +295,11 @@ card shows progress with `sd.formatting` true (a second POST: 409), ends
 "Done" with the card readable, and a format of the now readable card is a
 409.
 
+Power-safe pass: a mock with `--power-safe` (an ESP32-S3 whose brownout-loop
+guard left the panel off): status reset_note "power-safe: ..." and scan
+null, and the #powersafe banner over every view saying the panel's supply
+is missing or too weak; the slowed-card pass's normal device shows none.
+
 Slowed-card pass: a third mock with `--sd slowed` (a card set to Fast
 that has already been slowed in place): status sd {clock_khz 20000,
 fallback, slowdowns 1, probe "slowed"}; Settings › Device shows the Card
@@ -10466,6 +10471,32 @@ def sd_unreadable_pass(browser) -> None:
     report_errors("mock (unreadable card)", errors)
 
 
+def power_safe_pass(browser) -> None:
+    """`mock-device.py --power-safe`: an ESP32-S3 whose brownout-loop guard
+    left the panel off (reset_note "power-safe: ..."): one banner above the
+    views saying the panel's supply is missing or too weak."""
+    proc, base = start_mock(["--root", str(CARD), "--power-safe"])
+    errors: list[str] = []
+    try:
+        print(f"\n== mock device in power-safe at {base}")
+        st = get_json(base + "/api/status")
+        check((st.get("reset_note") or "").startswith("power-safe:") and st.get("scan") is None,
+              f"power-safe: status reset_note the power-safe note, scan null ({st.get('reset_note')!r})")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        page.wait_for_selector("#powersafe", state="visible", timeout=20000)
+        text = page.inner_text("#powersafe")
+        check("power supply is missing or too weak" in text and "5 V" in text and "power-safe" not in text,
+              f"power-safe: the banner says the panel's supply is missing or too weak, in plain words ({text!r})")
+        goto_view(page, "settings/device")
+        check(page.is_visible("#powersafe"), "power-safe: the banner stays over every view")
+        shot(page, "power-safe-banner", "laptop")
+        page.context.close()
+    finally:
+        proc.terminate()
+    report_errors("mock (power-safe)", errors)
+
+
 def sd_slowed_pass(browser) -> None:
     """`mock-device.py --sd slowed`: Settings › Device's Card speed."""
     proc, base = start_mock(["--root", str(CARD), "--sd", "slowed"])
@@ -10479,6 +10510,7 @@ def sd_slowed_pass(browser) -> None:
         page.goto(base + "/")
         goto_view(page, "settings/device")
         page.wait_for_selector("#st-cs:not([hidden])", timeout=20000)
+        check(page.query_selector("#powersafe") is None, "power-safe: no banner on a device that is not")
         check(page.is_visible("#st-cs") and page.input_value("#st-card-speed") == "fast",
               "card speed: the group is shown, Fast selected")
         card = lambda: page.evaluate("() => { const dt = [...document.querySelectorAll('#st-facts dt')].find(e => e.textContent === 'Card');"
@@ -10989,6 +11021,7 @@ def main() -> int:
             mock_pass(browser)
             sd_unreadable_pass(browser)
             sd_slowed_pass(browser)
+            power_safe_pass(browser)
             www_update_pass(browser)
             no_formulas_pass(browser)
         if args.device:
