@@ -1,7 +1,7 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Endless road"
-about "OutRun into a synthwave sunset: bends and hills without end"
+about "An arcade drive into a synthwave sunset: bends and hills without end"
 loop forever
 fps 100
 -- Endless road, with a day going by and palms passing. Bends and hills
