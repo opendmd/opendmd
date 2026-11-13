@@ -39,7 +39,8 @@ every view like a person would:
             (page and mock), each read cut after the first frame (bytes
             per request against the whole copies), copies not GIFs, a
             fling fetching only where it stops, a reload fetching nothing
-            (IndexedDB), a hover's clip (kept too), the switch off
+            (IndexedDB), a hover's clip (kept too), the switch off; a dark-start
+            GIF over 32 KB sent whole: a lit still, from one read
   Editor    + Add GIFs in a new playlist: three ticked in Arcade (added in
             that order, ✓ in the tree), a folder's tick (Pixel_Art), 'mario'
             + SNES and Add all N shown (again: none added), thumbnails on
@@ -2107,6 +2108,43 @@ def thumbs_checks(browser, base: str, errors: list[str]) -> None:
     goto_view(page, "library")
     check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off -> no canvases")
     page.context.close()
+
+
+def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
+    """A dark-start GIF (its first frame black) over 32 KB, sent whole at
+    once (no pacing): its thumbnail is a later, lit frame, from that one
+    read, no bytes read again (js/thumbs.js: what came already holds it)."""
+    import io as _io
+    import random
+    from PIL import Image
+    rnd = random.Random(7)
+    frames = [Image.new("P", (128, 32), 0)]
+    for _ in range(14):
+        f = Image.new("P", (128, 32))
+        f.putdata([rnd.randrange(1, 256) for _ in range(128 * 32)])
+        frames.append(f)
+    pal = [0, 0, 0] + [v for i in range(1, 256) for v in (i, 255 - i, (i * 7) & 255)]
+    for f in frames:
+        f.putpalette(pal)
+    buf = _io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=40, loop=0, optimize=False)
+    gif = buf.getvalue()
+    path = "/gifs/SmokeDark/SNES_Smoke_Dark_Start_01.gif"
+    put_bytes(base + "/api/files" + path, gif)
+    page = new_page(browser, "laptop", errors)
+    reads: list = []
+    page.on("requestfinished", lambda r: reads.append((r.url, r.sizes()["responseBodySize"])) if "/gifs/SmokeDark/" in r.url else None)
+    page.goto(base + "/#now")
+    pick_cat(page, "SmokeDark")
+    sel = f"#lib-list .vrow[data-path={json.dumps(path)}] canvas.th[data-done]"
+    page.wait_for_selector(sel, timeout=20000)
+    page.wait_for_timeout(500)
+    lit = page.eval_on_selector(sel, """c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
+    check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and reads[0][1] <= len(gif),
+          f"thumbnails: a dark start of {len(gif):,} B sent whole: a lit still ({lit} px), read once ({[n for _, n in reads]} B)")
+    page.context.close()
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files" + path, method="DELETE"), timeout=30)
 
 
 def thumbs_redrawn_checks(browser, base: str, errors: list[str]) -> None:
@@ -5029,6 +5067,7 @@ def mock_pass(browser) -> None:
         listing_queue_checks(browser, base, errors)
         thumbs_checks(browser, base, errors)
         thumbs_redrawn_checks(browser, base, errors)
+        thumbs_dark_checks(browser, base, errors)
         card_swap_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
         target_checks(browser, base, overlay, errors)
@@ -10763,7 +10802,7 @@ def www_update_pass(browser) -> None:
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
-ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks}
+ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "thumbs_dark": thumbs_dark_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 
 
