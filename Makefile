@@ -46,20 +46,25 @@ FW_VARIANT := $(or $(VARIANT),4mb)
 # it gets no signed bundle (fw-sign.py does not know it) and no manifest.
 FW_EMU_VARIANT := emu8mb
 FW_S3_VARIANT := s3
+# Non-empty when DIST was given on the command line (a DIST from the
+# environment is overridden by `DIST := dist` below) and is neither dist/
+# nor under it: the builds that must never reach dist/ require it.
+FW_DIST_OWN = $(and $(filter command line,$(origin DIST)),$(if $(filter $(abspath dist) $(abspath dist)/%,$(abspath $(DIST))),,own))
+FW_DIST_OWN_HINT := give DIST=<a dir outside dist/> on the command line
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 ifneq ($(or $(filter-out fw-release-variant updater notices-check,$(MAKECMDGOALS)),$(if $(MAKECMDGOALS),,default)),)
 $(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: make emu-probe builds it)
 endif
-ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
-$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/)
+ifeq ($(FW_DIST_OWN),)
+$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/ ($(FW_DIST_OWN_HINT)))
 endif
 else ifeq ($(FW_VARIANT),$(FW_S3_VARIANT))
 ifneq ($(filter fw-flash fw-release-flash fw-erase fw-ota fw-sign fw-release flasher,$(MAKECMDGOALS)),)
 $(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator (make fw-build, emu-s3-nocard, emu-s3-probe), or as a measurement image over USB (make fw-s3-image, fw-s3-flash); no install, update or release yet)
 endif
-ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
+ifeq ($(FW_DIST_OWN),)
 ifneq ($(filter fw-release-variant,$(MAKECMDGOALS)),)
-$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview, not released: give it a DIST of its own, never dist/)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview, not released: never into dist/ ($(FW_DIST_OWN_HINT)))
 endif
 endif
 else ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
@@ -995,18 +1000,29 @@ FW_RELEASE_FEATURES ?=
 # dist/: every other release build scrubs both variables and reads no file.
 FW_S3_CREDENTIALS ?=
 ifneq ($(FW_S3_CREDENTIALS),)
-ifneq ($(FW_VARIANT),$(FW_S3_VARIANT))
-$(error FW_S3_CREDENTIALS is for the ESP32-S3 measurement images (make fw-s3-image) only)
+ifeq ($(and $(filter $(FW_S3_VARIANT),$(FW_VARIANT)),$(filter command line,$(origin FW_S3_CREDENTIALS))),)
+$(error FW_S3_CREDENTIALS is for the ESP32-S3 measurement images (make fw-s3-image) only, given on the command line)
 endif
-ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
-$(error FW_S3_CREDENTIALS: never into dist/)
+ifeq ($(FW_DIST_OWN),)
+$(error FW_S3_CREDENTIALS: never into dist/ ($(FW_DIST_OWN_HINT)))
 endif
 endif
 FW_S3_CREDENTIALS_SOURCE = $(if $(FW_S3_CREDENTIALS),set -a; . "$(FW_S3_CREDENTIALS)"; set +a; )
 # sdkconfig lines (KEY=VALUE, space-separated) added last to the fragment,
 # each checked in the generated sdkconfig after the build: the S3
-# measurement images' switches. Empty in every other build.
+# measurement images' switches (fw-s3-image passes them to
+# fw-release-variant). Empty in every other build, and refused there: from
+# the environment, for the classic, or for any goal but fw-release-variant
+# (the bench builds' flavour stamp does not track it).
 FW_EXTRA_SDKCONFIG ?=
+ifneq ($(FW_EXTRA_SDKCONFIG),)
+ifeq ($(and $(filter $(FW_S3_VARIANT),$(FW_VARIANT)),$(filter command line,$(origin FW_EXTRA_SDKCONFIG))),)
+$(error FW_EXTRA_SDKCONFIG is for the ESP32-S3 measurement images (make fw-s3-image) only, given on the command line)
+endif
+ifneq ($(MAKECMDGOALS),fw-release-variant)
+$(error FW_EXTRA_SDKCONFIG is for fw-release-variant only (make fw-s3-image), not $(or $(MAKECMDGOALS),the default goal))
+endif
+endif
 # (Appended to the release recipe's flash-size check, `cfg` its sdkconfig.)
 FW_EXTRA_SDKCONFIG_CHECK = ; \
 	 for kv in $(FW_EXTRA_SDKCONFIG); do k=$${kv%%=*}; v=$${kv\#*=}; \
@@ -1593,8 +1609,9 @@ emu-s3-probe: emu-build
 # factory, otadata and NVS erased, the www pack at 0x400000; the jit image's
 # NVS says network off), one espflash write-bin. S3_FLASH=app writes the
 # bootloader, the table and the app only (NVS and the www pack stay).
-# PORT has no default here and /dev/ttyACM0, /dev/ttyUSB0 (this machine's
-# other boards) are refused; DRY=1 prints the command without running it.
+# PORT has no default here, and the ports in S3_REFUSED_PORTS (other boards
+# on this machine; empty by default, set it in local.mk) are refused, by
+# their resolved device; DRY=1 prints the command without running it.
 # The images carry bench WiFi credentials: never published, never in dist/.
 S3_P1_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p1,$(CURDIR)/target/s3-p1)
 S3_P2_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p2,$(CURDIR)/target/s3-p2)
@@ -1603,7 +1620,7 @@ S3_IMAGES := base tls-psram wifi-psram cold-psram iram-trim all-psram jit $(S3_P
 S3_IMAGE ?= base
 S3_DIR = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),$(S3_P2_DIR),$(S3_P1_DIR))/$(S3_IMAGE)
 S3_CREDENTIALS ?= $(CURDIR)/$(FW)/.env
-S3_REFUSED_PORTS := /dev/ttyACM0 /dev/ttyUSB0
+S3_REFUSED_PORTS ?=
 S3_FLASH_BAUD ?= 115200
 S3_FLASH ?= full
 S3_COMMON := dev-credentials,bench,connect-probe
