@@ -12,7 +12,8 @@ broken flip would show instead: the start line missing or replaced by the single
 fallback's, its refresh 0, and in every `s3panel:` line a write that found the DMA in the buffer
 being written (`back hits`), a switch never seen (`timeouts`) or seen late, switches behind the
 flips by more than the one pending, no row pairs copied across, flips that stop between the
-lines, and no flips at all.
+lines, and no flips at all; and the start-up buffer check (front and back frame buffers) failing,
+its red variant passing, or neither logged.
 
 The address-pin check is judged only for being logged: its k/n is meaningless in the emulator
 (esp32sim does not loop the LCD_CAM's output back to GPIO_IN: ~1/16 for every register). On the
@@ -54,6 +55,9 @@ def doctored_dbuf(text: str):
     yield "late", panel_sub(text, lambda f, s, r, l, t, h, c: (f, s, r, re.sub(r"^\d+", lambda n: str(int(n[0]) + 2), l), t, h, c))
     yield "switches behind", panel_sub(text, lambda f, s, r, l, t, h, c: (f, max(f - 5, 0), r, l, t, h, c))
     yield "nothing copied", panel_sub(text, lambda f, s, r, l, t, h, c: (f, s, r, l, t, h, 0))
+    yield "buffer check differs", re.sub(r"(s3panel: buffer check: .*: front )([0-9a-f]{8})(, back )[0-9a-f]{8}: agree", r"\1\2\3deadbeef: DIFFER", text)
+    yield "buffer check red agrees", re.sub(r"(s3panel: buffer check red .*: front )([0-9a-f]{8})(, back )[0-9a-f]{8}: differ, as they must", r"\1\2\3\2: AGREE: the check sees nothing", text)
+    yield "no buffer check", "\n".join(l for l in text.splitlines() if "s3panel: buffer check" not in l) + "\n"
     yield "flips stalled", panel_sub(text, lambda f, s, r, l, t, h, c: (7, 7, r, l, t, h, c))
     yield "no flips", panel_sub(text, lambda f, s, r, l, t, h, c: (0, 0, r, l, t, h, c))
 
@@ -69,6 +73,7 @@ def doctored(text: str, mode: str):
     yield "scan: implausible", SCAN.sub(r"\1scan: refresh 31000 us measured, 10000 us expected: implausible, not used", text)
     yield "no scan line", "\n".join(l for l in text.splitlines() if not SCAN.search(l)) + "\n"
     if mode == "nocard":
+        yield "no forced fallback", "\n".join(l for l in text.splitlines() if "(forced: dbuf_test" not in l) + "\n"
         yield "no pin check", "\n".join(l for l in text.splitlines() if "agrees with the address pins" not in l) + "\n"
 
 

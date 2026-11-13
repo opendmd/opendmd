@@ -116,7 +116,7 @@ NOCARD = [
 S3_SCAN = [("scan modelled", re.compile(r"hub75_shim: scan: \d+ descriptors, \d+ per row pair, refresh \d+ us"))]
 S3_PINS = [("address-pin check", re.compile(r"hub75_shim: scan: register OUT_STATE agrees with the address pins \d+/\d+"))]
 S3_SCAN_BAD = re.compile(r"scan: (not modelled|layout not modelled|no refresh|refresh \d+ us measured.*implausible|no GDMA channel)")
-# The S3 double-buffered (NVS `panel_bufs` 2 seeded: smoke, probe, power-safe; the carrier's own
+# The S3 double-buffered (NVS `panel_bufs` 2 seeded: smoke, probe; the carrier's own
 # default, the plain build's being single; firmware/src/s3panel.rs, hub75_shim.cpp's end): the start
 # line (the buffers, the rings, the refresh timed off ring 0, the heap before and after), and the
 # `s3panel:` line every 30 s with the flips' counters. Judged at the end (s3panel_checks): flips
@@ -134,8 +134,18 @@ S3_SINGLE_LINE = re.compile(r"hub75_shim: panel: single-buffered \(([^)]*)\): in
 S3_PANEL = re.compile(r"s3panel: buffers 2, flips (\d+), switched (\d+), skipped (\d+), waits (\d+) \((\d+) us in all, max (\d+)\), "
                       r"late (\d+) \(at the wrap (\d+)\), timeouts (\d+), back hits (\d+), pairs copied (\d+)")
 S3_MEM = re.compile(r"s3mem: \S+ up (\d+) s: internal (\d+) B free, largest (\d+), lowest (\d+)")
+S3_SHOWN = re.compile(r"shown 1/2/3\+ refreshes (\d+)/(\d+)/(\d+)")
+# The buffer check at start-up (test builds: s3panel::self_test): front and back frame buffers
+# agree after 24 random pushes with a clear, a brightness change and glow steps; and its red
+# variant (one pair's copy skipped) leaves them different.
 S3_DBUF = [("double-buffered", S3_DBUF_LINE),
+           ("buffer check", re.compile(r"s3panel: buffer check: \d+ pushes .*: front ([0-9a-f]{8}), back \1: agree$")),
+           ("buffer check red", re.compile(r"s3panel: buffer check red \(pair \d+'s copy skipped\): front ([0-9a-f]{8}), back (?!\1)[0-9a-f]{8}: differ, as they must$")),
            ("flips made", re.compile(r"s3panel: buffers 2, flips [1-9]\d*,"))]
+# The forced fallbacks (nocard: NVS `dbuf_test`, a test build's hook): the double-buffered start
+# refused or torn down, then single-buffered with the beam raced.
+S3_FORCED = {"ring": re.compile(r"hub75_shim: panel: double-buffered start without a second descriptor ring or GDMA channel \(forced: dbuf_test ring\)"),
+             "heap": re.compile(r"hub75_shim: panel: single-buffered, the beam raced: double buffering needs .*\(forced: dbuf_test heap\)")}
 S3_DBUF_BAD = re.compile(r"panel: (single-buffered|the double-buffered start failed|double-buffered start without|no refresh of ring 0|refresh \d+ us measured.*implausible)|s3panel: buffers 1")
 S3_SINGLE_BAD = re.compile(r"panel: double-buffered:|s3panel: buffers 2")
 
@@ -242,7 +252,8 @@ def main():
     ap.add_argument("--no-card", action="store_true", help="probe: no card attached; judge the card-free probe (always so with --chip s3)")
     ap.add_argument("--jit-skips", type=int, default=0, help="probe --no-card: golden frames the JIT may skip for the probe's heap (default 0; the classic's no-card probe skips 2)")
     ap.add_argument("--vm-skips", type=int, default=0, help="probe: golden frames the VM may skip for the probe's heap (default 0; the classic's card probe skips 2: `big`)")
-    ap.add_argument("--buffers", type=int, choices=[1, 2], help="--chip s3: the panel's buffers (NVS `panel_bufs` seeded): smoke, probe and power-safe default 2, nocard 1 (the beam raced: its scan line and address-pin check)")
+    ap.add_argument("--buffers", type=int, choices=[1, 2], help="--chip s3: the panel's buffers (NVS `panel_bufs` seeded): smoke and probe default 2, nocard and power-safe 1 (the beam raced: its scan line and address-pin check)")
+    ap.add_argument("--dbuf-test", choices=["heap", "ring", "none"], help="--chip s3 nocard: double buffering asked (panel_bufs 2) and its fallback forced (NVS dbuf_test): the heap check refusing, or the start torn down and started again single-buffered (nocard's default: ring; none: neither)")
     ap.add_argument("--nvs", action="append", default=[], metavar="KEY=VALUE", help="--chip s3 smoke: more NVS string keys seeded beside panel_bufs (e.g. boot_fx=@formula:starfield)")
     ap.add_argument("--replay", type=Path, help="judge a console log recorded before (the lane's own log) instead of running the emulator: the judges' red checks")
     a = ap.parse_args()
@@ -253,8 +264,17 @@ def main():
             sys.exit(f"run: --chip s3 runs nocard, probe, smoke and power-safe, not {a.mode} (rig and leak are not tried on the S3 yet; api needs an S3 bundle and updater)")
         if a.mode == "probe":
             a.no_card = True
+        if a.mode == "nocard" and a.dbuf_test is None and a.buffers is None:
+            a.dbuf_test = "ring"
+        if a.dbuf_test == "none":
+            a.dbuf_test = None
+        if a.dbuf_test:
+            a.buffers = 1  # (what runs: double asked, the fallback forced)
+        # (power-safe: single, as the plain S3 build is by default: it runs WiFi, and double
+        # buffering beside WiFi's internal buffers ran the heap out in boot 6, as the firmware's
+        # refusal outside test builds says it would.)
         if a.buffers is None:
-            a.buffers = 1 if a.mode == "nocard" else 2
+            a.buffers = 1 if a.mode in ("nocard", "power-safe") else 2
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
@@ -282,7 +302,7 @@ def main():
     if a.mode == "nocard":
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
         a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None,
-                                        extra={"boot_fx": "/formulas/x.psi", **({"panel_bufs": str(a.buffers)} if a.chip == "s3" else {})})
+                                        extra={"boot_fx": "/formulas/x.psi", **(({"panel_bufs": "2", "dbuf_test": a.dbuf_test} if a.dbuf_test else {"panel_bufs": str(a.buffers)}) if a.chip == "s3" else {})})
     # (The S3's buffers always seeded: the plain S3 build's own default is single-buffered, its
     # WiFi buffers being internal; the carrier's double.)
     if a.mode == "smoke" and a.chip == "s3" and not a.replay:
@@ -312,7 +332,7 @@ def main():
     dbuf = a.chip == "s3" and a.buffers == 2
     s3_scan = (S3_DBUF if dbuf else S3_SCAN) if a.chip == "s3" else []
     smoke_want = SMOKE + s3_scan
-    nocard_want = NOCARD + (s3_scan + S3_PINS if a.chip == "s3" else [])
+    nocard_want = NOCARD + (s3_scan + S3_PINS + ([("fallback forced", S3_FORCED[a.dbuf_test])] if a.dbuf_test else []) if a.chip == "s3" else [])
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
     panel_lines = 0
@@ -516,14 +536,18 @@ def main():
                 die("double-buffered with no refresh timed")
             print(f"pass  buffers 2: frame buffers 2 x {fb} B, rings 2 x {desc} B ({n} descriptors), refresh {refresh} us")
             print(f"pass  {ok[0]}")
+            sh = [m for m in (S3_SHOWN.search(l) for l in lines) if m]
+            if sh:
+                print(f"      frames shown 1 / 2 / 3+ refreshes: {sh[-1][1]} / {sh[-1][2]} / {sh[-1][3]}")
         else:
             m = next((m for m in (S3_SINGLE_LINE.search(l) for l in lines) if m), None)
+            want = "double buffering did not start" if a.dbuf_test else "asked"
             if not m:
-                die("no `panel: single-buffered (asked)` line")
-            if m[1] != "asked":
-                die(f"single-buffered, but not as asked: {m[0][:200]}")
+                die(f"no `panel: single-buffered ({want})` line")
+            if m[1] != want:
+                die(f"single-buffered, but not {want!r}: {m[0][:200]}")
             hb, lb, ha, la = (int(x) for x in m.groups()[1:])
-            print("pass  buffers 1 (asked): the beam raced")
+            print(f"pass  buffers 1 ({want}{', forced: dbuf_test ' + a.dbuf_test if a.dbuf_test else ''}): the beam raced")
         print(f"      internal heap at the driver's start: {hb} B free (largest {lb}) before, {ha} ({la}) after: {hb - ha} B taken")
         mem = [m for m in (S3_MEM.search(l) for l in lines) if m]
         if mem:

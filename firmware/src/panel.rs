@@ -743,7 +743,7 @@ impl Panel {
 
     /// Blank the DMA buffer. The canvas does not know: a caller that clears
     /// the panel under a canvas it keeps blitting must `mark_all` it.
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self) { #[cfg(esp32s3)] crate::s3panel::clear_wait(); // (its wait for the last flip: the next push's; s3panel.rs)
         // Dark: nothing to fade, and the copy's 12 KB goes back.
         if self.glow.is_held() {
             self.glow.release();

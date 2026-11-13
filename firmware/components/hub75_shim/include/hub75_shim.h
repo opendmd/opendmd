@@ -233,8 +233,10 @@ void hub75_set_power_safe(bool on);
  * us it waited; every writer calls it first anyway.
  */
 typedef struct {
-    /* 1 or 2: what the panel runs with. */
+    /* 1 or 2: what the panel runs with; and the build's default (0 asked:
+     * 2 where WiFi's and lwIP's buffers go to PSRAM first, else 1). */
     uint8_t buffers;
+    uint8_t build_buffers;
     /* Why not 2 (HUB75_S3_WHY_*). */
     uint8_t why;
     /* The refresh measured at start-up (us), 0 unknown. */
@@ -250,8 +252,9 @@ typedef struct {
     uint32_t largest_after;
     /* Since boot: flips asked; skipped (nothing written since the last);
      * switches seen (the DMA in the new ring); waits for one before a write,
-     * their us in all (wrapping) and the longest; switches seen later than
-     * the end of the refresh the flip was asked in plus 1 ms (late_wrap:
+     * their us in all (wrapping) and the longest; switches whose old ring was
+     * still seen more than 1 ms past the end of the refresh the flip was
+     * asked in (late_wrap:
      * those asked in the ring's last two descriptors, whose link to the next
      * ring the DMA may already have read: a refresh later, expected; late:
      * the rest, which should not happen); switches never
@@ -269,19 +272,44 @@ typedef struct {
     uint32_t timeouts;
     uint32_t back_hits;
     uint32_t copied_pairs;
+    /* The refreshes each frame was shown, from its switch to the next one's
+     * (a switch's time: watched, or when it was due): 1, 2, 3 or more. */
+    uint32_t shown_1;
+    uint32_t shown_2;
+    uint32_t shown_3plus;
 } hub75_s3_dbuf_t;
 
 #define HUB75_S3_WHY_OK 0
 #define HUB75_S3_WHY_ASKED 1    /* hub75_set_buffers(1) */
 #define HUB75_S3_WHY_HEAP 2     /* too little internal DMA heap */
 #define HUB75_S3_WHY_BEGIN 3    /* begin() failed double-buffered */
-#define HUB75_S3_WHY_RING 4     /* the second descriptor ring was not allocated */
+#define HUB75_S3_WHY_RING 4     /* no GDMA channel id, or forced (dbuf_test ring); a second
+                                 * ring the library could not allocate never gets here (it
+                                 * writes through the null pointer in setupDMA): the heap
+                                 * check keeps that from happening */
 #define HUB75_S3_WHY_NO_PANEL 5 /* no panel (power-safe, or not started) */
 #define HUB75_S3_WHY_BUILD 6    /* the build's default (WiFi's buffers in internal RAM) */
 
 void hub75_set_buffers(uint8_t buffers);
 uint32_t hub75_s3_back_ready(void);
 void hub75_s3_dbuf(hub75_s3_dbuf_t *out);
+
+/*
+ * Test builds (s3panel.rs: bench, nocard-test, or OPENDMD_S3_TEST_HOOKS at
+ * the build): hub75_s3_set_test forces a fallback to single buffering
+ * before hub75_init (HUB75_S3_TEST_HEAP: the heap check refuses; _RING: the
+ * double-buffered start is torn down and started again single-buffered).
+ * hub75_s3_fb_sums: the last flip resolved, the FNV-1a of the front and the
+ * back frame buffer (false single-buffered); they must agree.
+ * hub75_s3_skip_copy: the next resolve skips this pair's copy across (the
+ * check's red variant).
+ */
+#define HUB75_S3_TEST_NONE 0
+#define HUB75_S3_TEST_HEAP 1
+#define HUB75_S3_TEST_RING 2
+void hub75_s3_set_test(uint8_t test);
+bool hub75_s3_fb_sums(uint32_t *front, uint32_t *back);
+void hub75_s3_skip_copy(uint8_t pair);
 
 /* The writers' and hub75_flip's first step on the S3 (hub75_shim_s3.inc);
  * nothing here. */

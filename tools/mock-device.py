@@ -515,7 +515,7 @@ OTA_FACTORY_BYTES = {"4mb": 0x2C0000}   # partitions.csv (v4)
 OTA_BOARDS = {"4mb": "DevKit (4 MB)"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 # `reset_note` of an ESP32-S3 in power-safe (`--power-safe`; firmware src/s3board.rs NOTE).
-POWER_SAFE_NOTE = "power-safe: the panel was not started after 3 brownouts in a row: its power supply is missing or too weak"
+POWER_SAFE_NOTE = "power-safe: the power supply dipped repeatedly (the panel was not started; a weak USB supply can do this too)"
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).
 RESTART_NOTES = {"api_reboot": "restarted on request",
                  "firmware_update": "restarted to install a firmware update",

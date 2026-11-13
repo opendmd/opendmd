@@ -106,7 +106,7 @@ if (found) {
   // the panel was not started this boot; one banner until a restart starts it.
   const powerSafe = (st) => {
     const ps = /^power-safe:/.test(st?.reset_note || '');
-    if (ps && !$('#powersafe')) $('#main').prepend(h('div.banner', { id: 'powersafe', role: 'alert' }, "The panel wasn't started: its power supply is missing or too weak, and the display kept resetting. Check the panel's 5 V supply, then restart the display."));
+    if (ps && !$('#powersafe')) $('#main').prepend(h('div.banner', { id: 'powersafe', role: 'alert' }, "The panel wasn't started: the display's power supply kept dipping and it kept resetting (a weak USB supply can do this too). Check the 5 V supply, then restart the display."));
     else if (!ps) $('#powersafe')?.remove();
   };
   on('status', powerSafe);

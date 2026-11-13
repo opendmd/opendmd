@@ -1555,7 +1555,7 @@ EMU_S3_IMAGE = $(EMU_DIR)/s3/dist/opendmd-$(FW_VERSION)-s3-full.bin
 EMU_S3_NOCARD_IMAGE = $(EMU_DIR)/s3nocard/dist/opendmd-$(FW_VERSION)-s3-full.bin
 EMU_S3_PROBE_IMAGE = $(EMU_DIR)/s3probe/dist/opendmd-$(FW_VERSION)-s3-full.bin
 # $(1): the image's dir under EMU_DIR; $(2): its features; $(3): its spare.
-EMU_S3_BUILD = $(MAKE) --no-print-directory fw-release-variant VARIANT=s3 $(if $(2),FW_RELEASE_FEATURES=$(2) )FW_APP_SPARE=$(3) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/$(1)/target DIST=$(EMU_DIR)/$(1)/dist
+EMU_S3_BUILD = OPENDMD_S3_TEST_HOOKS=1 $(MAKE) --no-print-directory fw-release-variant VARIANT=s3 $(if $(2),FW_RELEASE_FEATURES=$(2) )FW_APP_SPARE=$(3) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/$(1)/target DIST=$(EMU_DIR)/$(1)/dist
 emu-image-s3:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/s3/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3/dist/opendmd-*-s3-app.bin
