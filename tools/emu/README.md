@@ -15,21 +15,31 @@ make emu-leak      # an emu-census image plays 70 GIFs (on to 150 while the halv
 make emu-api       # the emu-census image on WiFi, its HTTP API driven from the host over two boots -> EMU_API_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
+make emu-s3-smoke  # the plain s3 image (the release feature set) with the smoke card on SPI3: as emu-smoke -> EMU_SMOKE_OK
 make emu-s3-nocard # the ESP32-S3 preview (VARIANT=s3), nocard-test image, in the S3 machine: as emu-nocard -> EMU_NOCARD_OK
 make emu-s3-probe  # the S3 psi-probe image, no card, offline: bundled Formulas, the JIT spike's kernels, every golden frame through the VM and the JIT -> EMU_PROBE_OK, then the judge's red checks -> PROBE_RED_OK
-make emu-image-s3  # the plain s3 build into $EMU_DIR/s3/dist (its size; no lane boots it)
+make emu-image-s3  # the plain s3 build into $EMU_DIR/s3/dist (emu-s3-smoke boots it)
 ```
 
 ## The ESP32-S3 lanes (S3 port phase 0)
 
 `VARIANT=s3` (firmware/partitions-s3.csv, firmware/sdkconfig.s3) runs in esp32sim's S3 machine:
 `run.py --chip s3` gives `--chip s3 --board none --rom esp32s3_rev0_rom.elf --flash-mb 8 --psram-mb 8`
-(the DevKitC-1 N8R8: quad flash, octal PSRAM). Nothing is wired to the pins, so the panel driver (the
-HUB75 library's LCD_CAM backend) comes up and clocks into nothing. The S3 machine has **no SD card**:
-esp32sim's SD card in SPI mode (`--sd` with `--sd-spi`) is routed through the classic ESP32's GP-SPI
-only, so only `nocard` and `probe --no-card` run there. A card for the S3 needs that routing in the S3's
-SPI model (GPIO 39-41/21, the pins in firmware/src/config.rs), or the same card wired into the S3's
-SDMMC host for the 4-bit phase.
+(the DevKitC-1 N8R8: quad flash, octal PSRAM), and with a card `--sd IMG --sd-spi 39,40,41,21`: the
+classic's SD card in SPI mode on SPI3 through the GPIO matrix at the S3 map's pins (SCK, MOSI, MISO, CS;
+firmware/src/config.rs), its block reads through GDMA as IDF's spi_master makes them (`api_lane.machine`
+builds both chips' command lines). `smoke` takes `--chip s3` (`make emu-s3-smoke`); `probe` on the S3
+stays card-free. `rig` and `leak` are refused there until they have been tried (they need S3 images of the
+ballast and census feature sets), and `api` until there is an S3 bundle and updater for its OTA steps.
+The S3's 4-bit SDMMC host is not modelled.
+
+Nothing is wired to the pins, so the panel driver (the HUB75 library's LCD_CAM backend) clocks into
+nothing, but the LCD engine runs: in i8080 "always out" mode (what the library sets up) esp32sim drains
+the GDMA ring bound to LCD at the panel clock, 2 bytes a clock, following its descriptors round, and
+GDMA's OUT_DSCR, OUT_DSCR_BF0 and OUT_STATE follow (`[emu] lcd: N bytes, M descriptors out` at exit).
+That proves the logic of reading the ring's position from those registers (the beam race's
+`scan_desc_index`, not used on the S3 yet), not which register silicon updates when (its FIFO and
+prefetch may put OUT_DSCR a descriptor ahead), and not timing.
 
 `run.py probe --no-card` (either chip) boots a psi-probe image with no card and NVS `network` = `off`
 (seeded as in the nocard lane: with no card the probe runs at once, and the setup AP starting beside it
