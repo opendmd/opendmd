@@ -5,6 +5,14 @@
 .s-dl{grid-area:l;display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-height:0;overflow-y:auto;scrollbar-width:none}
 .s-dl>.s-panel:not(.s-tray){width:264px}
 .s-bench>.s-panel{width:100%}
+/* Under the canvas (a window with the room: panels.js roomy): a row, each panel a share of its width and all its height */
+.s-du{grid-area:under;display:flex;gap:8px;min-height:0;padding-top:8px}
+#studio:not([data-under]) .s-du{display:none}
+#studio .s-du>.s-panel{flex:1 1 0;max-height:100%}
+#studio .s-du>.s-panel.col,#studio .s-du>.s-tray{flex:none;align-self:flex-start}
+.s-du .s-list{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.s-du .s-hd2{margin:14px 0 8px}.s-du .s-hd h3{font-size:15px}.s-du .s-cap{font-size:12px}
+.s-stage[data-hot=b]{box-shadow:inset 0 -4px 0 var(--acc)}
 #studio .s-dock.empty,#studio[data-bare] .s-dock,#studio[data-bare] .s-panel,#studio .s-panel.shut{display:none}
 .s-dock.hot{outline:2px dashed var(--acc);outline-offset:2px;border-radius:12px}
 .s-stage[data-hot=l]{box-shadow:inset 4px 0 0 var(--acc)}
@@ -41,8 +49,8 @@ background:linear-gradient(135deg,transparent 52%,var(--mut) 52% 60%,transparent
 .s-tray .s-grip{font:400 8px/1 var(--pixel);color:var(--mut)}
 .s-dl>.s-tray .s-grip{width:20px;height:26px;font-size:0;background:radial-gradient(circle,var(--mut) 1px,transparent 1.5px) 50% 50%/5px 5px}
 .s-tray .s-pbtn{width:22px}
-#studio .s-tray.float>.s-pb,#studio .s-bench>.s-tray>.s-pb{flex-flow:row wrap;justify-content:center;align-content:flex-start}
-#studio .s-tray.float .s-tools,#studio .s-bench>.s-tray .s-tools{flex-flow:row wrap;justify-content:center}
+#studio .s-tray.float>.s-pb,#studio :is(.s-bench,.s-du)>.s-tray>.s-pb{flex-flow:row wrap;justify-content:center;align-content:flex-start}
+#studio .s-tray.float .s-tools,#studio :is(.s-bench,.s-du)>.s-tray .s-tools{flex-flow:row wrap;justify-content:center}
 @media (pointer:coarse){#studio .s-panel>.s-hd{min-height:44px}.s-pbtn{width:36px;height:36px}.s-grip{padding:12px 6px}#studio .s-panel.float>.s-rsz{width:32px;height:32px}}
 /* The Panels menu and a panel's ⋮ menu */
 .s-pmenu{position:fixed;z-index:40;display:grid;gap:2px;min-width:200px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--bg2);color:var(--fg);

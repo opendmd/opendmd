@@ -1,6 +1,8 @@
 /* The Studio's page (/studio/): on the site's site.css (its colours, light and dark, its header
-   and footer). The panel itself stays black in both themes, in its bezel; the LED view is the
-   site's own .led look (a dot mask over the picture, blended "lighten"). */
+   and footer): every surface and ink here is one of its theme tokens (--bg --bg2 --bg3 --line --fg
+   --mut --ink --acc), never a scene's (--den*: the home page's wall, light in both themes). The
+   panel itself stays black in both themes, in its bezel; the LED view is the site's own .led look
+   (a dot mask over the picture, blended "lighten"). */
 html,body.spage{height:auto}
 .spage main{padding-top:20px}
 .spage main>*{max-width:none}
@@ -47,7 +49,7 @@ border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(10em,70vw)}
 
 /* The stage: the panel in its bezel, the ruler with the seam between its two halves */
 .s-stage{border-radius:var(--r);background:var(--bg3);padding:16px 0 18px}
-@media (prefers-color-scheme:dark){.s-stage{background:var(--den) radial-gradient(ellipse 60% 90% at 50% 40%,#1a1e33,transparent 75%)}}
+@media (prefers-color-scheme:dark){.s-stage{background:var(--bg2) radial-gradient(ellipse 60% 90% at 50% 40%,var(--bg3),transparent 75%);box-shadow:inset 0 0 0 1px var(--line)}}
 .s-touch{margin:0 0 8px;text-align:center;color:var(--mut);font:400 8px/1 var(--pixel)}
 .s-scroll{display:flex;flex-direction:column;overflow:auto;padding:0 13px 4px}
 .s-scroll>*{flex:none;margin-inline:auto}
@@ -79,14 +81,14 @@ linear-gradient(90deg,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient
 .s-chin .s-seg{display:flex;gap:2px}
 /* The view toggle: light, as the phone's tabs are (the one shown underlined in the accent) */
 .s-chin button:hover{color:var(--fg)}
-.s-chin .on{color:var(--fg)!important;text-decoration:underline 2px var(--acc);text-underline-offset:4px}
+.s-chin .on{color:var(--fg)!important;text-decoration:underline 2px var(--ink);text-underline-offset:4px}
 
 /* The tray of tools under the panel */
 .s-tray{display:flex;align-items:center;gap:8px 6px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
 .s-tools{display:flex;flex-wrap:wrap;gap:4px}
 .s-tool{position:relative;display:grid;place-items:center;width:46px;height:46px;border:0;border-radius:10px;background:none;color:var(--mut)}
 .s-tool:hover{background:var(--bg3)}
-.s-tool i{position:absolute;right:4px;bottom:3px;font:400 8px/1 var(--pixel);font-style:normal;opacity:.7}
+.s-tool i{position:absolute;right:4px;bottom:3px;font:400 8px/1 var(--pixel);font-style:normal}
 .s-tool.on,.s-tool.on:hover{background:var(--fg);color:var(--bg)}
 .s-hint{margin-left:8px;color:var(--mut);font-size:13px}
 .s-tray .s-seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -157,12 +159,17 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
    it), the stage between them with the canvas at its top and the frames under it; zoom and the
    guides in the chin (studio.js moves them); the selection bar over the stage's foot. --top is the
    Studio's top on the page, --dock the bench's width (both set by studio.js: the bench flexes
-   from 240 to 300 px so the canvas lands on a whole zoom step). */
+   from 240 to 300 px so the canvas lands on a whole zoom step).
+   A window with room under the canvas (panels.js: data-under): the stage is as tall as the canvas
+   and no taller, the frames under it, and under them a row of panels (.s-du) with the height that
+   is left, 200 px at least; the selection bar keeps a foot of its own in the stage. */
 @media (min-width:1000px) and (min-height:620px){
   .spage .wrap{max-width:none;padding:0 12px}
   .spage main{padding:10px 0 0}
   #studio{display:grid;grid-template:"doc doc doc" auto "l stage r" minmax(0,1fr) "l strip r" auto/auto minmax(0,1fr) auto;gap:0 8px;
   height:calc(100dvh - var(--top,77px) - 8px);margin-bottom:8px}
+  #studio[data-under]{grid-template:"doc doc doc" auto "l stage r" minmax(0,auto) "l strip r" auto "l under r" minmax(200px,1fr)/auto minmax(0,1fr) auto}
+  #studio[data-under]:has(#s-selbar:not([hidden])) .s-scroll{padding-bottom:50px}
   #studio[data-view=library]{display:block;height:auto}
   #studio[aria-busy][data-laid] .s-tray,#studio[aria-busy][data-laid] .s-bench{visibility:hidden} /* (a stored layout: shown once panels.js has put it in place) */
   .s-doc{grid-area:doc;padding:0 2px 8px}
@@ -193,6 +200,9 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   .s-bench .s-hd h3{font-size:15px}
   .s-bench .s-cap{font-size:12px}
   .s-bench .s-pal:not(.many){gap:5px}
+  /* Many colours: a grid that scrolls in itself, so what is under it stays in reach (the ring of the one picked inside its padding) */
+  .s-pal.many{max-height:min(200px,20vh);margin:-4px;padding:4px;overflow-y:auto;scrollbar-width:thin}
+  #s-set.many{margin-top:-4px}
   .s-bench .s-open{gap:8px}
   .s-bench .s-list{grid-template-columns:minmax(0,1fr)}
   .s-chin .s-seg{align-items:center}

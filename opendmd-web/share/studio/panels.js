@@ -1,8 +1,15 @@
 // The Studio's panels (/studio/), loaded once the window is the workspace's
 // size (studio.css; FLOAT.md F1): Tools, Colours, Layers, Stamps and This
-// piece, each docked in the left or right column or floating over the stage.
+// piece, each docked in the left or right column, under the canvas, or
+// floating over the stage.
+// Under the canvas: a window with 220 px or more to spare below the canvas
+// and the frames (roomy(): by the window's size alone, so nothing a panel
+// does moves it) has a row of panels there, Layers and Stamps to begin with,
+// and the stage is no taller than the canvas (studio.css, data-under). In a
+// window without that room those panels sit in the right column, after its own.
 // A title bar drags (to within 28 px of the stage's edge: docked in that
-// column, where it was dropped in the stack; Escape puts it back); its name
+// column, where it was dropped in the stack; onto the title bars of the row
+// under the canvas: docked there; Escape puts it back); its name
 // is a button the arrow keys move (16 px, Shift 64) and Enter or Space folds; its ⋮
 // menu docks, floats, folds and closes it; a floating one resizes by its
 // corner (dragged, or the arrow keys on it). The Panels menu shows or closes
@@ -20,6 +27,7 @@ const SEL = { tools: '.s-tray', colours: '.s-colours', layers: '.s-layers', stam
 const FW = { tools: 104, colours: 264, layers: 320, stamps: 400, piece: 320 }; // a floating panel's width, until resized
 const MINW = { tools: 54 }, MINH = 90, TB = 36, EDGE = 28;
 const ws = matchMedia('(min-width:1000px) and (min-height:620px)');
+const SIDES = ['l', 'r', 'b'], UNDER = 220, TRIM = 240; // (TRIM: the stage but for the picture, and the frames strip: studio.js STAGE_TRIM)
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 const num = (v, d) => (Number.isFinite(v) ? Math.max(-1e5, Math.min(1e5, v)) : d);
 
@@ -40,6 +48,8 @@ export function mount(studio) {
   ws.addEventListener('change', () => (ws.matches ? up() : down()));
   addEventListener('resize', () => { shut(); if (on && !raf) raf = requestAnimationFrame(() => { raf = 0; apply(); }); });
   addEventListener('hashchange', () => shut());
+  // Back from the Library (the Studio its workspace height again): the room under the canvas as the window is now.
+  new ResizeObserver(() => { if (on && !drag && under !== roomy() && root.dataset.view !== 'library') apply(); }).observe(root);
   root.addEventListener('pointerdown', grab);
   root.addEventListener('pointermove', move);
   root.addEventListener('pointerup', (e) => let_go(e, true));
@@ -57,7 +67,13 @@ export function mount(studio) {
 }
 
 // --- the layout: what each panel is, kept and read back ---
-const fresh = () => ({ order: [...IDS], p: Object.fromEntries(IDS.map((id, i) => [id, { at: id === 'tools' ? 'l' : 'r', i, x: null, y: null, ax: 'l', c: 0, h: 0 }])) });
+const fresh = () => ({ order: [...IDS], p: Object.fromEntries(IDS.map((id, i) => [id, { at: { tools: 'l', layers: 'b', stamps: 'b' }[id] || 'r', i, x: null, y: null, ax: 'l', c: 0, h: 0 }])) });
+// Room under the canvas for a row of panels: what the window's height leaves below the canvas at Fit (with a
+// right column at its narrowest, 16x at most: 374 px is the window's width but for the canvas then) and the frames strip.
+const roomy = () => root.clientHeight - root.querySelector('.s-doc').offsetHeight - TRIM - 32 * Math.max(1, Math.min(16, Math.floor((vw() - 374) / 128))) >= UNDER;
+// Where a panel docked at `at` is shown: one kept for under the canvas is in the right column when there is no room there.
+let under = false;
+const shown = (at) => (at === 'b' && !under ? 'r' : at);
 const cls = () => (innerWidth >= 1600 ? 'w' : 'n');
 const cur = () => lay[cls()];
 // What was stored, made safe: anything that does not read is the default; positions are clamped when shown.
@@ -67,7 +83,7 @@ function tidy(c) {
   for (const id of IDS) {
     const q = c.p[id], p = d.p[id];
     if (!q || typeof q !== 'object') continue;
-    if (['l', 'r', 'f'].includes(q.at)) p.at = q.at;
+    if (['l', 'r', 'b', 'f'].includes(q.at)) p.at = q.at;
     p.i = num(q.i, p.i);
     p.x = num(q.x, null);
     p.y = num(q.y, null);
@@ -85,7 +101,7 @@ function load() {
   let o = null;
   try { o = JSON.parse(S.ls.get('panels')); } catch { /* none, or not ours */ }
   for (const k of ['n', 'w']) {
-    const t = o?.v === 1 ? tidy(o[k]) : null;
+    const t = o?.v === 2 ? tidy(o[k]) : null;
     lay[k] = t || fresh();
     kept[k] = !!t;
   }
@@ -93,7 +109,7 @@ function load() {
 }
 function save(keep = true) {
   if (keep) kept[cls()] = true;
-  const o = { v: 1 };
+  const o = { v: 2 };
   for (const k of ['n', 'w']) if (kept[k]) o[k] = lay[k];
   S.ls.set('panels', JSON.stringify(o));
 }
@@ -113,6 +129,8 @@ function up() {
   docks.r = bench;
   bench.classList.add('s-dock');
   selbar.before(docks.l);
+  docks.b = el('div', 's-dock s-du');
+  root.querySelector('.s-strip').after(docks.b);
   for (const id of IDS) {
     const p = P[id] = root.querySelector(SEL[id]);
     let hd = p.querySelector(':scope>.s-hd');
@@ -172,6 +190,8 @@ function down() {
   bench.append(P.colours, P.layers, P.stamps, P.piece);
   bench.classList.remove('s-dock', 'empty', 'hot');
   docks.l.remove();
+  docks.b.remove();
+  root.removeAttribute('data-under');
   pbtn.remove();
   chin.remove();
   root.removeAttribute('data-bare');
@@ -184,12 +204,14 @@ const width = (id) => Math.round(Math.max(MINW[id] || 200, Math.min(vw() - 16, c
 function apply() {
   if (!on) return;
   const L = cur(), W = vw(), H = innerHeight, focus = document.activeElement;
-  for (const side of ['l', 'r']) {
-    const d = docks[side], list = IDS.filter((id) => L.p[id].at === side).sort((a, b) => L.p[a].i - L.p[b].i).map((id) => P[id]);
+  if (root.dataset.view !== 'library') under = roomy(); // (the Library has no stage to measure)
+  for (const side of SIDES) {
+    const d = docks[side], list = IDS.filter((id) => shown(L.p[id].at) === side).sort((a, b) => L.p[a].i - L.p[b].i).map((id) => P[id]);
     const now = [...d.children].filter((e) => e.classList.contains('s-panel'));
     if (list.length !== now.length || list.some((p, n) => now[n] !== p)) d.append(...list);
     d.classList.toggle('empty', !list.some((p) => !L.p[p.dataset.panel].h));
   }
+  root.toggleAttribute('data-under', !bare && !docks.b.classList.contains('empty'));
   for (const id of IDS) {
     const p = P[id], q = L.p[id], fl = q.at === 'f';
     p.classList.toggle('float', fl);
@@ -226,9 +248,9 @@ function front(id) {
   save();
 }
 function dock(id, side, y) {
-  const L = cur(), q = L.p[id], list = IDS.filter((k) => k !== id && L.p[k].at === side).sort((a, b) => L.p[a].i - L.p[b].i);
+  const L = cur(), q = L.p[id], list = IDS.filter((k) => k !== id && shown(L.p[k].at) === shown(side)).sort((a, b) => L.p[a].i - L.p[b].i);
   let n = list.length;
-  if (y != null) n = list.filter((k) => { const r = P[k].getBoundingClientRect(); return r.height && r.top + r.height / 2 < y; }).length;
+  if (y != null) n = list.filter((k) => { const r = P[k].getBoundingClientRect(); return r.height && (side === 'b' ? r.left + r.width / 2 < y : r.top + r.height / 2 < y); }).length; // (y: along the dock, so across the row under the canvas)
   list.splice(n, 0, id);
   list.forEach((k, i) => { L.p[k].i = i; });
   q.at = side;
@@ -304,9 +326,10 @@ function frame(d) {
   if (d.size) size(d.id, d.w0 + d.cx - d.x0, d.h0 + d.cy - d.y0);
   else {
     at(d.id, d.cx - d.dx, d.cy - d.dy);
-    const s = root.querySelector('.s-stage').getBoundingClientRect();
-    d.hot = d.cx <= s.left + EDGE ? 'l' : d.cx >= s.right - EDGE ? 'r' : null;
-    for (const k of ['l', 'r']) docks[k].classList.toggle('hot', d.hot === k);
+    const s = root.querySelector('.s-stage').getBoundingClientRect(), u = docks.b.getBoundingClientRect();
+    // (under the canvas: over that row's title bars, or, with nothing in it yet, the foot of the stage's column; lower down a panel floats over the row)
+    d.hot = d.cx <= s.left + EDGE ? 'l' : d.cx >= s.right - EDGE ? 'r' : under && (u.height ? d.cy >= u.top && d.cy <= u.top + 2 * EDGE : d.cy >= root.getBoundingClientRect().bottom - 2 * EDGE) ? 'b' : null;
+    for (const k of SIDES) docks[k].classList.toggle('hot', d.hot === k);
     root.querySelector('.s-stage').dataset.hot = d.hot || '';
   }
   apply();
@@ -320,11 +343,11 @@ function let_go(e, ok) {
   try { if (root.hasPointerCapture(d.pid)) root.releasePointerCapture(d.pid); } catch { /* gone */ }
   if (d.moved && ok) frame(d);
   d.p.classList.remove('drag');
-  for (const k of ['l', 'r']) docks[k].classList.remove('hot');
+  for (const k of SIDES) docks[k].classList.remove('hot');
   root.querySelector('.s-stage').dataset.hot = '';
   if (!d.moved) return;
   if (ok) {
-    if (d.hot) dock(d.id, d.hot, d.cy);
+    if (d.hot) dock(d.id, d.hot, d.hot === 'b' ? d.cx : d.cy);
     save();
   } else cur().p[d.id] = JSON.parse(d.was);
   apply();
@@ -367,7 +390,8 @@ function press(e) {
     const set = (fn) => () => { fn(); save(); apply(); };
     open(b, [
       { label: 'Dock left', tick: q.at === 'l', go: set(() => dock(id, 'l')) },
-      { label: 'Dock right', tick: q.at === 'r', go: set(() => dock(id, 'r')) },
+      { label: 'Dock right', tick: shown(q.at) === 'r', go: set(() => dock(id, 'r')) },
+      ...(under ? [{ label: 'Dock under the canvas', tick: q.at === 'b', go: set(() => dock(id, 'b')) }] : []),
       { label: 'Float', tick: q.at === 'f', go: set(() => float(id)) },
       '-',
       ...(id === 'tools' ? [] : [{ label: q.c ? 'Unfold' : 'Fold', go: () => fold(id) }]),

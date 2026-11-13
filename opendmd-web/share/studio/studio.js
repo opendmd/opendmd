@@ -28,6 +28,7 @@ import { Doc, W, H, N, hexOf, toInt } from './doc.js';
 import * as T from './tools.js';
 
 const ZOOMS = [2, 3, 4, 6, 8, 12, 16, 24, 32];
+const STAGE_TRIM = 240; // the workspace's stage but for the picture (ruler, bezel, chin: 118 px) and the frames strip under it (122)
 const LS = 'odmd.studio.';
 // A still's time, as the web app's (opendmd-art-web pipeline.rs STILL_MS).
 const STILL_MS = 5000;
@@ -97,6 +98,8 @@ function pick(k) {
     const on = +b.dataset.k === key;
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on);
+    // (many colours scroll in their grid: the one picked is brought into it, the page left alone)
+    if (on) { const g = b.parentNode, d = b.offsetTop - g.offsetTop; if (d < g.scrollTop + 4) g.scrollTop = d - 4; else if (d + b.offsetHeight > g.scrollTop + g.clientHeight - 4) g.scrollTop = d + b.offsetHeight - g.clientHeight + 4; }
   }
   root.dataset.key = key;
   root.dataset.colour = key ? hexOf(D.rgbOf(key)) : 'off';
@@ -518,16 +521,21 @@ function useSize(n) {
 let fitScale = () => 1;
 function layout() {
   const cs = getComputedStyle(scroll), bench = root.querySelector('.s-bench');
-  let avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
-  // The workspace: the bench (240 to 300 px wide) gives the canvas what it needs for a whole step at Fit.
-  if (ws.matches && bench.offsetWidth) {
-    const room = avail + bench.offsetWidth - 240, d = Math.min(300, 240 + room - Math.max(1, Math.min(8, Math.floor(room / W))) * W);
-    root.style.setProperty('--dock', `${d}px`);
-    avail = room + 240 - d;
+  let avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24, cap = 8;
+  // The workspace: Fit is the largest whole step (16x at most) the stage has the width and the height for, the
+  // frames and any panels under the canvas kept their room (STAGE_TRIM);
+  // the bench (240 to 300 px wide) gives the canvas what it needs for that step.
+  if (ws.matches) {
+    cap = Math.max(1, Math.min(16, Math.floor((root.clientHeight - root.querySelector('.s-doc').offsetHeight - STAGE_TRIM - (root.hasAttribute('data-under') ? 200 : 0)) / H)));
+    if (bench.offsetWidth) {
+      const room = avail + bench.offsetWidth - 240, d = Math.min(300, 240 + room - Math.max(1, Math.min(cap, Math.floor(room / W))) * W);
+      root.style.setProperty('--dock', `${d}px`);
+      avail = room + 240 - d;
+    }
   }
-  fitScale = () => Math.max(1, avail / W);
+  fitScale = () => Math.max(1, Math.min(avail / W, ws.matches ? cap : 1e9));
   let s = zoom ? ZOOMS[zoom - 1] : fitScale();
-  if (!zoom && s > 4) s = Math.min(8, Math.floor(s));
+  if (!zoom && s > 4) s = Math.min(cap, Math.floor(s));
   work.style.width = `${s * W}px`;
   work.style.height = `${s * H}px`;
   $('s-ruler').style.width = `${s * W}px`;
