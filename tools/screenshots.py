@@ -33,6 +33,7 @@ chromium`.
 
 import argparse
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -181,11 +182,26 @@ def now_ready(page: Page, path: str) -> None:
     page.wait_for_function(f"document.querySelector('#now-path')?.textContent === {json.dumps(path)}", timeout=20000)
     wait_lit(page, "#now-panel")
     page.wait_for_selector("#now-recent > div", timeout=10000)
+    # (No caption: the preview playing, not loading or saying it can't.)
+    page.wait_for_function("document.querySelector('#now-cap')?.textContent === ''", timeout=20000)
     page.wait_for_timeout(1500)
+
+
+# What a published shot must never show: a path, a hidden cache's or
+# playlist file's words, or the preview's raw error (CLAUDE.md, the product model).
+PLUMBING = re.compile(r"@formula|/gifs/|/formulas/|odm|bucket|cache|manifest|Preview:", re.I)
+
+
+def guard(page: Page, name: str) -> None:
+    """Refuse a shot whose visible text shows plumbing."""
+    hits = [l.strip() for l in page.evaluate("document.body.innerText").split("\n") if PLUMBING.search(l)]
+    if hits:
+        raise SystemExit(f"screenshots: {name} would show {hits[:3]}")
 
 
 def shot(page: Page, out: Path, name: str, full: bool = False) -> None:
     page.evaluate("document.activeElement?.blur?.(); document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    guard(page, name)
     page.mouse.move(0, 0)
     page.wait_for_timeout(200)
     page.screenshot(path=str(out / name), full_page=full)
@@ -196,6 +212,7 @@ def clip(page: Page, out: Path, name: str, parts: str, pad: int = 12) -> None:
     """A shot of just the elements the JS expression `parts` gives (their
     bounding box, `pad` px of the page around it), at the page's scale."""
     page.evaluate("document.activeElement?.blur?.(); document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    guard(page, name)
     page.mouse.move(0, 0)
     page.wait_for_timeout(200)
     box = page.evaluate(f"""(pad) => {{

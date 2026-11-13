@@ -21,7 +21,11 @@ every view like a person would:
             re-syncs to the new file after a skip, pauses when the mock is
             paused and holds its frame; skip, pause from the UI; "Send
             to panel" of a card path (POST /api/play) shows in status, and a
-            missing path / a non-GIF give the 404 / 415 toasts
+            missing path / a non-GIF give the 404 / 415 toasts; a Formula
+            on the panel plays in the preview at the panel's position, by
+            name, and one this browser can't find says so in plain words;
+            Formulas in Recently played, the playlist editor and its row
+            menu by name: never `@formula…`, a .psi path or "Preview:"
   Library   open Consoles (#library/Consoles), search "mario" (only the
             folders with matches, open, counted), platform chip SNES,
             preview one, send it to the panel; no checkboxes until Select,
@@ -5277,6 +5281,7 @@ def mock_pass(browser) -> None:
         formulas_panel_checks(browser, base, errors)
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
+        now_formula_checks(browser, base, errors)
         formulas_remix_checks(browser, base, overlay, errors)
         import_checks(browser, base, overlay, errors)
         formulas_store_checks(browser, base, overlay, errors)
@@ -6411,6 +6416,91 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
         check(got == code, f"formulas playlist: {path} is a {got}")
     for name in ("sets/psitest.txt", "formulas/smoke-ramp.psi", "formulas/kept-here.psi"):
         urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
+
+
+# What the UI must never print for a Formula: its path or the player's words.
+RAW_FORMULA = re.compile(r"@formula|/formulas/|\.psi\b|not a playable|Preview:")
+
+
+def raw_text(page: Page) -> str:
+    """The visible text, titles and labels: any raw Formula path in it, else ''."""
+    text = page.evaluate("""() => [document.body.innerText,
+        ...[...document.querySelectorAll('[title],[aria-label],[placeholder]')].map(e => [e.title, e.ariaLabel, e.placeholder].join(' ')),
+        ...[...document.querySelectorAll('option')].map(o => o.textContent)].join('\\n')""")
+    return "; ".join(l.strip() for l in text.split("\n") if RAW_FORMULA.search(l))[:200]
+
+
+def now_formula_checks(browser, base: str, errors: list[str]) -> None:
+    """Now with a Formula on the panel: the preview plays it (pkg-psi, loaded
+    only then: js/nowpsi.js) at the panel's position, the title its name,
+    no caption; one this browser can't find says so in plain words; a
+    playlist of Formulas shows them by name in Now's Recently played and
+    the playlist editor; nowhere `@formula…`, a .psi path or the player's
+    own error."""
+    put_json(base + "/api/config", {"formula_keep": "hold"})
+    post_json(base + "/api/play", {"path": "@formula:time-gate"})
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#now")
+    page.wait_for_function("+document.querySelector('#now-panel')?.dataset.frames > 10", timeout=30000)
+    wait_lit(page, "#now-panel", "now formula")
+    a = canvas_sum(page, "#now-panel")
+    page.wait_for_timeout(700)
+    b = canvas_sum(page, "#now-panel")
+    title, cap = page.inner_text("#now-title"), page.eval_on_selector("#now-cap", "e => e.textContent")
+    check(a != b and title == "Time gate" and cap == "", f"now formula: the preview plays Time gate (moving {a != b}, title '{title}', caption '{cap}')")
+    # In step: what the page draws against the panel's position, both now (loop 4.8 s).
+    d = page.evaluate("""async () => { const s = await (await fetch('/api/status?now=1')).json();
+        return [s.now_playing.elapsed_ms % 4800, +document.querySelector('#now-panel').dataset.ms]; }""")
+    off = min((d[0] - d[1]) % 4800, (d[1] - d[0]) % 4800)
+    check(off < 400, f"now formula: drawn at the panel's position ({d[1]} ms vs the panel's {d[0]} ms, {off} apart)")
+    raw = raw_text(page)
+    check(not raw, f"now formula: no Formula path or player error on Now ({raw!r})")
+    shot(page, "now-formula", "laptop")
+    page.context.close()
+    # One this browser can't find (the bundled list empty): plain words.
+    page = new_page(browser, "laptop", errors)
+    page.route("**/formulas.json*", lambda r: r.fulfill(status=200, content_type="application/json", body="[]"))
+    page.goto(base + "/#now")
+    page.wait_for_function("document.querySelector('#now-cap')?.textContent == 'Preview not available for this Formula'", timeout=30000)
+    title, raw = page.inner_text("#now-title"), raw_text(page)
+    check(title == "Time gate" and not raw, f"now formula: no preview possible -> 'Preview not available for this Formula', named '{title}' ({raw!r})")
+    shot(page, "now-formula-fallback", "laptop")
+    page.context.close()
+    # A playlist of Formulas: by name in Recently played and the editor.
+    gif = card_gifs()[0]
+    put_json(base + "/api/config", {"formula_keep": "turn"})
+    put_text(base + "/api/sets/nowpsi", "\n".join([gif, "@formula:time-gate", "@formula:starfield", ""]))
+    put_json(base + "/api/config", {"set": "nowpsi"})
+    deadline = time.time() + 40
+    rec: list[str] = []
+    while time.time() < deadline:
+        rec = get_json(base + "/api/status?recent=1").get("recent") or []
+        if {"@formula:time-gate", "@formula:starfield"} <= set(rec):
+            break
+        time.sleep(0.5)
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#now")
+    page.wait_for_function("[...document.querySelectorAll('#now-recent .grow')].map(e => e.textContent).includes('Starfield')", timeout=20000)
+    names = page.eval_on_selector_all("#now-recent .grow", "els => els.map(e => e.textContent)")
+    raw = raw_text(page)
+    check({"Time gate", "Starfield"} <= set(names) and not raw, f"now formula: Recently played names the Formulas ({names}; {raw!r})")
+    goto_view(page, "sets")
+    page.click("#sets-list [data-path='/sets/nowpsi.txt'] button.pl")
+    page.wait_for_selector("#set-editor", state="visible", timeout=10000)
+    page.wait_for_function("document.querySelectorAll('#set-entries .vrow:not([hidden])').length >= 3", timeout=10000)
+    rows = page.eval_on_selector_all("#set-entries .vrow:not([hidden]) .t", "els => els.map(e => e.textContent)")
+    raw = raw_text(page)
+    check(rows[1:] == ["Time gate", "Starfield"] and not raw, f"now formula: the playlist editor names them ({rows}; {raw!r})")
+    open_row_menu(page, "#set-entries", 1)
+    head, raw = page.inner_text("#ov-menu .mh"), raw_text(page)
+    check(head.startswith("Time gate") and not raw, f"now formula: a Formula's row menu names it ('{head}'; {raw!r})")
+    page.keyboard.press("Escape")
+    goto_view(page, "sets")
+    raw = raw_text(page)
+    check(not raw, f"now formula: no Formula path in Playlists ({raw!r})")
+    page.context.close()
+    put_json(base + "/api/config", {"set": ""})
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/nowpsi.txt", method="DELETE"), timeout=30)
 
 
 def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
@@ -10589,7 +10679,7 @@ def www_update_pass(browser) -> None:
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
-ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks}
+ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 
 

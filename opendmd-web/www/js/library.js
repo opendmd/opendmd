@@ -131,7 +131,8 @@ export async function mount(el) {
     side);
   el.append(grid);
 
-  const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'Preview: ' + m; } });
+  // (In plain words: the player's own name a path.)
+  const NO = 'Preview not available for this GIF', pv = new PanelPreview(canvas, { onError: () => { cap.textContent = NO; } });
 
   async function preview(it) {
     current = it;
@@ -161,7 +162,7 @@ export async function mount(el) {
         if (gif) checkThumb(it.path, bytes);
         if (smoothBox && gif) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
-    } catch (err) { cap.textContent = 'Preview: ' + err.message; }
+    } catch { cap.textContent = NO; }
   }
 
   function detailMenu(btn) {

@@ -4,7 +4,7 @@
 // /api/overrides?set=); the page never says so.
 
 import { app, playlistLabel, setValue } from './state.js';
-import { h, toast, label, base } from './util.js';
+import { h, toast, label, base, isFormula, formulaName } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
@@ -166,7 +166,7 @@ export function actions(btn, id, items, head) {
 
 export function moreButton(ov, path, extra) {
   return h('button.sm.more', {
-    title: 'Favourite, play less, play longer…', 'aria-label': `options for ${base(path)}`,
+    title: 'Favourite, play less, play longer…', 'aria-label': `options for ${isFormula(path) ? formulaName(path) : base(path)}`,
     onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4, extra); },
   }, '…');
 }

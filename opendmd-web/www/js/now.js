@@ -156,8 +156,10 @@ function mountDevice(el) {
     rc,
     lookControls(drift));
 
-  const preview = new PanelPreview(canvas, { wrap: el, onError: (m) => { cap.textContent = 'Preview: ' + m; } });
-  let shownPath = '';
+  // (Never the player's own words or a path: CLAUDE.md, the product model.)
+  const NO_GIF = 'Preview not available for this GIF', NO_F = 'Preview not available for this Formula';
+  const preview = new PanelPreview(canvas, { wrap: el, onError: () => { cap.textContent = NO_GIF; } });
+  let shownPath = '', stopF = null;
   let failures = 0;
   let clocks = [];   // polled: [{rtt, off, hi, t}]: off = device ms - local ms, at most `hi`
   let pushed = [];   // from the stream: [{off, t}]: off at least this (less the trip)
@@ -193,13 +195,33 @@ function mountDevice(el) {
   // The preview fetches the file's prepared copy first (app.previewBytes):
   // fetching from gifs/Consoles costs the device a ~330 ms directory scan
   // that the panel feels; a copy's small directory costs ~6 ms.
+  // A Formula is drawn here by js/nowpsi.js (loaded then), at the panel's position.
   async function follow_(path) {
     if (!mirror() || !path || path === shownPath) return;
     shownPath = path;
+    stopF?.();
+    stopF = null;
     cap.textContent = 'Loading…';
+    if (isFormula(path)) {
+      preview.clear();
+      const no = () => { if (shownPath === path) cap.textContent = NO_F; };
+      try {
+        const stop = await (await import('./nowpsi.js')).play(path, preview, () => pos(path), no);
+        if (shownPath !== path) return stop();
+        stopF = stop;
+        cap.textContent = '';
+      } catch { no(); }
+      return;
+    }
     try {
       if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = ''; sync(); soonPoll(); }
-    } catch (e) { cap.textContent = 'Preview: ' + e.message; }
+    } catch { cap.textContent = NO_GIF; }
+  }
+  // The panel's ms into `p` now (from the last sample, on the device's clock), or null.
+  function pos(p) {
+    const off = offset();
+    if (!last || last.path !== p || off == null) return null;
+    return app.status?.paused ? last.elapsed : last.elapsed + (performance.now() + off - last.t) * last.rate;
   }
 
   // One status sample, requested at local t0 and answered at t1; an event
@@ -263,7 +285,7 @@ function mountDevice(el) {
     const empty = !np.path && !s.entries && s.index_state != 'building' && !unreadable && (sd.mounted || sd.attempts || sd.error);
     const pf = empty && sd.mounted && app.config?.platforms?.trim();
     unfilter.hidden = !pf;
-    title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
+    title.textContent = virt ? np.title || (isFormula(np.path) ? 'Formula' : '') : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
     tagsEl.textContent = np.path ? tags(np.path, e) : '';
     if (!app.tags && !tagsAsked && app.setNames?.has('.tags')) { tagsAsked = true; import('./tags.js').then((m) => m.tags()).catch(() => {}); }
@@ -423,7 +445,7 @@ function mountDevice(el) {
     show() {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
-      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
+      if (mirrored !== (mirrored = mirror())) { stopF?.(); stopF = null; preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
       shown = true;
       // A status read at the start (polling until the stream is live).
       app.watch('now', POLL_MS, poll);
