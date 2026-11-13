@@ -610,12 +610,16 @@ stored (only the dialog's last settings, `odmd.psi.import`). It is sniffed
 by its first bytes; an SVG is refused with a DOCTYPE, parsed as XML (never
 put in the page), stripped of scripts, foreign content, frames, media,
 animation, `on…` attributes, links other than `#parts` and styles that
-load, and sized at 512 × 256 at most. Every kind goes through one path: a
+load, embedded pictures and what multiplies the drawing (masks, markers,
+filters, clip paths, patterns, `<use>` past 20,000 parts), and sized at
+512 × 256 at most. Every kind goes through one path: a
 blob URL, an image never attached, its size checked (4,096 a side) before it
 is drawn 1:1 and read. Resampling (an area average on premultiplied alpha,
 or centre samples) and the colour reduction (a median cut, at most 8 Lloyd
-passes, no randomness, no dithering) are its own, so the same picture always
-makes the same text. The dialog compiles the Formula with the sprite on the
+passes, no randomness, no dithering) are its own, so the same picture makes
+the same text in one browser (decoders and colour handling may differ between
+browsers). A browser that adds noise to what a page reads off a canvas (a
+privacy setting) is found by a four-pixel test first and told so. The dialog compiles the Formula with the sprite on the
 editor's module (`still(src)` in the kit; pkg-psi `info()[19]` and `[20]`,
 the store's numbers and the paint colours in use) and only peeks; Add is
 one edit the browser's undo takes back.

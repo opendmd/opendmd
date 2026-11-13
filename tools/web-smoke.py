@@ -6312,6 +6312,7 @@ def psi_import_checks(browser, base: str, errors: list[str]) -> None:
     called .png and an HTML page around an SVG refused; a corpus of hostile
     SVGs loads nothing, runs nothing and leaves the page answering; Cancel
     leaves the text and its undo alone."""
+    import base64
     page = new_page(browser, "laptop", errors)
     asked: list[str] = []
     page.on("request", lambda r: asked.append(r.url))
@@ -6427,6 +6428,26 @@ def psi_import_checks(browser, base: str, errors: list[str]) -> None:
     page.evaluate("""() => { const dt = new DataTransfer(); dt.setData('text/plain', 'x'); const ta = document.querySelector('#psi-src');
         window.__imp_paste = ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }""")
     check(page.evaluate("window.__imp_paste") is True and page.locator("#psi-imp").count() == 0, "import: a text paste is the browser's as ever")
+    # A spreadsheet's copy: text with a picture of it beside: the text is pasted.
+    page.evaluate("""(b) => { const dt = new DataTransfer(); dt.setData('text/plain', 'a\\tb'); dt.items.add(new File([Uint8Array.from(atob(b), (c) => c.charCodeAt(0))], 'cells.png', { type: 'image/png' }));
+        const ta = document.querySelector('#psi-src'); window.__imp_paste = ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); }""", base64.b64encode(art).decode())
+    page.wait_for_timeout(500)
+    check(page.evaluate("window.__imp_paste") is True and page.locator("#psi-imp").count() == 0, "import: text with a picture beside it (a spreadsheet's copy) is pasted as text")
+    # Enter right after a size typed: the size typed is the one added; a tier picked by keys keeps the focus.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    imp_open(page, imp_gradient(), "gradient.png")
+    page.focus("#psi-imp-tier button[data-k='4']")
+    page.keyboard.press("Space")
+    imp_settle(page)
+    kept_focus = page.evaluate("document.activeElement.dataset.k === '4' && document.activeElement.getAttribute('aria-pressed') === 'true'")
+    page.uncheck("#psi-imp-lock")
+    page.fill("#psi-imp-w", "20")
+    page.press("#psi-imp-w", "Enter")
+    page.wait_for_selector("#psi-imp", state="detached", timeout=5000)
+    page.wait_for_timeout(300)
+    typed_rows = [l for l in page.input_value("#psi-src").split("\n") if re.fullmatch(r"  [^ ]{2,}", l) and "key" not in l]
+    check(kept_focus and typed_rows and all(len(r) == 22 for r in typed_rows), f"import: a tier button keeps the focus; Enter after typing 20 adds 20 wide ({kept_focus}, {len(typed_rows[0]) - 2 if typed_rows else None})")
 
     # --- Red.
     # Sizes typed past 64 × 32: held to it, never a block the compiler refuses (E915, E916).
@@ -6538,7 +6559,67 @@ def imp_hostile_corpus(base: str) -> list[tuple[str, bytes]]:
                          f'{head}><text>&e;&e;&e;&e;&e;&e;&e;&e;</text></svg>').encode()),
         ("huge size", f'<svg xmlns="http://www.w3.org/2000/svg" width="1e9" height="1e9"><rect width="1e9" height="1e9" fill="#f0f"/></svg>'.encode()),
         ("animate href", f'{head}><a href="javascript:window.__pwned=5"><rect width="16" height="16" fill="#888"><set attributeName="fill" to="url({c}?a)"/></rect></a><animate href="#r" attributeName="href" to="{c}?an"/></svg>'.encode()),
+        # The review's: what would hold the page up drawing it (each must answer in 2 s).
+        ("use via another xlink prefix", imp_chain(5, 10, "x:href=").encode()),
+        ("use with a decoy id after it", imp_chain(5, 10, "href=", decoy=True).encode()),
+        ("use with a space before #", imp_chain(5, 10, 'href=" ').replace('" "#', '" #').encode()),
+        ("nested masks", imp_masks(4, 10).encode()),
+        ("marker on every vertex", imp_marker(2000, 1000).encode()),
+        ("nested patterns", imp_patterns(5, 10).encode()),
+        ("filters and feImage", f'{IMP_H}<defs><filter id="f"><feGaussianBlur stdDeviation="500"/><feImage href="#r"/><feTurbulence baseFrequency="0.01" numOctaves="10"/></filter><rect id="r" width="64" height="64" fill="#f00"/></defs><g filter="url(#f)" clip-path="url(#r)"><use href="#r"/></g></svg>'.encode()),
+        ("embedded 16000 x 16000 PNG", imp_embedded(16000, 16000).encode()),
+        ("CSS escapes and image-set", f'{IMP_H}<style>@\\69mport "{c}?e1"; rect{{fill:\\75rl({c}?e2#x)}}</style><rect width="9" height="9" style="mask-image:image-set(\'{c}?e3\' 1x)" fill="\\75rl({c}?e4#p) red"/></svg>'.encode()),
+        ("non-finite viewBox", b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 Infinity 1e400"><rect width="16" height="16" fill="#0f0"/></svg>'),
     ]
+
+
+IMP_H = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:x="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">'
+
+
+def imp_chain(levels: int, fan: int, attr: str, decoy: bool = False) -> str:
+    """<use> copies of copies: fan ** levels parts (with `decoy`, empty groups of the same ids after it)."""
+    s = IMP_H + '<defs><rect id="L0" width="1" height="1" fill="#f00"/>'
+    for k in range(1, levels + 1):
+        s += f'<g id="L{k}">' + f'<use {attr}"#L{k - 1}"/>' * fan + "</g>"
+    s += "</defs>" + f'<use {attr}"#L{levels}"/>'
+    if decoy:
+        s += "<defs>" + "".join(f'<g id="L{k}"/>' for k in range(levels + 1)) + "</defs>"
+    return s + "</svg>"
+
+
+def imp_masks(levels: int, fan: int) -> str:
+    s = IMP_H + '<defs><mask id="M0"><rect width="64" height="64" fill="#fff"/></mask>'
+    for k in range(1, levels + 1):
+        s += f'<mask id="M{k}">' + f'<rect width="64" height="64" fill="#fff" mask="url(#M{k - 1})"/>' * fan + "</mask>"
+    return s + f'</defs><rect width="64" height="64" fill="#f00" mask="url(#M{levels})"/></svg>'
+
+
+def imp_marker(verts: int, parts: int) -> str:
+    return (IMP_H + '<defs><marker id="m" markerWidth="2" markerHeight="2">' + '<rect width="1" height="1" fill="#0f0"/>' * parts
+            + '</marker></defs><path marker-mid="url(#m)" fill="none" stroke="#fff" d="M0 0' + "l1 0" * verts + '"/></svg>')
+
+
+def imp_patterns(levels: int, fan: int) -> str:
+    s = IMP_H + '<defs><pattern id="P0" width="1" height="1" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#fff"/></pattern>'
+    for k in range(1, levels + 1):
+        s += (f'<pattern id="P{k}" width="8" height="8" patternUnits="userSpaceOnUse">'
+              + "".join(f'<rect x="{i % 8}" width="1" height="8" fill="url(#P{k - 1})"/>' for i in range(fan)) + "</pattern>")
+    return s + f'</defs><rect width="64" height="64" fill="url(#P{levels})"/></svg>'
+
+
+def imp_embedded(w: int, h: int) -> str:
+    """A tiny file holding a huge picture: a 1-bit PNG of w x h in an <image>."""
+    import base64
+    import struct
+
+    def ch(t: bytes, d: bytes) -> bytes:
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    row, co, out = b"\0" + b"\xff" * ((w + 7) // 8), zlib.compressobj(9), b""
+    for _ in range(h):
+        out += co.compress(row)
+    out += co.flush()
+    png = b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 1, 0, 0, 0, 0)) + ch(b"IDAT", out) + ch(b"IEND", b"")
+    return IMP_H + f'<image width="64" height="64" href="data:image/png;base64,{base64.b64encode(png).decode()}"/><rect width="8" height="8" fill="#00f"/></svg>'
 
 
 def imp_hostile_svgs(page: Page, base: str, asked: list[str]) -> None:
@@ -6548,10 +6629,14 @@ def imp_hostile_svgs(page: Page, base: str, asked: list[str]) -> None:
     said = []
     for name, svg in imp_hostile_corpus(base):
         n0 = len(asked)
-        imp_give(page, svg, name.replace(" ", "-") + ".svg", "image/svg+xml")
-        page.wait_for_selector("#psi-imp, .toast.bad", timeout=10000)
+        # (`took`: from the file given to the dialog or the refusal, and the page answering after.)
         t0 = time.monotonic()
-        alive = page.evaluate("1 + 1") == 2
+        imp_give(page, svg, name.replace(" ", "-") + ".svg", "image/svg+xml")
+        try:
+            page.wait_for_selector("#psi-imp, .toast.bad", timeout=10000)
+            alive = page.evaluate("1 + 1") == 2
+        except PlaywrightTimeoutError:
+            alive = False
         took = time.monotonic() - t0
         opened = page.locator("#psi-imp").count() > 0
         if opened:
@@ -6562,6 +6647,7 @@ def imp_hostile_svgs(page: Page, base: str, asked: list[str]) -> None:
         page.wait_for_timeout(300)
         hit = [u for u in asked[n0:] if "imp-canary" in u]
         said.append((name, "imported" if opened else "refused"))
+        print(f"  ..   {name}: {took:.2f} s")
         check(alive and took < 2 and not hit and page.evaluate("window.__pwned") == 0 and not dialogs and page.input_value("#psi-src") == IMP_BASE,
               f"import: hostile SVG ({name}): nothing loaded, nothing run, the page answers ({'imported harmless' if opened else 'refused'}, {hit})")
     check(dict(said)["entity bomb"] == "refused", f"import: the hostile SVGs ({said})")
@@ -6646,6 +6732,17 @@ def psi_import_phone(browser, base: str, errors: list[str]) -> None:
     shot(page, "formulas-sprite-import", "phone")
     check(sheet and before.startswith("160 × 80") and after != before and ta == "none",
           f"import (phone): a sheet; a finger drew a new crop ({before!r} -> {after!r}, touch-action {ta})")
+    page.keyboard.press("Escape")
+    page.context.close()
+    # A 320 px phone: the picture fits the sheet at its own shape.
+    page = new_page(browser, "phone", errors)
+    page.set_viewport_size({"width": 320, "height": 640})
+    page.goto(base + "/#formulas")
+    formula_editor(page, IMP_BASE)
+    imp_open(page, imp_scene(), "scene.png")
+    fit = page.evaluate("""() => { const c = document.querySelector('#psi-imp-src'), d = document.querySelector('#psi-imp'), r = c.getBoundingClientRect(), q = d.getBoundingClientRect();
+        return [r.left >= q.left, r.right <= q.right, Math.abs(r.width / r.height - 2) < 0.05, d.scrollWidth <= d.clientWidth + 1]; }""")
+    check(all(fit), f"import (320 px phone): the picture fits the sheet at its shape, nothing wider ({fit})")
     page.keyboard.press("Escape")
     page.context.close()
     page = new_page(browser, "laptop", errors)

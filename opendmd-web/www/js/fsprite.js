@@ -19,9 +19,9 @@ const HEX = /^#([\da-f]{3}|[\da-f]{6})$/i;
 const code = (l) => l.replace(/(--|\/\/).*/, (c) => ' '.repeat(c.length));
 const lineEnd = (s, p) => { const n = s.indexOf('\n', p); return n < 0 ? s.length : n; };
 const touch = () => matchMedia('(pointer:coarse)').matches;
-const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase();
+export const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase();
 // A colour picked, written as the one it replaces was: #rgb when it fits, upper case kept.
-const as = (v, w) => { const x = w?.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w || '') ? x.toUpperCase() : x; };
+export const as = (v, w) => { const x = w?.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w || '') ? x.toUpperCase() : x; };
 
 // The sprite blocks, to a `}` alone on its line: {k: 's', name, s, e (the
 // block), key {s, e, le, ents [{ch, v}]}, rows [{s, e, le, t}] (the text of
