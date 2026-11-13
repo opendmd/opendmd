@@ -311,6 +311,26 @@ fn this_boot() -> Option<Entry> {
     ring::newest_first(&Rtc).find(|e| e.seq == seq)
 }
 
+/// This boot did not come from a power-on, the reset button, or a planned
+/// restart this firmware recorded (`crate::restart`): a panic, a stack
+/// overflow, a watchdog, a brownout, a heap check, an unrecorded or
+/// unknown reset. The Connect probe then does not start by itself
+/// (`connect_probe`), so a crash it causes cannot loop and lock out an
+/// update over the LAN.
+#[cfg(feature = "connect-core")]
+pub fn this_boot_crashed() -> bool {
+    match reset_now() {
+        Reset::PowerOn | Reset::External => false,
+        Reset::Software => !this_boot().is_some_and(|e| {
+            !matches!(
+                e.reason,
+                Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::Unrecorded | Reason::Brownout | Reason::PowerOn
+            )
+        }),
+        _ => true,
+    }
+}
+
 /// Why this boot's restart was made, in plain words (`reset_note`, when
 /// `sdhealth` has none); `None` after a power-on.
 pub fn reset_note() -> Option<&'static str> {
