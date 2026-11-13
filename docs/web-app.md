@@ -61,8 +61,15 @@ button lands on them.
   in the browser instead, at the panel's position (`js/nowpsi.js`, loaded
   only then: pkg-psi over the Formula's text — a bundled one's from
   `formulas.json`, one of yours from its `.psi`, an inline one matched to
-  a saved or bundled one, the one this page sent); one it can't find or
-  compile says "Preview not available for this Formula". Captions and
+  a saved or bundled one; the panel's sent one, `@formula:~sent`, only
+  while it is this page's last Show on panel, else none); one it can't
+  find or compile says "Preview not available for this Formula", and one
+  the panel can't be asked for just now "Panel not reachable" (asked again
+  at the next status). A Formula that reads its seed (a `loop forever`
+  one) or the world (the clock, `since`/`was`; Endless road, Time gate,
+  the clocks) previews in step but not always the same picture: the
+  status doesn't carry the panel's seed (a follow-up: `now_playing` could
+  carry it cheaply). Captions and
   names are plain words, never a path or the player's error. The preview
   can be switched off (Settings
   → Panel → *Mirror the panel on Now*, per browser). The device's figures

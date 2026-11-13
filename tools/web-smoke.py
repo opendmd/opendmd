@@ -6452,11 +6452,95 @@ def now_formula_checks(browser, base: str, errors: list[str]) -> None:
     d = page.evaluate("""async () => { const s = await (await fetch('/api/status?now=1')).json();
         return [s.now_playing.elapsed_ms % 4800, +document.querySelector('#now-panel').dataset.ms]; }""")
     off = min((d[0] - d[1]) % 4800, (d[1] - d[0]) % 4800)
-    check(off < 400, f"now formula: drawn at the panel's position ({d[1]} ms vs the panel's {d[0]} ms, {off} apart)")
+    check(off < 100, f"now formula: drawn at the panel's position ({d[1]} ms vs the panel's {d[0]} ms, {off} apart)")
     raw = raw_text(page)
     check(not raw, f"now formula: no Formula path or player error on Now ({raw!r})")
     shot(page, "now-formula", "laptop")
+    # Paused (from here): the frame holds; resumed, it moves on.
+    page.click("#now-pause")
+    page.wait_for_timeout(500)
+    a = (canvas_sum(page, "#now-panel"), page.eval_on_selector("#now-panel", "c => c.dataset.ms"))
+    page.wait_for_timeout(900)
+    b = (canvas_sum(page, "#now-panel"), page.eval_on_selector("#now-panel", "c => c.dataset.ms"))
+    page.click("#now-pause")
+    page.wait_for_timeout(900)
+    c = page.eval_on_selector("#now-panel", "c => c.dataset.ms")
+    check(a == b and c != b[1], f"now formula: paused, the preview holds its frame; resumed, it moves on ({a}, {b}, {c})")
+    # The sliders from the path.
+    post_json(base + "/api/play", {"path": "@formula:time-gate?a=0.9"})
+    page.wait_for_function("document.querySelector('#now-panel').dataset.src == '@formula:time-gate?a=0.9'", timeout=15000)
+    q = page.eval_on_selector("#now-panel", "c => c.dataset.q")
+    check(q.startswith(f"{round(0.9 * 65536)},"), f"now formula: the path's sliders are drawn with (a=0.9 -> {q})")
     page.context.close()
+    srcs = {e["stem"]: e["src"] for e in json.loads(FORMULAS_JSON.read_text())}
+    # Switches while the Formulas' text is slow to come (2.5 s): Formula ->
+    # Formula -> Formula -> back, then a GIF; one loop at a time, the last
+    # one's, then none, and no frame drawn after the GIF.
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""(() => { const f = window.fetch; window.fetch = (u, o) => String(u).includes('formulas.json')
+        ? new Promise((r) => setTimeout(r, 2500)).then(() => f(u, o)) : f(u, o); })()""")
+    post_json(base + "/api/play", {"path": "@formula:time-gate"})
+    page.goto(base + "/#now")
+    page.wait_for_function("document.querySelector('#now-cap')?.textContent == 'Loading…'", timeout=15000)
+    for p in ("@formula:starfield", "@formula:time-gate?a=0.5", "@formula:starfield?a=0.2"):
+        post_json(base + "/api/play", {"path": p})
+        page.wait_for_timeout(650)
+    page.wait_for_function("document.querySelector('#now-panel').dataset.src == '@formula:starfield?a=0.2'", timeout=15000)
+    page.wait_for_timeout(800)
+    d = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, c.dataset.src, +c.dataset.len]")
+    check(d == ["1", "@formula:starfield?a=0.2", len(srcs["starfield"])], f"now formula: switched while loading, only the last one plays ({d})")
+    gif = card_gifs()[0]
+    post_json(base + "/api/play", {"path": gif})
+    page.wait_for_function(f"document.querySelector('#now-drift').dataset.path == {json.dumps(gif)}", timeout=20000)
+    f1 = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, c.dataset.frames]")
+    page.wait_for_timeout(700)
+    f2 = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, c.dataset.frames]")
+    check(f1 == f2 and f1[0] == "0", f"now formula: then a GIF: no Formula frame drawn over it ({f1}, {f2})")
+    page.context.close()
+    # One of yours on the card (its .psb written by the Formulas view), and an inline one.
+    card_src = 'name "Card ramp"\nloop 2\ngray(saw(x + t / 2))'
+    put_bytes(base + "/api/files/formulas/now-card.psi", card_src.encode())
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    open_formulas(page)
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(base + "/formulas/now-card.psb", timeout=10).read()
+            break
+        except urllib.error.HTTPError:
+            time.sleep(0.3)
+    post_json(base + "/api/play", {"path": "/formulas/now-card.psi"})
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-panel').dataset.src == '/formulas/now-card.psi'", timeout=15000)
+    d = (page.inner_text("#now-title"), page.eval_on_selector("#now-panel", "c => +c.dataset.len"), raw_text(page))
+    check(d == ("Card ramp", len(card_src), ""), f"now formula: one of yours on the card plays by its name ({d})")
+    inline = page.evaluate("(src) => import('./js/psikit.js').then((m) => m.path({ src }))", srcs["starfield"])
+    post_json(base + "/api/play", {"path": inline})
+    page.wait_for_function("document.querySelector('#now-panel').dataset.src?.startsWith('@formula?psb=')", timeout=15000)
+    d = (page.inner_text("#now-title"), page.eval_on_selector("#now-panel", "c => +c.dataset.len"), raw_text(page))
+    check(d == ("Starfield", len(srcs["starfield"]), ""), f"now formula: an inline one plays as the Formula it was made from ({d[:2]}; {d[2]!r})")
+    # Sent from this page (Show on panel): previewed, a second send too;
+    # sent from elsewhere since, not this page's: plain words.
+    bodies: list[bytes] = []
+    page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
+    for name, stem in (("Starfield", "starfield"), ("Time gate", "time-gate")):
+        goto_view(page, "formulas")
+        page.click(f"#psi-ex .psi-tile[data-name='{name}']")
+        page.wait_for_function(f"document.querySelector('#psi-side.open #psi-d-title')?.textContent == {json.dumps(name)}", timeout=20000)
+        clear_toasts(page)
+        page.click("#psi-show")
+        last_toast(page, "ok")
+        goto_view(page, "now")
+        page.wait_for_function(f"(c => c.dataset.src?.startsWith('@formula:~sent') && +c.dataset.len == {len(srcs[stem])})(document.querySelector('#now-panel'))", timeout=15000)
+        check(page.eval_on_selector("#now-cap", "e => e.textContent") == "", f"now formula: sent from this page, {name} previews")
+    post_bytes(base + "/api/play/formula", bodies[0])
+    page.wait_for_function("document.querySelector('#now-cap').textContent == 'Preview not available for this Formula'", timeout=15000)
+    check(page.eval_on_selector("#now-panel", "c => c.dataset.loops") == "0", "now formula: sent from elsewhere since: not previewed as this page's")
+    page.context.close()
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/now-card.psi", method="DELETE"), timeout=30)
+    put_json(base + "/api/config", {"formula_keep": "hold"})
+    post_json(base + "/api/play", {"path": "@formula:time-gate"})
     # One this browser can't find (the bundled list empty): plain words.
     page = new_page(browser, "laptop", errors)
     page.route("**/formulas.json*", lambda r: r.fulfill(status=200, content_type="application/json", body="[]"))
