@@ -567,7 +567,7 @@ fn main() -> Result<()> {
         }
         Tuner::boot(saved.as_deref(), staged.as_deref())
     };
-    let panel_cfg = PanelConfig::new(&tuner.running.effective());
+    let panel_cfg = PanelConfig::new(&tuner.running.effective()); #[cfg(esp32s3)] s3board::before_panel(reset, &nvs_config); // (the S3 board's, on this line: the classic's lines stay put; s3board.rs)
     let mut panel = Panel::new(&panel_cfg)?;
     heapmap::cp("hub75 panel up (dma)");
     log::info!(
@@ -3912,3 +3912,8 @@ fn heartbeat(
         membank::buffers_line()
     );
 }
+
+// The ESP32-S3 board's start-up (scan register, pin check, brownout-loop
+// guard): last in the file, so the classic's lines stay where they were.
+#[cfg(esp32s3)]
+mod s3board;

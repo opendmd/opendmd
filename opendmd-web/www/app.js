@@ -102,6 +102,15 @@ if (found) {
   $('#where').textContent = s.hostname || 'OpenDMD display';
   // No API key: one banner offering to set one (js/keynag.js), gone once set.
   on('config', (c) => { if (c && c.api_key_set === false) import('./js/keynag.js').then((m) => m.show()); else $('#keynag')?.remove(); });
+  // Power-safe (the ESP32-S3's brownout-loop guard, `reset_note` "power-safe: …"):
+  // the panel was not started this boot; one banner until a restart starts it.
+  const powerSafe = (st) => {
+    const ps = /^power-safe:/.test(st?.reset_note || '');
+    if (ps && !$('#powersafe')) $('#main').prepend(h('div.banner', { id: 'powersafe', role: 'alert' }, "The panel wasn't started: its power supply is missing or too weak, and the display kept resetting. Check the panel's 5 V supply, then restart the display."));
+    else if (!ps) $('#powersafe')?.remove();
+  };
+  on('status', powerSafe);
+  powerSafe(s);
   app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
   route();
 } else if ((app.demo = await demoCard(app.wasm.cardPath))) {
