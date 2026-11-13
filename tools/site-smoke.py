@@ -7496,7 +7496,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                                timeout=20000)
         names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.firstChild.textContent)")
         if size == "laptop":
-            check(names == [e["name"] for e in every] and len(names) == 39, f"gallery: the {len(names)} examples, newest first")
+            check(names == [e["name"] for e in every] and len(names) == 40, f"gallery: the {len(names)} examples, newest first")
             # What each says of itself: the bundled ten marked, the looks badged.
             marked = page.eval_on_selector_all("#examples ~ ul .ftile h3:has(.fbadge[title^='The web app'])", "els => els.map(e => e.firstChild.textContent)")
             looks = page.locator("#examples ~ ul .ftile h3 .fbadge", has_text="look").count()
