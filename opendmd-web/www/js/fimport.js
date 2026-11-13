@@ -48,19 +48,26 @@ export function sniff(b) {
 
 // An SVG made safe to draw: no DOCTYPE or entities; parsed as XML (never
 // put in the page), its root an `svg` in the SVG namespace. Out: scripts,
-// foreign content, frames, objects, media, animation, styles, embedded
-// pictures (an <image> of any kind: a small file can hold a huge one), and
-// what multiplies the drawing (masks, markers, filters, clip paths,
-// patterns); `on…` attributes; links but to its own `#parts` (each written
-// again as a plain `href`); values that could load (`url(` not `url(#`,
-// `@import`, image-set, `image(`, `src(`, or a CSS escape). Then what it
-// draws is counted, every <use> through what it copies (the first of an
-// id, as the browser takes it; a loop is endless), refused past 20,000
-// parts: a picture is drawn in one go, and drawing that much would hold
-// the page up. Sized at RW × RH at most, its own shape kept. {text, w, h}.
-const NS = 'http://www.w3.org/2000/svg';
-const BAD = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'set', 'animate', 'animateMotion', 'animateTransform', 'handler', 'listener', 'style', 'image', 'feImage', 'filter', 'mask', 'marker', 'clipPath', 'pattern']);
-const LOADS = /url\(\s*['"]?\s*(?!#)|@import|image-set|image\(|src\(|\\/i;
+// foreign content, frames, objects, media, animation, embedded pictures
+// (an <image> of any kind: a small file can hold a huge one) and what
+// multiplies the drawing (masks, markers, filters, clip paths, patterns,
+// dashes, CSS filters and blending); `on…` attributes; links but to its own
+// `#part` (each written again as a plain `href`); values and styles that
+// could load (`url(` not `url(#`, `@import`, image-set, `image(`, `src(`,
+// a CSS escape). Then what it would draw is weighed, every <use> through
+// what it copies (the first of an id, as the browser takes it; a loop is
+// endless): each part, its path's or points' length, its text, more for a
+// gradient's fill. Past COST it is refused: a picture is drawn in one go,
+// and that much would hold the page up (measured: just under it, 5,900
+// full-size translucent stroked rects draw in ~0.6 s).
+// Sized at RW × RH at most, its own shape kept. {text, w, h, pic (it held
+// an <image>)}.
+const NS = 'http://www.w3.org/2000/svg', COST = 6e4;
+// (Frames, objects and HTML's media are not SVG: anything outside its namespace goes.)
+const BAD = new Set(['script', 'foreignObject', 'audio', 'video', 'set', 'animate', 'animateMotion', 'animateTransform', 'image', 'feImage', 'filter', 'mask', 'marker', 'clipPath', 'pattern']);
+const LOADS = /url\((?!\s*['"]?\s*#)|@import|image-set|image\(|src\(|\\/i, HEAVY = /filter|blend|dasharray/i;
+// (CSS without its heavy declarations: the rest, a logo's fills, kept.)
+const light = (v) => v.replace(/[^;{}]*(filter|blend|dasharray)[^;{}]*;?/gi, '');
 export function sanitize(text) {
   const no = () => say('This SVG can’t be read here');
   if (text.length > MB) throw say('This SVG is too big to read here: 1 MB at most');
@@ -68,34 +75,38 @@ export function sanitize(text) {
   const d = new DOMParser().parseFromString(text, 'image/svg+xml'), r = d.documentElement;
   if (r.namespaceURI != NS || r.localName != 'svg' || d.getElementsByTagNameNS('*', 'parsererror').length) throw no();
   for (const n of [...d.childNodes]) if (n !== r) n.remove();
+  let pic = false;
   const scrub = (e) => {
     for (const a of [...e.attributes]) {
       const n = a.localName.toLowerCase(), v = a.value.trim();
-      if (n == 'href' || n.startsWith('on') || LOADS.test(v)) e.removeAttributeNode(a);
-      if (n == 'href' && v[0] == '#' && !LOADS.test(v)) e.setAttribute('href', v);
+      if (n == 'href' || n.startsWith('on') || LOADS.test(v) || HEAVY.test(n)) e.removeAttributeNode(a);
+      else if (n == 'style') a.value = light(v);
+      if (n == 'href' && /^#[\w.:-]+$/.test(v)) e.setAttribute('href', v);
     }
   };
   for (const e of [...r.querySelectorAll('*')]) {
-    if (e.namespaceURI != NS || BAD.has(e.localName)) e.remove();
-    else scrub(e);
+    if (e.namespaceURI != NS || BAD.has(e.localName) || (e.localName == 'style' && LOADS.test(e.textContent))) { pic ||= e.localName == 'image'; e.remove(); } else {
+      if (e.localName == 'style') e.textContent = light(e.textContent);
+      scrub(e);
+    }
   }
   scrub(r);
   const ids = new Map(), memo = new Map(), on = new Set();
   for (const e of r.querySelectorAll('[id]')) if (!ids.has(e.id)) ids.set(e.id, e);
-  const parts = (e) => {
+  const weigh = (e) => {
     if (memo.has(e)) return memo.get(e);
     if (on.has(e)) return Infinity;
     on.add(e);
-    let n = 1;
-    for (const c of e.children) if ((n += parts(c)) > 2e4) break;
-    const t = e.localName == 'use' && ids.get((e.getAttribute('href') || '').slice(1));
-    if (t) n += parts(t);
+    let n = 10 + ((e.getAttribute('d') || e.getAttribute('points') || '').length >> 2) + (/url/.test(`${e.getAttribute('fill')}${e.getAttribute('stroke')}${e.getAttribute('style')}`) ? 16 : 0);
+    for (const c of e.childNodes) if ((n += c.nodeType == 1 ? weigh(c) : c.nodeType == 3 ? c.length : 0) > COST) break;
+    const t = e.localName == 'use' && ids.get(e.getAttribute('href')?.slice(1));
+    if (t) n += weigh(t);
     on.delete(e);
     memo.set(e, n);
     return n;
   };
   let big;
-  try { big = parts(r) > 2e4; } catch { big = true; }
+  try { big = !(weigh(r) <= COST); } catch { big = true; }
   if (big) throw say('This SVG is too complex to draw here');
   // (Its shape: the viewBox's when it is four sane numbers, else its width and height, else 300 × 150.)
   const ok = (v) => v > 0 && v < 1e5, vb = (r.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number), dim = (k) => { const v = parseFloat(r.getAttribute(k)); return ok(v) ? v : 0; };
@@ -106,12 +117,9 @@ export function sanitize(text) {
   const z = Math.min(RW / aw, RH / ah), w = Math.max(1, Math.round(aw * z)), hh = Math.max(1, Math.round(ah * z));
   r.setAttribute('width', w);
   r.setAttribute('height', hh);
-  return { text: new XMLSerializer().serializeToString(d), w, h: hh };
+  return { text: new XMLSerializer().serializeToString(d), w, h: hh, pic };
 }
 
-// A file's pixels, {w, h, d: RGBA}: sniffed; an SVG made safe first; one
-// way in for every kind (a blob URL, an image never in the page, its size
-// checked before it is drawn, drawn 1:1, read, the URL let go).
 // Whether this browser reads back what was drawn: a privacy setting may
 // add noise to it (Brave, Firefox's resist fingerprinting), and then no
 // picture would come in as it is. Tried once, on four pixels.
@@ -126,13 +134,16 @@ function readsTrue() {
   return honest;
 }
 
+// A file's pixels, {w, h, d: RGBA}: sniffed; an SVG made safe first; one
+// way in for every kind (a blob URL, an image never in the page, its size
+// checked before it is drawn, drawn 1:1, read, the URL let go).
 export async function read(file) {
   if (!readsTrue()) throw say('This browser changes what a page reads back from a picture (a privacy setting), so it can’t make a sprite from one here');
   if (file.size > 8 * MB) throw say('This picture is too big to read here: 8 MB at most');
   const b = new Uint8Array(await file.arrayBuffer()), k = sniff(b);
   if (!k) throw say('This file isn’t a picture OpenDMD can read: PNG, JPEG, GIF, WebP, BMP or SVG');
-  let blob = new Blob([b], { type: 'image/' + k }), w = 0, hh = 0;
-  if (k == 'svg') { const s = sanitize(new TextDecoder().decode(b)); blob = new Blob([s.text], { type: 'image/svg+xml' }); w = s.w; hh = s.h; }
+  let blob = new Blob([b], { type: 'image/' + k }), w = 0, hh = 0, pic = false;
+  if (k == 'svg') { const s = sanitize(new TextDecoder().decode(b)); blob = new Blob([s.text], { type: 'image/svg+xml' }); ({ w, h: hh, pic } = s); }
   const u = URL.createObjectURL(blob), img = new Image();
   try {
     await new Promise((ok, bad) => {
@@ -146,7 +157,11 @@ export async function read(file) {
     if (!w || !hh || w > SIDE || hh > SIDE) throw say(`This picture is too big: ${SIDE.toLocaleString('en')} pixels a side at most`);
     const g = h('canvas', { width: w, height: hh }).getContext('2d', { willReadFrequently: true });
     g.drawImage(img, 0, 0, w, hh);
-    try { return { w, h: hh, d: g.getImageData(0, 0, w, hh).data }; } catch { throw say('This browser can’t read this SVG'); }
+    let d;
+    try { d = g.getImageData(0, 0, w, hh).data; } catch { throw say('This browser can’t read this SVG'); }
+    // (An SVG around a picture, the picture taken out: nothing left.)
+    if (pic && !d.some((v, i) => i % 4 == 3 && v)) throw say('This SVG holds a picture: open the picture itself');
+    return { w, h: hh, d };
   } finally { URL.revokeObjectURL(u); }
 }
 
@@ -424,8 +439,8 @@ export async function open(file, kit) {
     const c = o.crop;
     if (o.size == 'as') { const z = Math.min(1, 64 / c.w, 32 / c.h); [o.W, o.H] = [clamp(c.w * z, 1, 64), clamp(c.h * z, 1, 32)]; } else if (SIZES[o.size]) [o.W, o.H] = SIZES[o.size];
     sizeS.value = o.size;
-    wI.value = o.W;
-    hI.value = o.H;
+    // (Not the one being typed in.)
+    for (const [i, v] of [[wI, o.W], [hI, o.H]]) if (i != document.activeElement) i.value = v;
   }
   function bgRow() {
     const col = (k, l) => h('input', { type: 'color', id: 'psi-imp-' + k, 'aria-label': l, value: '#' + (o[k] ?? 0).toString(16).padStart(6, '0'), onchange: (e) => { o[k] = rgbOf(e.target.value); run(); } });

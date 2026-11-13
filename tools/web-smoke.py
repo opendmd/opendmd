@@ -6413,6 +6413,26 @@ def psi_import_checks(browser, base: str, errors: list[str]) -> None:
     svg_got = imp_add(page)
     check(set(imp_key(svg_got)) == {"R #f00", "B #00f"} and "  RRRRRRRRBBBBBBBB\n" in svg_got,
           f"import: an SVG with only a viewBox, cropped to fill: red, then blue ({imp_key(svg_got)})")
+    # Drawn right: an Illustrator-style logo (its colours in <style> classes), a gradient named in a quoted url().
+    for what, svg2, want_hex in (
+        ("an Illustrator-style logo's <style> classes", '<svg xmlns="http://www.w3.org/2000/svg" id="Layer_1" data-name="Layer 1" viewBox="0 0 64 32"><defs><style>.cls-1{fill:#e4002b;}.cls-2{fill:#00a0e0;stroke-dasharray:2;filter:blur(1px)}</style></defs><title>logo</title><rect class="cls-1" width="32" height="32"/><rect class="cls-2" x="32" width="32" height="32"/></svg>', {"#e4002b", "#00a0e0"}),
+        ("a gradient in url('#g')", """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 32"><defs><linearGradient id="g"><stop offset="0" stop-color="#0f0"/><stop offset="1" stop-color="#0f0"/></linearGradient><radialGradient id="h"><stop offset="0" stop-color="#ff0"/><stop offset="1" stop-color="#ff0"/></radialGradient></defs><rect width="32" height="32" style="fill:url('#g')"/><rect x="32" width="32" height="32" fill="url( &quot;#h&quot; )"/></svg>""", {"#0f0", "#ff0"})):
+        page.fill("#psi-src", IMP_BASE)
+        page.wait_for_timeout(300)
+        imp_open(page, svg2.encode(), "logo.svg", "image/svg+xml")
+        imp_pick(page, "#psi-imp-size", "16x16")
+        imp_pick(page, "#psi-imp-fit", "stretch")
+        imp_pick(page, "#psi-imp-samp", "sharp")
+        hexes2 = {k.split(" ")[1] for k in imp_key(imp_add(page))}
+        check(hexes2 == want_hex, f"import: {what} drawn in their colours ({sorted(hexes2)})")
+    # An SVG that is only a picture around a PNG: said so.
+    page.fill("#psi-src", IMP_BASE)
+    page.wait_for_timeout(300)
+    import base64 as b64
+    imp_give(page, ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><image width="8" height="8" href="data:image/png;base64,' + b64.b64encode(art).decode() + '"/></svg>').encode(), "wrapped.svg", "image/svg+xml")
+    t_wrap = imp_toast(page)
+    clear_toasts(page)
+    check("holds a picture" in t_wrap, f"import: an SVG that only wraps a picture says to open the picture itself ({t_wrap!r})")
 
     # A GIF (dropped) and a JPEG (pasted) decode; a text paste is pasted.
     page.fill("#psi-src", IMP_BASE)
@@ -6459,6 +6479,7 @@ def psi_import_checks(browser, base: str, errors: list[str]) -> None:
     page.dispatch_event("#psi-imp-w", "change")
     page.fill("#psi-imp-h", "33")
     page.dispatch_event("#psi-imp-h", "change")
+    page.focus("#psi-imp-src")  # (a field being typed in is left as typed)
     imp_settle(page)
     wh = (page.input_value("#psi-imp-w"), page.input_value("#psi-imp-h"))
     big = imp_add(page)
@@ -6570,10 +6591,24 @@ def imp_hostile_corpus(base: str) -> list[tuple[str, bytes]]:
         ("embedded 16000 x 16000 PNG", imp_embedded(16000, 16000).encode()),
         ("CSS escapes and image-set", f'{IMP_H}<style>@\\69mport "{c}?e1"; rect{{fill:\\75rl({c}?e2#x)}}</style><rect width="9" height="9" style="mask-image:image-set(\'{c}?e3\' 1x)" fill="\\75rl({c}?e4#p) red"/></svg>'.encode()),
         ("non-finite viewBox", b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 Infinity 1e400"><rect width="16" height="16" fill="#0f0"/></svg>'),
+        # The second review's: drawing that weighs more than it counts.
+        ("percent-encoded links", imp_chain(6, 10, "href=").replace('"#L', '"#%4C').encode()),
+        ("a long path copied 1,000 times", (IMP_H + f'<defs><path id="p" d="{imp_rpath(1000)}"/></defs>' + '<use href="#p" fill="#f00" fill-opacity=".02" fill-rule="evenodd"/>' * 1000 + "</svg>").encode()),
+        ("one path of 100,000 segments", (IMP_H + f'<path fill="#f00" fill-rule="evenodd" d="{imp_rpath(100000)}"/></svg>').encode()),
+        ("CSS blur on 8,000 rects", (IMP_H + '<rect width="64" height="32" fill="#f00" filter="blur(4px)" style="filter:blur(4px) drop-shadow(1px 1px 2px #000);mix-blend-mode:multiply"/>' * 8000 + "</svg>").encode()),
+        ("6,000 dashed paths", (IMP_H + "".join(f'<path fill="none" stroke="#f00" stroke-width="3" stroke-dasharray=".02" style="stroke-dasharray:.01" d="{imp_rpath(4)}"/>' for _ in range(6000)) + "</svg>").encode()),
+        ("dashed text copied 9,900 times", (IMP_H + '<defs><text id="t" y="20" font-size="30" fill="none" stroke="#f00" stroke-dasharray=".01">' + "@" * 20000 + "</text></defs>" + '<use href="#t"/>' * 9900 + "</svg>").encode()),
+        ("15,000 gradient rects", (IMP_H + '<defs><radialGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></radialGradient></defs>' + '<rect width="64" height="32" fill="url(#g)" opacity=".5"/>' * 15000 + "</svg>").encode()),
     ]
 
 
 IMP_H = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:x="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">'
+
+
+def imp_rpath(n: int, seed: int = 7) -> str:
+    import random
+    r = random.Random(seed * 100003 + n)
+    return "M0 0" + "".join(f"L{r.randint(0, 64)} {r.randint(0, 32)}" for _ in range(n))
 
 
 def imp_chain(levels: int, fan: int, attr: str, decoy: bool = False) -> str:
