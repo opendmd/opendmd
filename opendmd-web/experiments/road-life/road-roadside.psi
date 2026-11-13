@@ -1,10 +1,10 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Endless road"
-about "OutRun into a synthwave sunset: bends and hills without end"
+about "An arcade drive into a synthwave sunset: bends and hills without end"
 loop forever
 fps 100
--- Endless road: an OutRun drive into a synthwave sunset. Bends and hills
+-- Endless road: an arcade drive into a synthwave sunset. Bends and hills
 -- come from noise along the distance driven, which grows without end, so
 -- the track doesn't repeat; each time it plays it starts somewhere else.
 -- Palms and street lamps pass now and then on either side.
