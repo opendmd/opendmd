@@ -481,7 +481,11 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # one notice pinned in view (say/offer: under its control or at the top, in
 # the open sheet, Escape and Dismiss, two live regions, focus back):
 # ~50.4 KB gz as written.
-STUDIO_PAGE_GZ_BUDGET = 52 * 1024
+# 54 KB since studio-float F0 (2026-11-13, the owner's OK, site-only): the one-screen
+# workspace from 1000 x 620 up (FLOAT.md: the tools a column, the bench a scrolling column, the
+# frames under the stage, zoom and the guides in the chin, the bench's width set so Fit lands on
+# a whole step) and Space pressing a focused button rather than playing: ~52.9 KB gz as written.
+STUDIO_PAGE_GZ_BUDGET = 54 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
 # (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
@@ -507,6 +511,9 @@ STUDIO_LAZY = {
     "paste": (3 * 1024, ("paste.js",)),          # a paste that carries an image
     # import 6 KB (3 in the plan; branch 4, ~4.9 KB): the sheet and its frame, every message checked, frames to a piece or a layer.
     "import": (6 * 1024, ("import.js",)),        # Import…, a picture or video dropped, a paste too big to place, #import
+    # panels 10 KB (studio-float F1, 2026-11-13; ~4 in FLOAT.md before the owner added resizing and hide-all): the
+    # workspace's panels, docked or floating, dragged, moved by keys, resized, folded, closed, hidden all at once, kept.
+    "panels": (10 * 1024, ("panels.js", "panels.css")),  # a window of the workspace's size (1000 x 620 or more)
 }
 # Everything Import's frame fetches the first time it opens (S2 plan,
 # 2026-11-11, branch studio-s2-import): Create Art's page in its framed mode
@@ -518,7 +525,9 @@ IMPORT_OPEN_GZ_BUDGET = 330 * 1024
 # import.js and paste.js, as their lines).
 # 96 KB since S2 branch 5 (studio-s2-links: link.js, the pack's Share link, ~92.7 KB).
 # 98 KB since studio-share (2026-11-12, the notice above, ~96.2 KB).
-STUDIO_ALL_GZ_BUDGET = 98 * 1024
+# 110 KB since studio-float (2026-11-13, the owner's OK for 104 with "raise to what resizing and hide-all
+# need"): the workspace (F0) and the panels line (F1).
+STUDIO_ALL_GZ_BUDGET = 110 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
