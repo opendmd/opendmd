@@ -31,7 +31,8 @@ in a shot is anyone else's art).
 panels.json, beside the shots, says where the panel is in the ones the
 site's home page plays a Formula over (tools/site.py, home.js): the
 picture's name -> [left, top, width, height] in hundredths of the
-picture, and the Formula on it.
+picture, the Formula on it, the web app's pixels a LED there, and the
+frame it shows (ms into the Formula, at its seed).
 
 `--game-art DIR` (tools/game-art.py's output; `make screenshots
 GAME_ART=1`) casts game title screens from libretro-thumbnails, made
@@ -255,7 +256,13 @@ def formula_src(stem: str) -> str:
     return "\n".join(lines)
 
 
-def record(sim: Path, card: Path, stem: str, out: Path, frames: int = 75, at: int = 2000) -> None:
+# Where record() starts, and its step: frame i of a recording is the
+# Formula `RECORD_AT + i * RECORD_STEP` ms in, at seed 0 (the simulator's
+# first open, with no clock: opendmd-core fx_psi `next_seed`).
+RECORD_AT, RECORD_STEP = 2000, 40
+
+
+def record(sim: Path, card: Path, stem: str, out: Path, frames: int = 75, at: int = RECORD_AT) -> None:
     """A Formula as a panel GIF (the simulator's raw canvas, a frame at a
     time, as tools/demo-card.py records the Demoscene ones)."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -264,10 +271,10 @@ def record(sim: Path, card: Path, stem: str, out: Path, frames: int = 75, at: in
         psi.write_text(formula_src(stem))
         shots = []
         for i in range(frames):
-            subprocess.run([sim, "--root", card, "--formula", psi, "--screenshot-canvas", png, "--screenshot-at", str(at + i * 40)],
+            subprocess.run([sim, "--root", card, "--formula", psi, "--screenshot-canvas", png, "--screenshot-at", str(at + i * RECORD_STEP)],
                            check=True, capture_output=True)
             shots.append(Image.open(png).convert("RGB").quantize(64, dither=Image.Dither.NONE))
-    shots[0].save(out, save_all=True, append_images=shots[1:], duration=40, loop=0)
+    shots[0].save(out, save_all=True, append_images=shots[1:], duration=RECORD_STEP, loop=0)
 
 
 def own_cast(card: Path, overlay: Path, sim: Path) -> dict:
@@ -286,10 +293,12 @@ def own_cast(card: Path, overlay: Path, sim: Path) -> dict:
              g["copper-bars"], g["wormhole-run"], g["starfield"]]
     (overlay / "filelist.txt").write_text("\n".join(files) + "\n")
     (overlay / "sets").mkdir(exist_ok=True)
-    (overlay / "sets/Favourites.txt").write_text("\n".join([NOW, PHONE_NOW, "@formula:starfield", FOLLOW_GIF, KENNEY_WALK, "/formulas/fire.psi", g["plasma"], g["tunnel"]]) + "\n")
+    # (The walk's GIF opens on black and wipes in: its thumbnail is a sliver; the pan's is the scene.)
+    (overlay / "sets/Favourites.txt").write_text("\n".join([NOW, PHONE_NOW, "@formula:starfield", FOLLOW_GIF, KENNEY_PAN, "/formulas/fire.psi", g["plasma"], g["tunnel"]]) + "\n")
     return {"phone_now": PHONE_NOW, "now": NOW, "set": "Favourites", "folder": FOLDER,
             "ticks": [g["endless-road"], g["fire"]], "follow": FOLLOW_GIF, "game": [FOLLOW_GAME],
-            "plays": {"phone-now.png": "neon-city.psi", "now-follow.png": "rift-patrol.psi"}}
+            "plays": {"phone-now.png": "neon-city.psi", "now-follow.png": "rift-patrol.psi"},
+            "recorded": {"phone-now.png": PHONE_NOW, "now-follow.png": FOLLOW_GIF}}
 
 
 def panel_at(page: Page, parts: str | None, pad: int = 12) -> list[float]:
@@ -306,6 +315,28 @@ def panel_at(page: Page, parts: str | None, pad: int = 12) -> list[float]:
         }}
         return [(p.left - x) / w, (p.top - y) / h, p.width / w, p.height / h].map(v => Math.round(v * 1e5) / 1e3);
     }}""", pad)
+
+
+def led_scale(page: Page) -> int:
+    """Now's panel's pixels a LED (the web app's renderer draws at 6..10)."""
+    return page.evaluate("document.querySelector('#now-panel').width / 128")
+
+
+def frame_shown(png: Path, at: list[float], gif: Path) -> int:
+    """Which of `gif`'s frames (a recording: record()) the shot `png` shows
+    on its panel (`at`, panel_at's box): the one nearest at the LEDs' centres."""
+    shot = Image.open(png).convert("RGB")
+    l, t, w, h = (v / 100 for v in at)
+    W, H = shot.size
+    got = [shot.getpixel((int((l + (x + 0.5) * w / 128) * W), int((t + (y + 0.5) * h / 32) * H))) for y in range(32) for x in range(128)]
+    best = (float("inf"), 0)
+    im = Image.open(gif)
+    for i in range(im.n_frames):
+        im.seek(i)
+        f = im.convert("RGB")
+        d = sum((a - b) ** 2 for p, q in zip(got, (f.getpixel((x, y)) for y in range(32) for x in range(128))) for a, b in zip(p, q))
+        best = min(best, (d, i))
+    return best[1]
 
 
 def game_art(art: Path) -> list[str]:
@@ -374,6 +405,7 @@ def main() -> int:
             phone.goto(base + "/#now")
             now_ready(phone, c["phone_now"])
             panels["phone-now.png"] = panel_at(phone, None)
+            leds = {"phone-now.png": led_scale(phone)}
             shot(phone, a.out, "phone-now.png")
             phone.context.close()
             page = page_for(browser, LAPTOP)
@@ -494,11 +526,15 @@ def main() -> int:
             wait_lit(page, "#now-panel", 5)
             card = "[document.querySelector('#now-panel').closest('.card')]"
             panels["now-follow.png"] = panel_at(page, card)
+            leds["now-follow.png"] = led_scale(page)
             clip(page, a.out, "now-follow.png", card)
             page.context.close()
             browser.close()
         if c["plays"]:
-            (a.out / "panels.json").write_text(json.dumps({k: {"formula": c["plays"][k], "at": panels[k]} for k in sorted(c["plays"])}, indent=1) + "\n")
+            # The frame each shows (the site's overlay starts there: home.js).
+            ms = {k: RECORD_AT + RECORD_STEP * frame_shown(a.out / k, panels[k], overlay / c["recorded"][k].lstrip("/")) for k in c["plays"]}
+            (a.out / "panels.json").write_text(json.dumps({k: {"formula": c["plays"][k], "at": panels[k], "led": leds[k], "ms": ms[k], "seed": 0}
+                                                           for k in sorted(c["plays"])}, indent=1) + "\n")
             print(f"  {a.out / 'panels.json'}")
     finally:
         proc.terminate()
