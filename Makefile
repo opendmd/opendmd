@@ -1471,9 +1471,13 @@ emu-image-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/probe/dist/opendmd-*-full.bin $(EMU_DIR)/probe/dist/opendmd-*-app.bin
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=$(EMU_PROBE_VARIANT) FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_UPDATER)
+# The golden frames the classic's heap here cannot compile, each said and
+# counted (the judge allows these and no more): `big`'s two, VM and JIT.
+EMU_PROBE_SKIPS ?= --vm-skips 2 --jit-skips 2
 emu-probe: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe &&) \
-	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_PROBE_SKIPS) --log $(EMU_DIR)/logs/probe-last.log $(EMU_ARGS) && \
+	uv run --quiet tools/emu/probe_red.py --card --chip esp32 --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) --log $(EMU_DIR)/logs/probe-last.log $(EMU_PROBE_SKIPS)
 # The paint probe (firmware/src/paint_probe.rs, the paint-probe feature: the paint steps,
 # the overlay, `under(x, y)`, the Formulas that use them, each beside the cost
 # model's estimate) in a test board's 4mb layout: its .odfw in $(EMU_DIR)/paint/dist

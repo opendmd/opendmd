@@ -711,6 +711,11 @@ pub const LEGACY_ROOT: &str = "/sdcard/odm";
 /// only) works on the httpd task for at most this long per request, then
 /// answers `"done":false` and the client asks again.
 pub const RECURSIVE_DELETE_BUDGET: Duration = Duration::from_secs(4);
+/// A recursive `DELETE` reads a directory this many names at a time
+/// (removes them, reads it again): ~2 KB of heap for names of the pack's
+/// length, where a whole folder of the retired `odm/` tree (thousands) was
+/// an allocation past the heap (`opendmd_core::tree`).
+pub const RECURSIVE_DELETE_BATCH: usize = 32;
 /// How many prepared-copy keys (`u32` each) the `/api/cache` count holds at
 /// once. The walk takes the buckets a slice at a time until this many keys are
 /// held, then makes one pass over the manifest for that slice: 3,072 keys is

@@ -435,46 +435,23 @@ pub fn meta_manifest(path: &str) -> Option<String> {
 }
 
 /// Remove the directory `dir` and everything under it, deepest first, for
-/// at most `budget`: `(entries removed, done)`. One directory's names are
-/// read before any of them is removed (FATFS must not be iterating a
-/// directory while its entries go), and the task yields between entries so
-/// the player's reads get the FAT lock in between. `NotFound` if `dir` is
-/// not there.
+/// at most `budget`: `(entries removed, done)`. A directory's names are
+/// read [`config::RECURSIVE_DELETE_BATCH`] at a time before those are
+/// removed (FATFS must not be iterating a directory while its entries go),
+/// then read again until it is empty (`opendmd_core::tree`, host-tested):
+/// a folder of thousands (the retired `odm/` tree's) is never held whole.
+/// The task yields between entries so the player's reads get the FAT lock
+/// in between. `NotFound` if `dir` is not there; `OutOfMemory` if a
+/// batch's room could not be taken.
 pub fn remove_tree(dir: &str, budget: std::time::Duration) -> std::io::Result<(u32, bool)> {
-    fn go(
-        dir: &str,
-        until: std::time::Instant,
-        removed: &mut u32,
-        depth: u32,
-    ) -> std::io::Result<bool> {
-        let mut names = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
-            names.push((entry.file_name().to_string_lossy().into_owned(), is_dir));
-        }
-        for (name, is_dir) in names {
-            if std::time::Instant::now() >= until {
-                return Ok(false);
-            }
-            let p = format!("{dir}/{name}");
-            if is_dir {
-                if depth >= 8 || !go(&p, until, removed, depth + 1)? {
-                    return Ok(false);
-                }
-            } else {
-                std::fs::remove_file(&p)?;
-                *removed += 1;
-            }
-            std::thread::yield_now();
-        }
-        std::fs::remove_dir(dir)?;
-        *removed += 1;
-        Ok(true)
-    }
-    let mut removed = 0;
-    let done = go(dir, std::time::Instant::now() + budget, &mut removed, 0)?;
-    Ok((removed, done))
+    let until = std::time::Instant::now() + budget;
+    opendmd_core::tree::remove_tree(
+        &mut opendmd_core::tree::StdFs,
+        dir,
+        config::RECURSIVE_DELETE_BATCH,
+        &mut || std::time::Instant::now() >= until,
+        &mut || std::thread::yield_now(),
+    )
 }
 
 /// Is filesystem path `path` inside directory `dir` (case-insensitively, as

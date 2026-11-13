@@ -7,7 +7,7 @@ Correctness only, never timing; safe to run any time: it never touches a device.
 ```
 make emu-build     # fetch esp32sim at the pinned commit of our fork (SD in SPI mode via --sd/--sd-spi is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
-make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
+make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, the golden lines (VM and JIT: none differ, none stopped for the heap, skips said and counted, at most `big`'s two each: `EMU_PROBE_SKIPS`), then `probe_red.py --card` on its log -> EMU_PROBE_OK, PROBE_RED_OK
 make emu-paint-probe  # paint-probe image (4mb, a test board's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to a test board by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
 make emu-rig       # smoke image + the full-scale card (mkcard.py --rig): the FAT index build finishes, heap floor reported -> EMU_RIG_OK
 make emu-rig-tight # the same with a test board's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK
@@ -38,10 +38,15 @@ wants `psi-probe: done: no card`, every bundled Formula opened (offline, a clock
 the JIT spike's three hand-written kernels each as the VM (tiny 42 from every block, the call's value, the
 floor's bytes), the golden line with none differing, the goldens through the JIT's kernels with some matched
 and none differing, none on the VM and none skipped for the probe's heap (`--jit-skips N` allows N: the
-classic's no-card probe skips 2), and no `N differ`. `make emu-s3-probe` then runs `probe_red.py` on its log:
-the judge replays it (`run.py --replay LOG`: no emulator) as it is, which must pass, and doctored (kernels
-skipped, kernels on the VM, the kernel goldens line or the floor kernel's missing, the tiny kernel wrong),
-each of which must fail -> PROBE_RED_OK.
+classic's no-card probe skips 2), the VM's goldens line (`psi-probe: vm: golden frames:`) with none
+differing, none not run (the heap under 40 KB) and none skipped (`--vm-skips N` allows N); each skip, VM
+or JIT, said in a line of its own and counted in its summary (the two must agree), and no `N differ`. `make emu-s3-probe` then runs `probe_red.py` on its log:
+the judge replays it (`run.py --replay LOG`: no emulator) as it is, which must pass, and doctored (a VM
+golden skipped past the allowance, a skip said but not counted or counted but not said, VM goldens stopped
+for the heap, the VM goldens line missing, kernels skipped, kernels on the VM, a kernel skip not counted,
+the kernel goldens line or the floor kernel's missing, the tiny kernel wrong), each of which must fail ->
+PROBE_RED_OK. `make emu-probe` does the same for the card probe (`probe_red.py --card`: the spike's cases
+are the no-card probe's only).
 
 Files:
 
