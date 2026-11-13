@@ -42,9 +42,10 @@ api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy
        (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
        (tools/emu/api_lane.py says what each covers); prints EMU_API_OK.
 --chip s3: the ESP32-S3 preview image (VARIANT=s3) in esp32sim's S3 machine (`--chip s3 --board none`,
-       8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF). That machine has no SD card yet (the SD-over-SPI
-       card is a board of the classic ESP32's only), so the card is never attached: nocard runs as it
-       does on the classic, and probe needs --no-card.
+       8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF), the card on SPI3 through the GPIO matrix at the S3
+       firmware's pins (`--sd-spi 39,40,41,21`, SCLK, MOSI, MISO, CS): smoke and nocard run as on the
+       classic, probe with no card only (--no-card implied); rig, leak, heapmap, api and offline are
+       the classic's only for now.
 --no-card (probe): a probe image booted with no card runs only the card-free sections
        (psi_probe::run_nocard): pass on `psi-probe: done: no card`, every bundled Formula opened, the
        golden frames through the VM and the JIT's kernels all matching, and no `N differ` (N > 0).
@@ -53,6 +54,8 @@ Correctness only: emulated cycles are not trustworthy, never read timings from t
 """
 import argparse, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
+
+import api_lane
 
 EMU_DIR = Path(os.environ.get("EMU_DIR") or (Path(os.environ["SCRATCH"]) / "opendmd-emu-sim" if os.environ.get("SCRATCH") else Path(__file__).resolve().parents[2] / "target" / "emu-sim"))
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -171,16 +174,19 @@ def main():
                     help="api: the load's connections at once: 5 (the default: display-stress's five loads each on its own, and the simultaneous-upload bursts), 2 (status polls beside the rest) or 1")
     ap.add_argument("--host-psb", type=Path, help="offline: a directory of the lane's Formulas compiled by the host's psi build")
     ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
-    ap.add_argument("--chip", choices=["esp32", "s3"], default="esp32", help="the classic ESP32 (default) or the ESP32-S3 preview (smoke, rig, leak, api and offline need a card: esp32 only)")
+    ap.add_argument("--chip", choices=["esp32", "s3"], default="esp32", help="the classic ESP32 (default) or the ESP32-S3 preview (nocard, probe with no card, smoke; rig, leak, heapmap, api and offline: esp32 only)")
     ap.add_argument("--no-card", action="store_true", help="probe: no card attached; judge the card-free probe (always so with --chip s3)")
     ap.add_argument("--jit-skips", type=int, default=0, help="probe --no-card: golden frames the JIT may skip for the probe's heap (default 0; the classic's no-card probe skips 2)")
     ap.add_argument("--vm-skips", type=int, default=0, help="probe: golden frames the VM may skip for the probe's heap (default 0; the classic's card probe skips 2: `big`)")
     ap.add_argument("--replay", type=Path, help="judge a console log recorded before (the lane's own log) instead of running the emulator: the judges' red checks")
     a = ap.parse_args()
     if a.chip == "s3":
-        if a.mode not in ("nocard", "probe"):
-            sys.exit(f"run: --chip s3 runs nocard and probe only (esp32sim's S3 machine has no SD card yet), not {a.mode}")
-        a.no_card = True
+        # rig and leak need S3 images of the ballast and census feature sets and have not been run
+        # on the S3; api's OTA steps need an S3 bundle and updater, which do not exist yet.
+        if a.mode not in ("nocard", "probe", "smoke"):
+            sys.exit(f"run: --chip s3 runs nocard, probe and smoke, not {a.mode} (rig and leak are not tried on the S3 yet; api needs an S3 bundle and updater)")
+        if a.mode == "probe":
+            a.no_card = True
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
@@ -203,13 +209,11 @@ def main():
         return offline(a, sim, rom, want_sha)
     if a.mode == "nocard":
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
-        import api_lane
         a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None, extra={"boot_fx": "/formulas/x.psi"})
     if a.mode == "probe" and a.no_card:
         # Offline (NVS `network` = `off`, as the installer's offline box
         # writes): with no card the probe runs at once, and the setup AP
         # starting beside it would take ~90 KB of the heap its goldens need.
-        import api_lane
         a.image = api_lane.seeded_image(a.image, EMU_DIR / "probe-seed", ssid=None, extra={"network": "off"})
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
@@ -218,20 +222,14 @@ def main():
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
-    # the card (--sd: copy-on-write, the file never modified) in a microSD slot on VSPI, CS 5
+    # the card (--sd: copy-on-write, the file never modified) on the chip's SD pins (api_lane.SD_SPI)
     env = dict(os.environ)
-    if a.chip == "s3":
-        # No board (nothing wired to the pins: the panel's output goes nowhere),
-        # the DevKitC-1 N8R8's 8 MB of flash and 8 MB of octal PSRAM; no card.
-        cmd = [str(sim), "--chip", "s3", "--board", "none", "--boot", "rom", "--rom", str(rom),
-               "--flash-image", str(a.image), "--flash-mb", str(max(8, a.image.stat().st_size >> 20)), "--psram-mb", "8",
-               "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
-    else:
-        cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev", *(["--sd-spi", "18,23,19,5", "--sd", str(a.card)] if a.card else []), "--boot", "rom", "--rom", str(rom),
-               "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
-               "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
+    # The S3: no board (nothing wired to the pins: the panel's output goes nowhere), the
+    # DevKitC-1 N8R8's 8 MB of flash and 8 MB of octal PSRAM; the card on SPI3 (api_lane.machine).
+    cmd = [*api_lane.machine(sim, a.chip, a.image, rom, ["--sd", str(a.card)] if a.card else []),
+           "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)
-    print(f"emu: log {log}  (card {'none' if a.no_card and a.mode == 'probe' else a.card if a.chip == 'esp32' else 'none (S3)'}; {seconds} emulated s, {wall} s wall limit)", flush=True)
+    print(f"emu: log {log}  (card {a.card or 'none'}; {seconds} emulated s, {wall} s wall limit)", flush=True)
 
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
@@ -611,7 +609,6 @@ def offline(a, sim, rom, want_sha):
 def api(a, sim, rom, want_sha):
     """The API lane (api_lane.py), inside its own network namespace: run.py runs itself again
     under `unshare -rn` (an unprivileged user and network namespace with only a loopback)."""
-    import api_lane
     for what, p in (("--www-pack", a.www_pack), ("--bundle", a.bundle), ("--psb", a.psb)):
         if not p or not p.exists():
             sys.exit(f"EMU_API_FAIL: {what} missing: {p}")
