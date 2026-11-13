@@ -165,15 +165,17 @@ make emu-s3-nocard emu-s3-probe   # the ESP32-S3 preview (VARIANT=s3, not releas
   Kenney sprites and Formulas. Published docs describe how things are, not
   how they got there.
 - **One exception, for screenshots only** (owner, 2026-11-09): web app
-  screenshots (`docs/images/`, and the site pages that show them) may show
-  panel GIFs that Create Art made from libretro-thumbnails **title
-  screens**, credited ("Game title screens from libretro-thumbnails, made
-  into panel GIFs with Create Art"). `tools/game-art.py` makes them into
-  gitignored `target/game-art/` for `make screenshots GAME_ART=1`; the
-  screenshots published now show our own Formulas instead, and carry no
-  such credit. The GIFs themselves
-  are never committed, hosted or put on a published card; no box art or
-  logos beyond what a title screen contains; never pack or card GIFs, and
+  screenshots may show panel GIFs that Create Art made from
+  libretro-thumbnails **title screens** (`make screenshots GAME_ART=1`;
+  `tools/game-art.py` writes them to gitignored `target/game-art/`). The
+  published shots show our own Formulas instead and carry no credit.
+  Publishing GAME_ART shots means restoring the credit ("Game title screens
+  from libretro-thumbnails, made into panel GIFs with Create Art") in
+  `README.md`, `site/theme/footer.html` and the licences text in
+  `tools/site.py`, and removing the `{{plays:}}` markers from
+  `site/pages/home.html` (a live Formula would cover the game's panel).
+  The GIFs are never committed, hosted or put on a published card; no box
+  art or logos beyond what a title screen holds; never pack or card GIFs,
   nothing from GifCities.
 
 ## Commits

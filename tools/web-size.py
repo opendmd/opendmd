@@ -117,7 +117,8 @@ live panels (`ref/home.js`) and the gallery's tiles on hover
 (`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB; the hero's
 show (`ref/hero.js`: the panel's transitions, a GIF decoder and the
 playlist; imported by home.js after the page has loaded) a line of its
-own, <= 5 KB; the gallery's
+own, <= 5 KB, and so do the web app's LEDs over the home page's
+screenshots (`ref/leds.js`), <= 2 KB; the gallery's
 sorting and filtering (`ref/ftsort.js`) a line of its own, <= 3 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
@@ -656,6 +657,11 @@ FTSORT_GZ_BUDGET = 3 * 1024
 # transitions and the GIF decoder; it loads after the page has).
 HERO = "hero.js"
 HERO_GZ_BUDGET = 5 * 1024
+# The web app's LEDs over the home page's screenshots whose panel plays
+# (ref/leds.js, imported by home.js as the first nears the screen): a line
+# of its own, <= 2 KB (2026-11-13, branch road-wording: ~1.2 KB gz).
+LEDS = "leds.js"
+LEDS_GZ_BUDGET = 2 * 1024
 
 
 # The signature trailer `fw-sign.py sign-www` appends (docs/www-pack.md).
@@ -791,6 +797,7 @@ def main() -> int:
         shared = (0, 0)
         ftsort = (0, 0)
         hero = (0, 0)
+        leds = (0, 0)
         craw = cgz = 0
         sp_raw = sp_gz = 0
         sp_seen: set[str] = set()
@@ -811,6 +818,9 @@ def main() -> int:
                     continue
                 if p.name == HERO:
                     hero = (len(b), g)
+                    continue
+                if p.name == LEDS:
+                    leds = (len(b), g)
                     continue
                 if p.name == SHARED_REF:
                     shared = (len(b), g)
@@ -897,6 +907,9 @@ def main() -> int:
         verdict = "ok" if hero[1] <= HERO_GZ_BUDGET else "OVER BUDGET"
         print(f"{'hero':<10} raw {hero[0]:>9,}           gz {hero[1]:>9,} / {HERO_GZ_BUDGET // 1024} KB {verdict}")
         ok &= 0 < hero[1] <= HERO_GZ_BUDGET
+        verdict = "ok" if leds[1] <= LEDS_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'leds':<10} raw {leds[0]:>9,}           gz {leds[1]:>9,} / {LEDS_GZ_BUDGET // 1024} KB {verdict}")
+        ok &= 0 < leds[1] <= LEDS_GZ_BUDGET
         print()
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
