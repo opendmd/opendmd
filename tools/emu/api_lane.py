@@ -47,6 +47,9 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               the heap census (`emu-census`) of the last quiet spell against the earlier ones'
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
+  odm         (boot A's card copy has a retired /odm/Consoles of ODM_FILES long names, flat)
+              DELETE /api/files/odm?recursive=1 until done: every entry removed, /odm 404,
+              no abort (a whole folder's names in one Vec was past the heap: `opendmd_core::tree`)
   ota         GET /api/firmware (layout v4); bundles for table v3, with a bad signature, a bad image: 422
   start-up    (boot A's NVS seeded with boot_fx = a bundled Formula, BOOT_GOOD) the start-up show
               was that Formula (`boot show: formula @formula:…`, its frames drawn, then the
@@ -448,6 +451,27 @@ def blob(seed: int, n: int) -> bytes:
 
 # --- the lane --------------------------------------------------------------------
 
+# The retired odm/ tree's flat folder on boot A's card (`odm_card`): its names, all in one
+# Vec as `files::remove_tree` held them, were ~110 KB, past the display's heap.
+ODM_FILES = 1500
+
+
+def odm_card(card: Path, out: Path) -> Path:
+    """A copy of `card` (sparse) with /odm/Consoles holding ODM_FILES small files with
+    long names, written with mtools."""
+    out.unlink(missing_ok=True)
+    subprocess.run(["cp", "--sparse=always", str(card), str(out)], check=True)
+    src = out.with_suffix(".odm")
+    shutil.rmtree(src, ignore_errors=True)
+    (src / "Consoles").mkdir(parents=True)
+    for i in range(ODM_FILES):
+        (src / "Consoles" / f"SNES_Some_Longer_Retired_Title_{i:04d}.odm").write_bytes(b"ODM1")
+    env = {**os.environ, "MTOOLS_SKIP_CHECK": "1"}
+    subprocess.run(["mcopy", "-s", "-Q", "-m", "-i", str(out), str(src), "::/odm"], check=True, env=env)
+    shutil.rmtree(src)
+    return out
+
+
 class Lane:
     def __init__(self, a, sim, rom, fail_rx):
         self.a, self.sim, self.rom, self.fail_rx = a, sim, rom, fail_rx
@@ -494,7 +518,8 @@ class Lane:
     # -- boot A ----------------------------------------------------------------
 
     def run_a(self):
-        emu, api = self.boot("A", self.a.card, True, self.card_out)
+        self.card_a = odm_card(self.a.card, self.logs / f"api-{self.stamp}-card-a.img")
+        emu, api = self.boot("A", self.card_a, True, self.card_out)
         self.emu = self.emu_a = emu
         try:
             self.boot_checks(emu, api)
@@ -543,6 +568,7 @@ class Lane:
                 self.bursts(emu, api)
             self.load_rounds(emu, api)
             self.cache_delete(emu, api)
+            self.odm_delete(emu, api)
             self.ota_refusals(api)
             self.startup_a(emu, api)
             self.final_a(emu, api)
@@ -1520,6 +1546,26 @@ class Lane:
         emu.wait_for(re.compile(re.escape(f"] {gif} <- original")), 60, mark, f"`{gif} <- original`")
         self.ok("index rebuilt", f"{st0['files']} -> {fi['files']} records, builds {builds0} -> {fi['builds']} (the one under way dropped), stale false, no fat index warnings; /cache/{cat} 404; {gif} plays from the original")
 
+    # -- the retired odm/ tree, a flat folder of thousands ------------------------
+
+    def odm_delete(self, emu, api):
+        _, listing = api.json("GET", "/api/files?dir=/odm/Consoles")
+        n = len(listing["entries"])
+        self.expect(n == ODM_FILES, "odm delete", f"/odm/Consoles lists {n} entries, the card copy has {ODM_FILES}")
+        rounds, removed, done = 0, 0, False
+        while not done:
+            _, r = api.json("DELETE", "/api/files/odm?recursive=1", timeout=120)
+            rounds += 1
+            removed += r["removed"]
+            done = r["done"] is True
+            self.expect(rounds < 40, "odm delete", f"/odm not done after {rounds} rounds")
+        emu.check()
+        # The files, /odm/Consoles and /odm.
+        self.expect(removed == ODM_FILES + 2, "odm delete", f"{removed} entries removed, want {ODM_FILES + 2}")
+        api.call("GET", "/api/files?dir=/odm", want=(404,))
+        self.absent.add("/odm")
+        self.ok("odm delete", f"/odm (a flat folder of {ODM_FILES}) removed in {rounds} round(s), {removed} entries; /odm 404")
+
     # -- OTA refusals and the end of boot A -----------------------------------
 
     def ota_refusals(self, api):
@@ -1882,5 +1928,7 @@ def run(a, sim, rom, fail_rx) -> int:
     for n in lane.notes:
         print(f"note  {n}")
     lane.card_out.unlink(missing_ok=True)
+    if getattr(lane, "card_a", None):
+        lane.card_a.unlink(missing_ok=True)
     print(f"EMU_API_OK ({time.time() - t0:.0f} s wall)")
     return 0
