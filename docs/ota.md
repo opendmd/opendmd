@@ -451,8 +451,8 @@ browser doing the fetching: the player itself never goes to the internet.
   which the page reads `GET /api/www` and says whether the old web app is
   still in place. If the firmware went in and the web app did not, the
   message says both.
-- In the web demo (no player) the Settings view has no Firmware card, so
-  there is nothing to check.
+- In the web demo the Firmware card says the demo can't install firmware,
+  so there is nothing to check.
 
 ## Related protections
 

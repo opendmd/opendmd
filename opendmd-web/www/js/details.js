@@ -138,7 +138,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     h('div.card', h('h2', title), h('p.muted', intro), items.map((it) => it.el),
       h('div.row.dl-foot', h('button', { id: 'dl-cancel', onclick: () => done(null) }, 'Cancel'), okBtn)));
   let done;
-  const result = new Promise((res) => { done = (v) => { el.remove(); removeEventListener('keydown', esc); for (const u of urls) URL.revokeObjectURL(u); res(v); }; });
+  const result = new Promise((res) => { done = (v) => { el.remove(); removeEventListener('keydown', esc); for (const u of urls) URL.revokeObjectURL(u); urls.length = 0; urls.gone = 1; res(v); }; });
   const esc = (e) => e.key === 'Escape' && done(null);
   addEventListener('keydown', esc);
   document.body.append(el);
@@ -156,11 +156,14 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     const err = h('div.bad.dl-err');
     let src = '';
     if (file) urls.push(src = URL.createObjectURL(file));
-    else if (init.path) src = enc(init.path);
+    else if (init.path && !app.src.memory) src = enc(init.path);
+    const img = src || init.path ? h('img', src ? { src, alt: '' } : { alt: '' }) : h('div');
+    // (The web demo's card is in memory: the GIF's bytes, as an object URL.)
+    if (!src && init.path) app.previewBytes(init.path).then((b) => { if (!urls.gone) urls.push(img.src = URL.createObjectURL(new Blob([b], { type: 'image/gif' }))); }, () => {});
     const it = {
       title, platform, category, author, init, file, out: null,
       el: h('div.dl-item', { 'data-i': i },
-        src ? h('img', { src, alt: '' }) : h('div'),
+        img,
         h('div',
           file && h('div.cap.mono', file.name),
           h('div.form',

@@ -244,14 +244,16 @@ export const app = {
   watch(key, ms, read) { const w = watchers.get(key); watchers.set(key, { at: -1e9, ...w, ms, read }); pace(); },
   unwatch(key) { watchers.delete(key); pace(); },
   soon(key, wait = 0) { const w = watchers.get(key); if (w) { w.soon = performance.now() + wait; pace(); } },
+  // Nothing read while held (the web demo's world paused: js/demo.js `run`).
+  hold(v) { holding = !!v; pace(); },
 };
 
 const watchers = new Map();
-let fullAt = -1e9, paceT = 0, reading = false;
+let fullAt = -1e9, paceT = 0, reading = false, holding = false;
 const dueAt = (w) => Math.min(w.soon ?? Infinity, (w.read ? w.at : fullAt) + w.ms);
 function pace() {
   clearTimeout(paceT);
-  if (reading || document.hidden) return;
+  if (reading || holding || document.hidden) return;
   const t = performance.now();
   let next = null, at = Infinity;
   for (const w of watchers.values()) {
