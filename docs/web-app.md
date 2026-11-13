@@ -611,7 +611,9 @@ by its first bytes; an SVG is refused with a DOCTYPE, parsed as XML (never
 put in the page), stripped of scripts, foreign content, frames, media,
 animation, `on…` attributes, links other than `#parts` and styles that
 load, embedded pictures and what multiplies the drawing (masks, markers,
-filters, clip paths, patterns, `<use>` past 20,000 parts), and sized at
+filters, clip paths, patterns, dashes, CSS filters and blending); what is left
+is weighed (each part, its path's length, its text, through every `<use>`)
+and refused past a budget that draws in well under a second, then sized at
 512 × 256 at most. Every kind goes through one path: a
 blob URL, an image never attached, its size checked (4,096 a side) before it
 is drawn 1:1 and read. Resampling (an area average on premultiplied alpha,
