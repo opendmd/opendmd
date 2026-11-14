@@ -192,6 +192,7 @@ import base64
 import contextlib
 import filecmp
 import functools
+import hashlib
 import http.server
 import io
 import json
@@ -9103,9 +9104,13 @@ def desk_choice(browser, base: str, errors: list[str]) -> None:
         page.context.close()
     # the old addresses: /demo/#<view> is the app's
     page, _ = desk_page(browser, errors)
-    page.goto(f"{base}/demo/app.html#now")
+    navs: list[str] = []
+    page.on("framenavigated", lambda f: f == page.main_frame and navs.append(f.url))
+    page.goto(f"{base}/demo/#now")
     page.wait_for_url("**/demo/app.html#now", timeout=10000)
-    check(urllib.parse.urlparse(page.url).path == "/demo/app.html", "desk: /demo/#now forwards to /demo/app.html#now")
+    first, last = urllib.parse.urlparse(navs[0]), urllib.parse.urlparse(page.url)
+    check(first.path == "/demo/" and first.fragment == "now" and last.path == "/demo/app.html" and last.fragment == "now",
+          f"desk: /demo/#now (loaded as such) forwards to /demo/app.html#now ({[urllib.parse.urlparse(u).path + '#' + urllib.parse.urlparse(u).fragment for u in navs]})")
     page.wait_for_selector("#view-now", timeout=30000)
     txt = page.inner_text("body")
     check("Use your own card" in txt and "opendmd.dev" in txt, "desk: the plain app keeps Use your own card and the way back to the site")
@@ -9139,8 +9144,9 @@ def desk_world_flat(browser, base: str, errors: list[str], shots: Path) -> None:
         page.wait_for_timeout(400)
         check(lit(page, "#panel") == 0 or page.evaluate("getComputedStyle(document.querySelector('#panel')).opacity") == "0",
               f"desk ({scheme}): unplugged, the panel is black")
-        check(page.get_attribute("#b-power", "aria-pressed") == "true" and "Plug it back in" in page.inner_text("#b-power"),
-              f"desk ({scheme}): the power button says Plug it back in, pressed")
+        check(page.get_attribute("#b-power", "aria-pressed") is None and "Plug it back in" in page.inner_text("#b-power")
+              and page.evaluate("document.querySelector('#b-power').classList.contains('on')"),
+              f"desk ({scheme}): the power button says Plug it back in (its words change; no aria-pressed as well)")
         check(page.inner_text("#say").startswith("Unplugged"), f"desk ({scheme}): the status line says unplugged")
         try:
             wait_js(page, """(() => { const d = document.querySelector('#app').contentDocument;
@@ -9203,8 +9209,12 @@ def desk_world_flat(browser, base: str, errors: list[str], shots: Path) -> None:
     page.focus("#b-turn")
     page.keyboard.press("Enter")
     wait_js(page, "!document.querySelector('#parts').hidden", 4000)
-    ids = page.evaluate("[...document.querySelectorAll('#parts a')].map((a) => a.id)")
+    ids = page.evaluate("[...document.querySelectorAll('#parts .part')].map((a) => a.id)")
     check(ids == ["p-panels", "p-carrier", "p-leads", "p-ribbon", "p-devkit", "p-sd", "p-usb"], f"desk: seven part links, in order ({ids})")
+    page.focus("#b-light")
+    page.keyboard.press("Tab")
+    check(page.evaluate("document.activeElement.id") == "p-panels", "desk: after the controls, Tab goes on to the first part (the parts come after them)")
+    check(page.evaluate("document.querySelector('#p-sd').tagName") == "BUTTON", "desk: the card's part is a button (it pulls the card)")
     page.focus("#p-panels")
     names = []
     for i in range(7):
@@ -9243,7 +9253,7 @@ def desk_guide_links(browser, base: str, site: Path, errors: list[str]) -> None:
     ids = set(re.findall(r'id="([^"]+)"', hw))
     page, _ = desk_page(browser, errors, init=NO_WEBGL)
     page.goto(f"{base}/demo/")
-    wait_js(page, "document.querySelectorAll('#parts a').length == 7", 20000)
+    wait_js(page, "document.querySelectorAll('#parts .part').length == 7", 20000)
     hrefs = page.evaluate("[...document.querySelectorAll('#parts a')].map((a) => a.getAttribute('href'))")
     bad = [h for h in hrefs if not h.startswith("../guide/hardware.html#") or h.split("#", 1)[1] not in ids]
     check(not bad, f"desk: every part links to a section of the build guide ({bad})")
@@ -9262,6 +9272,9 @@ def desk_phone(browser, base: str, errors: list[str], shots: Path) -> None:
         h = page.evaluate("document.querySelector('#view').getBoundingClientRect().height")
         app = page.evaluate("document.querySelector('#app').getBoundingClientRect().height")
         check(120 < h < 330 and app > 300, f"desk (phone, {scheme}): the scene a strip over the app ({h:.0f}, {app:.0f})")
+        vis_say = page.evaluate("getComputedStyle(document.querySelector('#say')).display != 'none'")
+        slider = page.evaluate("(() => { const b = document.querySelector('#b-light').getBoundingClientRect(); return b.width > 40 && b.right <= innerWidth && b.left >= 0; })()")
+        check(vis_say and slider, f"desk (phone, {scheme}): the status is read out (not display:none), the lights slider in sight ({vis_say}, {slider})")
         page.screenshot(path=str(shots / f"desk-flat-phone-{scheme}.png"))
         page.click("#grab")
         page.wait_for_timeout(600)
@@ -9295,6 +9308,8 @@ def desk_hd(browser, base: str, site: Path, errors: list[str], shots: Path) -> N
     page.screenshot(path=str(shots / "desk-hd-day.png"))
     face = lit_px(shot, desk_hd_rect(page, "face"))
     check(face > 300, f"desk 3D: the panel's face is lit ({face} bright pixels)")
+    fr = desk_hd_rect(page, "face")
+    check((fr[2] - fr[0]) / 128 >= 4.8, f"desk 3D (1280 x 800 at 1x): the face gets about 5 px an LED ({(fr[2] - fr[0]) / 128:.2f})")
     # unplug: the face goes dark within a second; the status line says so; plugged back in it comes back
     page.click("#b-power")
     page.mouse.move(1270, 790)                    # (off the stage: the eye stops drifting)
@@ -9368,13 +9383,17 @@ def desk_hd(browser, base: str, site: Path, errors: list[str], shots: Path) -> N
     check(not foreign, f"desk 3D: every request same-origin ({foreign[:3]})")
     page.context.close()
     # the hand-over: slow frames at the last level -> the flat scene, remembered; one context lost
-    page, asked = desk_page(browser, errors, init="""(() => { window.__lost = 0;
-        addEventListener('webglcontextlost', () => window.__lost++, true); })()""")
+    # (each WebGL canvas counted on itself: the scene's is out of the page by the time it is lost)
+    page, asked = desk_page(browser, errors, init="""(() => { window.__lost = 0; const g = HTMLCanvasElement.prototype.getContext, seen = new WeakSet();
+        HTMLCanvasElement.prototype.getContext = function (k, ...a) { const c = g.call(this, k, ...a);
+          if (c && /webgl/.test(k) && !seen.has(this)) { seen.add(this); this.addEventListener('webglcontextlost', () => window.__lost++); } return c; }; })()""")
     page.goto(f"{base}/demo/?scene=try&q=4")
     wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", 120000)
     why = page.evaluate("document.querySelector('#stage').dataset.why")
     mark = page.evaluate("+localStorage.getItem('opendmd-desk-flat')")
     check(why == "slow frames" and mark > 0, f"desk 3D: slow frames hand over to the flat scene, remembered ({why}, {mark})")
+    page.wait_for_timeout(800)
+    check(page.evaluate("window.__lost") == 1, f"desk 3D: the hand-over loses exactly one WebGL context ({page.evaluate('window.__lost')})")
     check(page.locator("canvas.gl").count() == 0, "desk 3D: the 3D canvas is gone")
     desk_world(page)
     page.click("#b-power")
@@ -9383,8 +9402,25 @@ def desk_hd(browser, base: str, site: Path, errors: list[str], shots: Path) -> N
     check(page.evaluate("desk.scene.kind") == "flat", "desk: after the hand-over the buttons work on the flat scene")
     page.goto(f"{base}/demo/")
     wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", 20000)
-    check(page.evaluate("document.querySelector('#stage').dataset.why") in ("slow last time", "no fast WebGL2"), "desk: slow last time, the flat scene next visit")
+    got = page.evaluate("document.querySelector('#stage').dataset.why")
+    check(got == "slow last time", f"desk: slow last time, the flat scene next visit ({got})")
     page.context.close()
+    # the governor against a faked frame clock: under 4 fps (every such interval was once thrown away)
+    # and 7.5 fps both hand over within seconds, not a minute
+    for ms, limit in ((300, 25000), (133, 15000)):
+        page, _ = desk_page(browser, errors, init=f"""(() => {{ window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), {ms});
+            window.cancelAnimationFrame = (id) => clearTimeout(id); }})()""")
+        page.goto(f"{base}/demo/?scene=try&q=0")
+        wait_js(page, "document.querySelector('#stage').dataset.scene == 'hd'", 90000)
+        t0 = time.monotonic()
+        try:
+            wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", limit)
+            took = round(time.monotonic() - t0, 1)
+        except PlaywrightTimeout:
+            took = None
+        check(took is not None and page.evaluate("document.querySelector('#stage').dataset.why") == "slow frames",
+              f"desk 3D: frames every {ms} ms hand over to the flat scene within {limit / 1000:g} s ({took} s)")
+        page.context.close()
 
 
 def desk_files(site: Path) -> None:
@@ -9401,8 +9437,12 @@ def desk_files(site: Path) -> None:
     csp = [line.strip().split(": ", 1)[1] for line in block.splitlines() if line.strip().startswith("Content-Security-Policy:")]
     check(len(csp) == 1 and "frame-ancestors 'self'" in csp[0] and "script-src 'self' 'wasm-unsafe-eval'" in csp[0] and "cdn" not in csp[0],
           f"desk: /demo/* has one CSP, the demo's, frame-ancestors 'self' ({csp})")
-    head = (site / "demo/desk/hd/three.js").read_text(encoding="utf-8")[:400]
-    check("three.js 0.186.1" in head and "MIT" in head, "desk: the vendored three.js keeps its licence header")
+    three = (site / "demo/desk/hd/three.js").read_text(encoding="utf-8")
+    head, _, body = three.partition("*/\n")
+    want = re.search(r"sha256 of what follows this comment: ([0-9a-f]{64})", head)
+    got = hashlib.sha256(body.encode()).hexdigest()
+    check("three.js 0.186.1" in head and "MIT" in head and want is not None and want.group(1) == got,
+          f"desk: the vendored three.js keeps its licence header, and its body is what the header's sha256 says ({got[:12]})")
     check((site / "licenses/THIRD-PARTY-LICENSES-desk.txt").is_file() and "THIRD-PARTY-LICENSES-desk.txt" in (site / "licenses/index.html").read_text(),
           "desk: three.js's notice is on the licences page")
 

@@ -19,7 +19,8 @@
 // dropped connection, the panel goes dark. On: a fresh start (its clock and
 // uptime from zero), the start-up show, then the playlist, and the network
 // a little later. The card out: a restart, then the status card; back in:
-// mounted again, the playlist plays. `frame()`: the LEDs, one pixel each.
+// mounted again, the playlist plays. `frame()`: the LEDs, one pixel each
+// (`frame(false)` stops drawing them).
 
 import { app, setPath } from './state.js';
 import { HttpError, sent, queued } from './source.js';
@@ -344,7 +345,12 @@ const world = {
     if (running && !raf && live) raf = requestAnimationFrame(tick);
   },
   // The LEDs, one pixel each, tinted, before the LED look: a 128 × 32 canvas drawn with every frame from the first ask (the desk scene's own LEDs, and its room's light).
-  frame() { if (!raw && live) { (raw = h('canvas')).getContext('2d', { willReadFrequently: true }); pv.setRaw(raw); } return raw; },
+  // (`frame(false)`: no longer wanted; the drawing stops.)
+  frame(v = true) {
+    if (!v) { if (raw && live) pv.setRaw(undefined); return (raw = null); }
+    if (!raw && live) { (raw = h('canvas')).getContext('2d', { willReadFrequently: true }); pv.setRaw(raw); }
+    return raw;
+  },
   // Now's mirror of the panel drawn (true) or not (a page that shows this panel itself).
   mirror(v) { app.noMirror = !v; emit('mirror'); },
   // Canvas px per LED (1..12); what is on the panel starts again at the new size.

@@ -17,6 +17,8 @@ body.dpage{min-height:0;overflow:hidden}
 
 /* ---- the flat scene. Layers (.L) share one origin: the art's (320, 400); .at places a thing in art pixels */
 .scene{position:absolute;inset:0;overflow:hidden;background:#f6ecd2;isolation:isolate}
+@media (prefers-color-scheme:dark){.scene:empty,.scene.hd,.scene.none{background-color:#0b0c12}}
+.scene.none{display:grid;place-items:center;color:var(--mut);font-size:15px}
 .L{position:absolute;left:var(--cx);top:var(--oy);width:0;height:0;transform-origin:0 calc(var(--a)*-74 - var(--u)*19)}
 /* the close-up of the back: the eye moves in on the display (every layer, and the light, about its middle) */
 .L,.lm,.halo{transition:translate .7s cubic-bezier(.65,0,.25,1),scale .7s cubic-bezier(.65,0,.25,1)}
@@ -121,8 +123,8 @@ body.dpage{min-height:0;overflow:hidden}
 .hud{position:absolute;left:8px;top:8px;margin:0;padding:6px 9px;border-radius:6px;background:rgba(0,0,0,.72);color:#9fe8c0;font:11px/1.45 ui-monospace,Menlo,monospace;pointer-events:none;z-index:4;white-space:pre}
 
 /* ---- the back's parts: links over the picture, and the one label */
-.parts{position:absolute;inset:0;pointer-events:none;z-index:2}
-.part{position:absolute;left:0;top:0;display:block;border-radius:4px;pointer-events:auto}
+.parts{position:absolute;left:0;width:100%;top:0;height:0;pointer-events:none;z-index:2;overflow:hidden}
+.part{position:absolute;left:0;top:0;display:block;padding:0;border:0;background:none;border-radius:4px;pointer-events:auto;cursor:pointer}
 .part:focus-visible{outline:2px solid #fff;outline-offset:1px;box-shadow:0 0 0 4px rgba(10,10,20,.6)}
 .part.on{box-shadow:0 0 0 1.5px rgba(255,180,70,.85),0 0 22px rgba(255,170,50,.35)}
 .tip{position:absolute;left:0;top:0;margin:0;max-width:min(340px,calc(100% - 16px));padding:8px 12px 9px;border-radius:10px;background:#fff;color:#1c1d20;
@@ -136,7 +138,7 @@ body.dpage{min-height:0;overflow:hidden}
 .ctl{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 16px;background:var(--bg2);border-top:1px solid var(--line)}
 .ctl .lbl{font:400 11px/1 var(--pixel);letter-spacing:1px;text-transform:uppercase;color:var(--ink);margin-right:4px}
 .ctl button,.ctl .dim{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 13px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:600 14px/1 system-ui,sans-serif;cursor:pointer}
-.ctl button[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}
+.ctl button.on{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}
 .ctl svg{width:15px;height:15px;fill:currentColor;shape-rendering:crispEdges;flex:none}
 .ctl input[type=range]{width:110px;accent-color:var(--acc)}
 .ctl .say{flex:1 1 200px;margin:0;font-size:13.5px;line-height:1.4;color:var(--mut);min-width:0}
@@ -156,13 +158,14 @@ body.dpage{min-height:0;overflow:hidden}
   .hello .just{float:none;margin:0}
   .stage{flex:none}
   .view{flex:none;height:var(--strip,228px);transition:height .35s}
-  .ctl{flex-wrap:nowrap;overflow-x:auto;padding:8px 10px;gap:8px;scrollbar-width:none;transition:margin .35s}
-  .ctl::-webkit-scrollbar{display:none}
-  .ctl .lbl,.ctl .say{display:none}
-  .ctl button,.ctl .dim{flex:none;height:36px;padding:0 11px;font-size:13px}
+  /* two rows at most, everything in sight: the status is read out, not shown */
+  .ctl{padding:8px 10px;gap:6px}
+  .ctl .lbl{display:none}
+  .ctl .say{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0;padding:0;flex:none}
+  .ctl button,.ctl .dim{flex:1 1 auto;justify-content:center;height:34px;padding:0 9px;font-size:13px}
   .ctl button span{white-space:nowrap}
-  .ctl .dim span{display:none}.ctl input[type=range]{width:84px}
-  .stage.folded .ctl{margin-bottom:-53px;visibility:hidden}
+  .ctl .dim span{display:none}.ctl input[type=range]{width:auto;flex:1;min-width:70px}
+  .stage.folded .ctl{display:none}
   .app{flex:1;padding:0;min-height:0;position:relative;z-index:2}
   .phone{padding:0;border-radius:16px 16px 0 0;box-shadow:0 -1px 0 #26282d,0 -10px 30px rgba(0,0,0,.3);flex-direction:column;background:#15171b}
   .phone::before{display:none}

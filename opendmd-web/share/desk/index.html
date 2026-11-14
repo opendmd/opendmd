@@ -43,18 +43,18 @@
           <div class="face front"><canvas id="panel" width="640" height="160"></canvas><i class="seam"></i></div>
         </div></div></div></div>
     </template>
-    <div class="parts" id="parts" role="group" aria-label="The parts on the back" hidden></div>
     <p class="tip" id="tip" aria-hidden="true"></p>
     </div>
     <div class="ctl" role="group" aria-label="The display on the desk">
       <span class="lbl" aria-hidden="true">On the desk</span>
-      <button type="button" id="b-power" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1h1v3h2V1h1v3h1v3H8v2H7v2H5V9H4V7H3V4h1z"/></svg><span>Unplug the power</span></button>
-      <button type="button" id="b-turn" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h1V4h1V3h4v1h1v1h1v2H9V5H8V4H4v1H3v1h2v1H1V3h1zM3 8h1v1h4V8h1v2H8v1H4v-1H3z"/></svg><span>Turn it round</span></button>
-      <button type="button" id="b-card" aria-pressed="false"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1h5v1h1v1h1v8H3zM4 2v2h1V2zm2 0v2h1V2z" fill-rule="evenodd"/></svg><span>Pull the SD card</span></button>
+      <button type="button" id="b-power"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1h1v3h2V1h1v3h1v3H8v2H7v2H5V9H4V7H3V4h1z"/></svg><span>Unplug the power</span></button>
+      <button type="button" id="b-turn"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h1V4h1V3h4v1h1v1h1v2H9V5H8V4H4v1H3v1h2v1H1V3h1zM3 8h1v1h4V8h1v2H8v1H4v-1H3z"/></svg><span>Turn it round</span></button>
+      <button type="button" id="b-card"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1h5v1h1v1h1v8H3zM4 2v2h1V2zm2 0v2h1V2z" fill-rule="evenodd"/></svg><span>Pull the SD card</span></button>
       <label class="dim"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M5 0h2v2H5zM1 2h1v1h1v1H2V3H1zm9 0h1v1h-1v1H9V3h1zM4 3h4v1h1v4H8v1H4V8H3V4h1zM0 5h2v2H0zm10 0h2v2h-2zM5 10h2v2H5z"/></svg><span>Room lights</span>
         <input type="range" id="b-light" min="0" max="100" value="100" aria-label="Room lights"></label>
       <p class="say" id="say" role="status" aria-live="polite"></p>
     </div>
+    <div class="parts" id="parts" role="group" aria-label="The parts on the back" hidden></div>
   </section>
   <aside class="app" aria-label="The OpenDMD web app">
     <div class="phone">

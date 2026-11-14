@@ -47,6 +47,10 @@ export async function start(ui) {
   renderer.shadowMap.autoUpdate = false;
   renderer.info.autoReset = false;
   renderer.setClearColor(0x05060c);
+  let disposed = false;
+  // the context goes with the scene (after its lost event, so a listener sees it), however it ends
+  const drop = () => { ac.abort(); renderer.dispose(); const gone = () => canvas.remove(); canvas.addEventListener('webglcontextlost', gone, { once: true }); setTimeout(gone, 500); renderer.forceContextLoss(); };
+  try {
   const gpu = (() => { const gl = renderer.getContext(), e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : '?'; })();
   const soft = /llvmpipe|swiftshader|software|softpipe/i.test(gpu);
   const maxAniso = soft ? 1 : Math.min(4, renderer.capabilities.getMaxAnisotropy());   // (Mesa's llvmpipe returns NaN texels with anisotropy on)
@@ -196,7 +200,7 @@ void main(){
   vec2 g = vUv * vec2( 128., 32. ), f = fract( g ) - .5;
   vec3 c = texture2D( map, ( floor( g ) + .5 ) / vec2( 128., 32. ) ).rgb;
   float fw = max( fwidth( g.x ), fwidth( g.y ) ), d = length( f );
-  float far = smoothstep( .3, .75, fw );                                 // too small to draw dots: the cell's mean instead
+  float far = smoothstep( .17, .45, fw );                                // too small to draw dots (under about 5 screen pixels an LED): the cell's mean instead
   float dotm = 1. - smoothstep( .36 - fw, .36 + fw, d );
   float m = mix( dotm + .22 * exp( -d * d * 7. ), .52, far );
   vec3 o = c * gain * on * m;
@@ -380,14 +384,18 @@ void main(){
     const ea = 1 - Math.exp(-clamp(now - lastPose, 0, 100) / 160); lastPose = now;   // (eased in time, not frames: it settles in about a second at any frame rate)
     eye.x += (eye.tx - eye.x) * ea; eye.y += (eye.ty - eye.y) * ea;
     const tv = Math.tan(FOV / 2 * Math.PI / 180), th = tv * camera.aspect;
-    const dF = Math.max(51 / th, 31 / tv), dB = Math.max(29.5 / th, 10.5 / tv);
+    // the front: 51 cm either side of the display's middle and 31 above and below, unless that leaves
+    // the LEDs under 5 device pixels each (a small window at 1x): then closer, down to 34 cm a side
+    const fit = clamp(51.2 * G.w * (devicePixelRatio || 1) / (5 * 128) / 2, 34, 51) / 51;
+    const dF = Math.max(51 * fit / th, 31 * fit / tv), dB = Math.max(29.5 / th, 10.5 / tv);
     const az = k * Math.PI, el = (lerp(12.5, 10, k) + Math.sin(k * Math.PI) * 9) * Math.PI / 180, d = lerp(dF, dB, k) * (1 + .12 * Math.sin(k * Math.PI));
-    tgt.set(0, lerp(19, 7.4, k), lerp(-4, 0, k));
+    tgt.set(0, lerp(19 - (1 - fit) * 8, 7.4, k), lerp(-4, 0, k));
     camera.position.set(tgt.x + d * Math.sin(az) * Math.cos(el), tgt.y + d * Math.sin(el), tgt.z + d * Math.cos(az) * Math.cos(el));
     camera.lookAt(tgt);
     const dr = 1 - Math.sin(k * Math.PI);                      // the drift rests while it turns
     right.setFromMatrixColumn(camera.matrixWorld, 0); camera.position.addScaledVector(right, eye.x * 7 * dr); camera.position.y += -eye.y * 3 * dr;
     camera.lookAt(tgt); camera.updateMatrixWorld();
+    room.u.aper.value = lerp(1.7, .7, k);                    // the back sharper: its parts are what is looked at
     room.u.focus.value = camera.position.distanceTo(tmp.set(clamp(camera.position.x, -20, 20) * .4, tgt.y, 0));
     for (const b of bills) b.rotation.y = Math.atan2(camera.position.x - b.getWorldPosition(tmp).x, camera.position.z - tmp.z);
     const op = clamp((camera.position.z - (ZW - 3)) / 9, 0, 1);  // behind the wall: it dissolves, and what hangs on it
@@ -487,47 +495,69 @@ void main(){
   }
 
   // ---------------------------------------------------------------- the loop, and the governor
-  // The governor: the median of each 45 frame intervals (after a warm-up); over 21 ms one level down;
-  // at the last level, over 36 ms the flat scene takes over. The first window after a change is thrown
-  // away (it read low: each step took two windows). It never steps back up in a visit.
-  const stats = { n: 0, js: 0, max: 0, level, fps: 0, ms: [] };
-  let raf = 0, n = 0, prev = 0, win = [], warm = 30, skip = 0, first = true, blink = -1, running = false;
+  // The governor reads windows of frame intervals (45 frames or 1.5 s, whichever ends first, after a
+  // warm-up of 30 frames or 0.6 s): every interval counts, however long (a machine under 4 fps is the
+  // slowest of all). "Slow" is against the display's own cadence (the window's 10th percentile, the
+  // lowest seen, taken as at most 34 ms: a 30 or 40 Hz display, or a 30 fps cap, is not slow), at
+  // least 21 ms. Slow: one level down; more than twice slow (about 45 ms at 60 Hz): straight to the
+  // last level; over 80 ms at any level, or slow at the last: the flat scene takes over. The first
+  // window after a change is thrown away (it read low), unless it is far over. Comfortably fast for two
+  // windows: one level back up, twice a visit at most (no see-saw). Healthy for 30 s: `onHealthy`.
+  const stats = { n: 0, js: 0, max: 0, level, fps: 0, ms: [], cad: 0 };
+  const WIN = 45, WIN_MS = 1500, FAR = 80;
+  let raf = 0, n = 0, prev = 0, win = [], winT = 0, warm = 30, warmT = 0, skip = 0, first = true, blink = -1, running = false;
+  let cad = 34, good = 0, ups = 0, healthyT = 0, told = false;
+  function govern(now) {
+    if (warm > 0 && now < warmT) { warm--; winT = now; win = []; return; }
+    if (win.length < WIN && now - winT < WIN_MS || win.length < 8) return;
+    win.sort((a, b) => a - b);
+    const med = win[win.length >> 1], p10 = win[Math.floor(win.length * .1)];
+    win = []; winT = now;
+    cad = Math.min(cad, clamp(p10, 6, 34)); stats.cad = cad;
+    if (skip > 0) { skip--; if (med <= FAR) return; }
+    stats.fps = 1000 / med; stats.ms.push(+med.toFixed(1));
+    if (pinned || pxMode) return;
+    const slow = Math.max(21, cad * 1.3);
+    if (med > FAR || (med > slow && level == 4)) { onSlow?.(med); return; }
+    if (med > slow) { level = med > 2.1 * slow ? 4 : level + 1; good = 0; healthyT = 0; changed(now); return; }
+    good = med < slow * .6 ? good + 1 : 0;
+    if (good >= 2 && level > 0 && ups < 2) { level--; ups++; good = 0; changed(now); return; }
+    healthyT ||= now;
+    if (!told && now - healthyT > 30000) { told = true; ui.onHealthy?.(); }
+  }
+  function changed(now) { stats.level = level; warm = 20; warmT = now + 400; skip = 1; win = []; resize(); }
   function draw(now) {
     raf = requestAnimationFrame(draw);
-    const t0 = performance.now(), dt = now - prev; prev = now;
+    const t0 = performance.now(), dt = prev ? now - prev : 0; prev = now;
     pose();
     for (let i = tweens.length - 1; i >= 0; i--) { const tw = tweens[i], t = clamp((now - tw.t0) / tw.ms, 0, 1); if (now >= tw.t0) { tw.fn(t); S.dirty = 1; } if (t == 1) tweens.splice(i, 1); }
-    if (ledOn !== ledTo) { ledOn = clamp(ledOn + Math.sign(ledTo - ledOn) * dt / 120, 0, 1); led.uniforms.on.value = ledOn; if (!ledOn) for (const g of glow) g.intensity = 0; S.dirty = 1; }
+    if (ledOn !== ledTo) { ledOn = clamp(ledOn + Math.sign(ledTo - ledOn) * (dt || 16) / 120, 0, 1); led.uniforms.on.value = ledOn; if (!ledOn) for (const g of glow) g.intensity = 0; S.dirty = 1; }
     const playing = S.W && S.W.power;
     if (playing) panel(n++);
-    const bl = still || !playing ? 1 : Math.floor(now / 550) & 1;   // (the tube's cursor rests while the panel is off: nothing to draw) if (bl !== blink) { blink = bl; crtDraw(bl); S.dirty = 1; }
+    // (the tube's cursor rests while the panel is off: nothing to draw)
+    const bl = still || !playing ? 1 : Math.floor(now / 550) & 1;
+    if (bl !== blink) { blink = bl; crtDraw(bl); S.dirty = 1; }
     if (!(playing || S.dirty)) { prev = 0; return; }        // nothing moved and the panel is dark: the last picture stands
     if (S.shadow) { renderer.shadowMap.needsUpdate = true; S.shadow = 0; }
     S.dirty = 0;
     stats.calls = renderer.info.render.calls; stats.tris = renderer.info.render.triangles; renderer.info.reset();
     composer.render();
     const js = performance.now() - t0; stats.n++; stats.js += js; if (js > stats.max) stats.max = js;
-    if (first) { first = false; canvas.classList.add('on'); onFirst?.(); }
-    if (warm > 0) { warm--; return; }
-    if (dt > 0 && dt < 250) win.push(dt);
-    if (win.length >= 45) {
-      win.sort((a, b) => a - b); const med = win[22]; win = [];
-      if (skip > 0) { skip--; return; }
-      stats.fps = 1000 / med; stats.ms.push(+med.toFixed(1));
-      if (!pinned && !pxMode) { if (med > 21 && level < 4) { level++; stats.level = level; warm = 20; skip = 1; resize(); } else if (med > 36 && level == 4) onSlow?.(med); }
-    }
+    if (first) { first = false; canvas.classList.add('on'); onFirst?.(); warmT = now + 600; }
+    if (dt > 0) win.push(Math.min(dt, 1000));
+    govern(now);
   }
   function run(v) {
     if (v == running) return;
     running = v; cancelAnimationFrame(raf); raf = 0;
-    if (v) { prev = 0; win = []; warm = Math.max(warm, 10); S.dirty = 1; raf = requestAnimationFrame(draw); }
+    if (v) { prev = 0; win = []; warm = Math.max(warm, 10); warmT = performance.now() + 300; healthyT = 0; S.dirty = 1; raf = requestAnimationFrame(draw); }
   }
-  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); onSlow?.(-1); }, sig);
+  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); if (!disposed) onSlow?.(-1); }, sig);
   resize(); crtDraw(1);
   renderer.compile(scene, camera);
-  if (q.has('hud')) { const hud = Object.assign(document.createElement('pre'), { className: 'hud' }); host.append(hud); const t = setInterval(() => { hud.textContent = `${gpu}\n${stats.fps.toFixed(0)} fps (median of 45 frames) · level ${level} · ${canvas.width}x${canvas.height} · dof ${room.dof ? 'on' : 'off'} · msaa ${room.samples} · scene js ${(stats.js / Math.max(1, stats.n)).toFixed(2)} ms`; }, 500); ac.signal.addEventListener('abort', () => clearInterval(t)); }
+  if (q.has('hud')) { const hud = Object.assign(document.createElement('pre'), { className: 'hud' }); host.append(hud); const t = setInterval(() => { hud.textContent = `${gpu}\n${stats.fps.toFixed(0)} fps (a window's median; the display's cadence ${stats.cad.toFixed(1)} ms) · level ${level} · ${canvas.width}x${canvas.height} · dof ${room.dof ? 'on' : 'off'} · msaa ${room.samples} · scene js ${(stats.js / Math.max(1, stats.n)).toFixed(2)} ms`; }, 500); ac.signal.addEventListener('abort', () => clearInterval(t)); }
   // where things are on screen, in the scene's pixels (for the site's tests): the LED face, a patch of wall
-  const RECTS = { face: new THREE.Box3(V(-25.6, LIFT + .3, BD / 2), V(25.6, LIFT + BH - .3, BD / 2 + .02)), wall: new THREE.Box3(V(-4, 45, ZW), V(4, 48, ZW)) };
+  const RECTS = { face: new THREE.Box3(V(-25.6, LIFT + .3, BD / 2), V(25.6, LIFT + BH - .3, BD / 2 + .02)), wall: new THREE.Box3(V(26, 28, ZW), V(29, 32, ZW)) };
   return {
     rect: (name) => [...proj(RECTS[name])],
     kind: 'hd', turnMs: TURN, stats, S, composer, renderer, camera, led, glow, bloom,
@@ -536,6 +566,7 @@ void main(){
     show, turn, hot, run, layout: resize,
     // the player: its panel drawn at one canvas pixel an LED (only the flat scene looks at it), and its LEDs
     device(d) { if (d === dev) return; dev = d; d.scale(1); raw = d.frame(); show(); },
-    dispose() { run(false); ac.abort(); composer.dispose(); renderer.dispose(); renderer.forceContextLoss(); canvas.remove(); over.remove(); ui.parts(false); },
+    dispose() { disposed = true; run(false); dev?.frame(false); over.remove(); ui.parts(false); drop(); },
   };
+  } catch (e) { disposed = true; host.querySelector('.over')?.remove(); host.querySelector('.hud')?.remove(); drop(); throw e; }
 }

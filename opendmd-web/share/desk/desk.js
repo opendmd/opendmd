@@ -6,10 +6,10 @@
 //   start(ui) -> { show(), turn(back), hot(id), device(dev), run(on), layout(), dispose(), turnMs }
 // Which scene: the 3D one (hd/scene.js: three.js, fetched after first paint, behind a still) on a
 // machine with a fast WebGL2; else the flat one (flat.js: layers of pixel art and a CSS box).
-//   ?scene=hd | flat   force one (hd: on any WebGL2, and it never gives up)
-//   ?scene=try         3D on any WebGL2, but slow frames still step down and hand over
-//   &q=0..4            pin the 3D scene's quality level   ?hud=1  its GPU, fps and level
-//   ?light=0..100      the room's lights                    ?back=1 start turned round
+//   ?scene=hd | flat   force one (hd: on any WebGL2; only a lost context ends it)
+//   ?scene=try         3D on any WebGL2, slow frames still step down and hand over
+//   &q=0..4            the 3D scene's quality level (pinned with hd, the start with try)
+//   ?hud=1             its GPU, fps, cadence and level    ?light=0..100 the room's lights    ?back=1 turned round
 import { PARTS, GUIDE, partLabel, tipHtml, says } from './parts.js';
 
 const $ = (s) => document.querySelector(s);
@@ -19,28 +19,35 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const stage = $('#stage'), view = $('#view'), host = $('#scene'), frame = $('#app'), partsEl = $('#parts'), tip = $('#tip');
 const bPower = $('#b-power'), bTurn = $('#b-turn'), bCard = $('#b-card'), bLight = $('#b-light'), say = $('#say'), grab = $('#grab');
 const still = mm('(prefers-reduced-motion:reduce)'), dark = mm('(prefers-color-scheme:dark)');
-const KEY = 'opendmd-desk-flat';
+const NARROW = matchMedia('(max-width:820px)');
+// A slow 3D visit is remembered for a week (a lost context is not slowness); a healthy one clears it.
+const KEY = 'opendmd-desk-flat', WEEK = 7 * 864e5;
 // light: 0..100 (the system's theme: lights on in the light one, dimmed in the dark one)
 const S = { light: clamp(+(q.get('light') ?? (dark ? 6 : 100)) || 0, 0, 100), back: false, W: null, hot: '', folded: false };
-let dev = null, scene = null, seen = true, cardT = 0;
+let dev = null, scene = null, seen = true, cardT = 0, mounting = 0;
 
-// --- the back's parts: real links (a labelled group outside the aria-hidden picture); the scene
-// places them over what they name, and shows them only while it is turned round
+// --- the back's parts: real links (a labelled group after the controls, outside the aria-hidden
+// picture; the card's a button: it pulls the card); the scene places them over what they name,
+// and shows them only while it is turned round
 const partEl = {};
 for (const p of PARTS) {
-  const a = Object.assign(document.createElement('a'), { className: 'part', id: 'p-' + p[0], href: GUIDE + p[3] });
-  a.setAttribute('aria-label', partLabel(p));
+  const sd = p[0] == 'sd';
+  const a = Object.assign(document.createElement(sd ? 'button' : 'a'), { className: 'part', id: 'p-' + p[0] });
+  if (sd) { a.type = 'button'; a.onclick = () => act.card(); } else a.href = GUIDE + p[3];
+  a.setAttribute('aria-label', partLabel(p, false));
   a.onpointerenter = a.onfocus = () => hot(p[0]);
   a.onpointerleave = a.onblur = () => hot('');
   partsEl.append(a);
   partEl[p[0]] = a;
 }
-partEl.sd.onclick = (e) => { e.preventDefault(); act.card(); };
 function parts(show) {
   if (partsEl.hidden == !show) return;
+  if (show) fitParts();
   partsEl.hidden = !show;
   if (!show && S.hot) hot('');
 }
+// (the group comes after the controls in the page, so Tab reaches the buttons first; it lies over the picture)
+function fitParts() { partsEl.style.top = view.offsetTop + 'px'; partsEl.style.height = view.offsetHeight + 'px'; }
 // A part is pointed at: its name sits by it (above if there is room), the scene lights it.
 function hot(id) {
   S.hot = id;
@@ -71,12 +78,13 @@ const act = {
   card: () => {
     if (!dev || !S.W) return;
     clearTimeout(cardT);
-    if (!S.back && S.W.card && !still) { turn(true); cardT = setTimeout(() => dev.card(false), (scene?.turnMs ?? 1200) + 250); } else dev.card(!S.W.card);
+    if (!S.back && S.W.card && !still) { turn(true); cardT = setTimeout(() => S.back && dev.card(false), (scene?.turnMs ?? 1200) + 250); } else dev.card(!S.W.card);
   },
   turn: (b = !S.back) => turn(b),
   cycle: () => { S.light = S.light > 60 ? 30 : S.light > 4 ? 0 : 100; show(); },
 };
-const label = (b, on, x, z) => { b.setAttribute('aria-pressed', on); b.querySelector('span').textContent = on ? z : x; };
+// (a button's words say what it does next; its colour says which way things are)
+const label = (b, on, x, z) => { b.classList.toggle('on', on); b.querySelector('span').textContent = on ? z : x; };
 let said = '';
 function show() {
   const W = S.W;
@@ -87,6 +95,7 @@ function show() {
   label(bTurn, S.back, 'Turn it round', 'Turn it back');
   label(bPower, !!W && !W.power, 'Unplug the power', 'Plug it back in');
   label(bCard, !!W && !W.card, 'Pull the SD card', 'Put the card back');
+  partEl.sd.setAttribute('aria-label', partLabel(PARTS[5], !!W && !W.card));
   const t = says(W, S.back);
   if (t != said) say.textContent = said = t;
   if (S.hot) hot(S.hot);
@@ -96,7 +105,7 @@ function turn(back) {
   if (back === S.back) return;
   S.back = back;
   if (back && S.folded) fold(false);
-  if (!back) parts(false);
+  if (!back) { clearTimeout(cardT); parts(false); }
   scene?.turn(back);
   show();
 }
@@ -112,13 +121,20 @@ bCard.onclick = act.card;
 bTurn.onclick = () => turn(!S.back);
 bLight.oninput = () => { S.light = +bLight.value; show(); };
 grab.onclick = () => fold(!S.folded);
-addEventListener('keydown', (e) => { if (e.key == 'Escape' && S.back) { turn(false); bTurn.focus(); } });
+addEventListener('keydown', (e) => {
+  if (e.key != 'Escape' || !S.back) return;
+  const inParts = partsEl.contains(document.activeElement);
+  turn(false);
+  if (inParts) bTurn.focus();
+});
 
-// --- the device: the app's own simulated player, in the frame
+// --- the device: the app's own simulated player, in the frame. Asked for until it answers (a slow
+// first load of the app's wasm), again each time the frame loads.
+let asking = 0;
 frame.addEventListener('load', async () => {
-  const w = frame.contentWindow;
-  for (let i = 0; i < 300 && !w.opendmdDemo; i++) await new Promise((f) => setTimeout(f, 50));
-  if (!w.opendmdDemo) return;
+  const me = ++asking, w = frame.contentWindow;
+  while (me == asking && !w.opendmdDemo) await new Promise((f) => setTimeout(f, 100));
+  if (me != asking) return;
   dev = w.opendmdDemo;
   dev.on((W) => { S.W = W; show(); });
   scene?.device(dev);
@@ -134,7 +150,7 @@ function vis() {
 }
 document.addEventListener('visibilitychange', vis);
 new IntersectionObserver((es) => { seen = es[es.length - 1].isIntersecting; vis(); }).observe(view);
-new ResizeObserver(() => { scene?.layout(); place(); }).observe(view);
+new ResizeObserver(() => { scene?.layout(); if (!partsEl.hidden) fitParts(); place(); }).observe(view);
 
 // --- which scene
 const ui = { S, q, still, dark, act, host, view, stage, parts, box, place, partEl };
@@ -152,49 +168,78 @@ function why() {
   if (f == 'flat') return 'asked';
   if (f == 'hd' || f == 'try') { try { return document.createElement('canvas').getContext('webgl2') ? '' : 'no WebGL2'; } catch { return 'no WebGL2'; } }
   if (still) return 'reduced motion';
-  if (mm('(max-width:820px)')) return 'small screen';
+  if (NARROW.matches) return 'small screen';
+  // the LED face must get about 5 device pixels an LED with the room cropped to 34 cm a side (hd/scene.js)
+  if ((innerWidth - 416) * (devicePixelRatio || 1) < 850) return 'small scene';
   if (navigator.connection?.saveData) return 'save-data';
   if (navigator.deviceMemory && navigator.deviceMemory < 4) return 'little memory';
-  try { if (+localStorage.getItem(KEY) > Date.now() - 30 * 864e5) return 'slow last time'; } catch {}
+  try { if (+localStorage.getItem(KEY) > Date.now() - WEEK) return 'slow last time'; } catch {}
   if (!fastGl()) return 'no fast WebGL2';
   return '';
 }
-function mounted(s) {
+function mounted(s, me) {
+  if (me != mounting) { s.dispose(); return; }
   scene = s;
   if (dev) s.device(dev);
   if (S.back) s.turn(true);
   show();
   vis();
 }
-async function flat(reason) {
+function unmount() {
   scene?.dispose();
   scene = null;
   parts(false);
   host.className = 'scene';
+  host.replaceChildren();
+}
+async function flat(reason) {
+  const me = ++mounting;
+  unmount();
   host.replaceChildren($('#t-flat').content.cloneNode(true));
   stage.dataset.scene = 'flat';
   stage.dataset.why = reason;
-  mounted(await (await import('./flat.js')).start(ui));
+  try {
+    mounted(await (await import('./flat.js')).start(ui), me);
+  } catch (e) {
+    console.warn('desk: the scene did not load', e);
+    if (me != mounting) return;
+    host.className = 'scene none';
+    host.replaceChildren(Object.assign(document.createElement('p'), { textContent: 'The desk did not load. The app beside it still works.' }));
+    stage.dataset.scene = 'none';
+  }
 }
 async function go() {
   const reason = why();
   if (reason) return flat(reason);
-  host.classList.add('hd');                                   // the still shows at once
+  const me = ++mounting;
+  unmount();
+  host.classList.add('hd');                                   // the still shows at once (asked for first, then a frame painted)
+  new Image().src = new URL(`hd/poster-${dark ? 'night' : 'day'}.webp`, import.meta.url).href;
   stage.dataset.scene = 'hd-loading';
+  delete stage.dataset.why;
+  await new Promise((f) => requestAnimationFrame(() => setTimeout(f, 0)));
+  if (me != mounting) return;
   try {
     const { start } = await import('./hd/scene.js');
+    if (me != mounting) return;
     mounted(await start({ ...ui,
-      onFirst: () => { stage.dataset.scene = 'hd'; },
+      onFirst: () => { if (me == mounting) stage.dataset.scene = 'hd'; },
+      onHealthy: () => { try { localStorage.removeItem(KEY); } catch {} },
       onSlow: (ms) => {
-        if (q.get('scene') == 'hd') return;
-        try { localStorage.setItem(KEY, Date.now()); } catch {}
+        if (me != mounting) return;
+        if (ms >= 0) {
+          if (q.get('scene') == 'hd') return;
+          try { localStorage.setItem(KEY, Date.now()); } catch {}
+        }
         flat(ms < 0 ? 'context lost' : 'slow frames');
-      } }));
+      } }), me);
   } catch (e) {
     console.warn('desk: the 3D scene did not start', e);
-    flat('error');
+    if (me == mounting) flat('error');
   }
 }
+// crossing a phone's width: the choice is made again (the flat scene's sizes are chosen at mount)
+NARROW.addEventListener('change', () => { if (!q.get('scene')) go(); });
 show();
 window.desk = { S, act, get scene() { return scene; }, get dev() { return dev; }, flat };
 // after first paint: the page, the still and the app's frame come first
