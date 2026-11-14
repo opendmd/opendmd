@@ -548,8 +548,9 @@ LEDs, one pixel each, on a 128 × 32 canvas), and `drive(on)` with
 page's `performance.timeOrigin` plus its frame's time), just before it
 shows them, so the frame shown is the one just drawn, on one clock (the
 desk scene does). A Formula is shown on an even cadence at the display's
-refresh, there and on Now: a new frame every k refreshes (k: the whole
-number of them nearest the frame time the panel opens it at, at least 1:
+refresh, there and on Now: a new frame every k refreshes (k: the refreshes
+in the frame time the panel opens it at, rounded down from a little past
+the half, at least 1:
 Starfield, `smooth`, every refresh at 60 and 120 Hz; one with no rate
 line every refresh at 60 Hz, every 2nd at 120), its time on by those k
 refreshes. Off, every call fails as a
