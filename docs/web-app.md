@@ -542,7 +542,17 @@ brightness in effect, `canvas`: its panel), `power(on)`, `card(in)`,
 change; returns a function that stops it), `run(on)` (false: everything
 stops, the panel, the status stream and the app's reads, for a page out of
 sight) and `mirror(on)` (false: Now draws no mirror, for a page that shows
-the panel itself; `?desk` in the address starts that way). Off, every call fails as a
+the panel itself; `?desk` in the address starts that way), `frame()` (its
+LEDs, one pixel each, on a 128 × 32 canvas), and `drive(on)` with
+`step(at)`: the page's own animation frames tick the panel (`at`: the
+page's `performance.timeOrigin` plus its frame's time), just before it
+shows them, so the frame shown is the one just drawn, on one clock (the
+desk scene does). A Formula is shown on an even cadence at the display's
+refresh, there and on Now: a new frame every k refreshes (k: the whole
+number of them nearest the frame time the panel opens it at, at least 1:
+Starfield, `smooth`, every refresh at 60 and 120 Hz; one with no rate
+line every refresh at 60 Hz, every 2nd at 120), its time on by those k
+refreshes. Off, every call fails as a
 dropped connection does and the panel goes dark; on, it starts afresh (its
 clock and uptime from zero), plays the start-up show, then the playlist,
 and answers on the network a moment later, so the app reconnects by

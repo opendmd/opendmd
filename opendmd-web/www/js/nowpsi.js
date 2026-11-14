@@ -31,6 +31,40 @@ const bundled = () => (B ??= fetch('formulas.json').then((r) => (r.ok ? r.json()
 
 // Not now, maybe soon: Now asks again at its next status (`no`: meanwhile
 // it says there's no preview).
+// A Formula's frames on an even cadence at the display's refresh: the panel
+// draws one every refresh, 2nd or 4th (10, 20 or 40 ms, the rate it opens at,
+// info()[17]), which a monitor's 60 or 120 Hz can't show on that grid (a 10 ms
+// grid at 60 Hz steps its time 10, 20, 20 ms: motion that speeds up and slows
+// down; at 120 Hz, a frame held every 6th refresh). So a new frame every k
+// display frames (k: the whole number of them nearest the frame time, at least
+// 1), its time on by k of them, eased towards where the panel is (`at`, ms).
+// The display's frame time is the mean interval (the first 30, then slowly
+// following; a missed frame counted as the frames it spans), so coarse or
+// jittery timestamps (Firefox rounds them to 1 ms) don't unsettle it.
+// pacer(g)(now, at): the time to draw at, or null (nothing new: the last frame
+// stays; `at` unchanged, paused, also).
+export function pacer(g) {
+  let pT = 0, vs = 1000 / 60, n = 0, acc = 0, t = null, pa = null, k = 0;
+  return (now, at) => {
+    const dt = pT ? now - pT : 0;
+    pT = now;
+    if (dt > 2 && dt < 100) {
+      const m = n < 8 ? 1 : Math.max(1, Math.round(dt / vs));
+      vs += (dt / m - vs) * (n < 30 ? 1 / ++n : 0.02);
+    }
+    if (at == null || at === pa) return null;
+    pa = at;
+    // (k held from then on while the frame time is within 3/4 of a refresh of it: 20 ms at 120 Hz is
+    // 2.4 refreshes, and a refresh read a little short must not make it 3 now and then.)
+    if (n < 30 || Math.abs(g / vs - k) > 0.75) k = Math.max(1, Math.round(g / vs));
+    acc += dt > 0 ? Math.max(1, Math.round(dt / vs)) : k;
+    if (t != null && acc < k) return null;
+    const x = t == null ? at : t + acc * vs, e = at - x;
+    acc = 0;
+    return (t = Math.abs(e) > 100 + k * vs ? at : x + e * 0.05);
+  };
+}
+
 export class Later extends Error { constructor(no) { super('later'); this.no = no; } }
 
 // The saved (this browser's) or bundled Formula an inline path
@@ -72,25 +106,24 @@ export async function play(p, pv, { pos, start, alive, fail }) {
   if (!alive()) return () => {};
   if (!src || !P.compile(src)) throw new Error('no preview');
   const q = new URLSearchParams(p.split('?')[1] || ''), [a, b, c] = [...'abc'].map((k) => Q(num(q.get(k))));
-  const i = P.info(), g = i[10] || 20, lp = i[4] === 0 ? Infinity : i[4] || 8000, t0 = performance.now(), ds = pv.canvas.dataset;
-  let raf = 0, n0 = -1, on = true;
+  const i = P.info(), pace = pacer(i[17] || i[10] || 20), lp = i[4] === 0 ? Infinity : i[4] || 8000, t0 = performance.now(), ds = pv.canvas.dataset;
+  let raf = 0, on = true;
   const stop = () => { if (on) { on = false; cancelAnimationFrame(raf); ds.loops = --loops; } };
   const step = (now) => {
     if (!alive()) return stop();
     raf = requestAnimationFrame(step);
     if (pv.canvas.offsetParent === null) return;
-    const n = Math.floor(Math.max(0, pos() ?? now - t0) / g);
-    if (n === n0) return;
-    n0 = n;
-    const d = new Date();
+    const at = pace(now, Math.max(0, pos() ?? now - t0));
+    if (at == null) return;
+    const d = new Date(), ms = Math.round(at) % lp;
     try {
       // (One instance: anything compiled since puts this one back.)
       if (P.k !== src && !P.compile(src)) throw 0;
-      P.frame((n * g) % lp, d.getHours(), d.getMinutes(), d.getSeconds(), a, b, c);
+      P.frame(ms, d.getHours(), d.getMinutes(), d.getSeconds(), a, b, c);
       pv.p.showRgb(new Uint8Array(P.mem.buffer, P.pixels(), 12288));
     } catch { stop(); M = null; gen++; fail(); return; }
     // (For tools/web-smoke.py.)
-    Object.assign(ds, { frames: -~ds.frames, ms: (n * g) % lp, src: p, len: src.length, q: `${a},${b},${c}` });
+    Object.assign(ds, { frames: -~ds.frames, ms, src: p, len: src.length, q: `${a},${b},${c}` });
   };
   ds.loops = ++loops;
   raf = requestAnimationFrame(step);
