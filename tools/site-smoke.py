@@ -192,6 +192,7 @@ import base64
 import contextlib
 import filecmp
 import functools
+import hashlib
 import http.server
 import io
 import json
@@ -210,7 +211,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageStat
 from playwright.sync_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -7428,7 +7429,7 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     """The demo's Formulas have no share link: Copy code, and in the
     editor Submit to the gallery."""
     page = new_page(browser, "laptop", errors)
-    page.goto(f"{base}/demo/#formulas")
+    page.goto(f"{base}/demo/app.html#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-ex .psi-tile >> nth=0")
     first = examples(bundled_only=True)[0]
@@ -7478,7 +7479,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
         wait_js(page, f"document.querySelector({json.dumps(sel)}).closest('.card,.grp').querySelector('.tick')?.textContent.includes('Saved')", timeout=10000)
 
     page = new_page(browser, "laptop", errors)
-    page.goto(f"{base}/demo/#now")
+    page.goto(f"{base}/demo/app.html#now")
     wait_js(page, "(t => t && t !== '…')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     tab("look")
     check(all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-look", "#st-glow")),
@@ -7643,7 +7644,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.context.close()
     # A new session starts afresh; every tab on a phone.
     page = new_page(browser, "phone", errors)
-    page.goto(f"{base}/demo/#settings/look")
+    page.goto(f"{base}/demo/app.html#settings/look")
     page.wait_for_selector("#st-tab-look", timeout=30000)
     check(page.input_value("#st-look") == "colour", "demo settings: a new session starts with a new player's settings")
     for t in ("play", "look", "time", "replay", "device"):
@@ -7660,7 +7661,7 @@ def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
     brightness filter, no settings of its own), and the folder plays in
     local mode with no errors."""
     page = new_page(browser, "laptop", errors)
-    page.goto(f"{base}/demo/#now")
+    page.goto(f"{base}/demo/app.html#now")
     wait_js(page, "(t => t && t !== '…')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     # Night mode now, so the demo's banner is up before the swap.
     page.evaluate("""() => import('./js/state.js').then(async ({ app }) => {
@@ -7730,7 +7731,7 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
     if not base.startswith("https://opendmd.dev"):
         page.route("https://opendmd.dev/**", lambda r: (site_asked.append(r.request.url), r.abort()))
     page.on("request", lambda r: "/art-index/" in r.url and asked.append(r.url))
-    page.goto(f"{base}/demo/#create")
+    page.goto(f"{base}/demo/app.html#create")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=30000)
     page.click("#st-src [data-v=gameart]")
     page.select_option("#find-platform", "GB")
@@ -8757,7 +8758,7 @@ def psi_error_links(browser, base: str, errors: list[str]) -> None:
     page.goto(href)
     page.wait_for_selector("#E202")
     check(page.url == f"{base}/dev/psi/errors/#E202", f"/f/: the code's link leads to its entry ({page.url})")
-    page.goto(f"{base}/demo/#formulas")
+    page.goto(f"{base}/demo/app.html#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-new")
     page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
@@ -8854,7 +8855,7 @@ def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     page.click("#psi-cost")
     page.wait_for_timeout(300)
     check(page.locator(".psi-gut .fc-bar").count() == 0 and not page.is_visible("#psi-notes"), "/f/: pressed again, What costs most goes")
-    page.goto(f"{base}/demo/#formulas")
+    page.goto(f"{base}/demo/app.html#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-new")
     page.wait_for_selector("#psi-ed #psi-tidy:not([hidden])", timeout=10000)
@@ -9021,6 +9022,429 @@ def install_page(browser, base: str, site: Path, dist: Path, beta_dist: Path | N
             check(r.status == 200 and r.body() == (src / name).read_bytes(), f"install: served {sub}/{name} ({len(r.body()):,} B)")
     check(not console, f"install: no console errors {console[:2]}")
     page.context.close()
+
+
+
+# --- the demo's desk scene (/demo/: opendmd-web/share/desk/), the web app beside it at
+# /demo/app.html. Headless Chromium here has no GPU (software WebGL: SwiftShader or llvmpipe),
+# so the 3D scene runs only when asked (?scene=hd, the quality level pinned with &q=4) and
+# the default address must choose the flat one.
+DESK_3D = ("/demo/desk/hd/three.js", "/demo/desk/hd/scene.js", "/demo/desk/hd/back.js", "/demo/desk/hd/atlas.js", "/demo/desk/hd/atlas.webp")
+NO_WEBGL = """(() => { const g = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (k, ...a) { return /webgl/.test(k) ? null : g.call(this, k, ...a); }; })()"""
+
+
+def desk_page(browser, errors: list[str], size: str = "laptop", scheme: str | None = None, motion: str | None = None,
+              init: str | None = None) -> tuple[Page, list[str]]:
+    """A page for the desk scene, and the paths it requests (same-origin) or its foreign URLs."""
+    page = new_page(browser, size, errors, scheme)
+    if motion:
+        page.emulate_media(reduced_motion=motion)
+    if init:
+        page.add_init_script(init)
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.url))
+    page.on("console", lambda m: m.type == "warning" and "desk" in m.text and errors.append(f"[{size}] desk warning: {m.text}"))
+    return page, asked
+
+
+def desk_world(page: Page, timeout: float = 30000) -> None:
+    """Wait until the page has the app's device and it is up, playing its card."""
+    wait_js(page, "!!(window.desk && desk.dev && desk.S.W && desk.S.W.up && desk.S.W.power && desk.S.W.card)", timeout)
+
+
+def app_text(page: Page) -> str:
+    return page.frame_locator("#app").locator("body").inner_text()
+
+
+def mean_rgb(png: bytes, box: tuple[float, float, float, float] | None = None) -> float:
+    im = Image.open(io.BytesIO(png)).convert("RGB")
+    if box:
+        im = im.crop(tuple(int(round(v)) for v in box))
+    return sum(ImageStat.Stat(im).mean) / 3
+
+
+def lit_px(png: bytes, box: tuple[float, float, float, float]) -> int:
+    """Pixels in `box` with a channel over 140: the LEDs that are on."""
+    im = Image.open(io.BytesIO(png)).convert("RGB").crop(tuple(int(round(v)) for v in box))
+    return sum(1 for p in zip(*(iter(im.tobytes()),) * 3) if max(p) > 140)
+
+
+def desk_flat_rect(page: Page) -> list[float]:
+    return page.evaluate("(() => { const b = document.querySelector('#panel').getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; })()")
+
+
+def desk_hd_rect(page: Page, name: str) -> list[float]:
+    return page.evaluate("""(n) => { const s = document.querySelector('#scene').getBoundingClientRect(), [x, y, w, h] = desk.scene.rect(n);
+        return [s.left + x, s.top + y, s.left + x + w, s.top + y + h]; }""", name)
+
+
+def desk_choice(browser, base: str, errors: list[str]) -> None:
+    """Which scene: the flat one for no WebGL, a software renderer, reduced motion, a phone and
+    ?scene=flat, before any 3D file is fetched; the forwarder; the app beside it."""
+    for what, kw, url, why in (
+            ("no WebGL", {"init": NO_WEBGL}, "/demo/", "no fast WebGL2"),
+            ("software WebGL (this browser)", {}, "/demo/", "no fast WebGL2"),
+            ("reduced motion", {"motion": "reduce"}, "/demo/", "reduced motion"),
+            ("a phone", {"size": "phone"}, "/demo/", "small screen"),
+            ("asked", {}, "/demo/?scene=flat", "asked"),
+            ("dark, no WebGL", {"init": NO_WEBGL, "scheme": "dark"}, "/demo/", "no fast WebGL2")):
+        page, asked = desk_page(browser, errors, **kw)
+        page.goto(base + url)
+        wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", 20000)
+        desk_world(page)
+        page.wait_for_timeout(600)
+        got = page.evaluate("document.querySelector('#stage').dataset.why")
+        check(got == why, f"desk ({what}): the flat scene, because {why!r} (got {got!r})")
+        check(lit(page, "#panel") > 200, f"desk ({what}): the flat scene's panel plays (lit LEDs)")
+        fetched = [u for u in asked if urllib.parse.urlparse(u).path in DESK_3D or "/desk/hd/poster" in u]
+        check(not fetched, f"desk ({what}): no 3D file fetched ({fetched[:3]})")
+        foreign = [u for u in asked if not u.startswith(base) and not u.startswith(("data:", "blob:"))]
+        check(not foreign, f"desk ({what}): every request same-origin ({foreign[:3]})")
+        page.context.close()
+    # the old addresses: /demo/#<view> is the app's
+    page, _ = desk_page(browser, errors)
+    navs: list[str] = []
+    page.on("framenavigated", lambda f: f == page.main_frame and navs.append(f.url))
+    page.goto(f"{base}/demo/#now")
+    page.wait_for_url("**/demo/app.html#now", timeout=10000)
+    first, last = urllib.parse.urlparse(navs[0]), urllib.parse.urlparse(page.url)
+    check(first.path == "/demo/" and first.fragment == "now" and last.path == "/demo/app.html" and last.fragment == "now",
+          f"desk: /demo/#now (loaded as such) forwards to /demo/app.html#now ({[urllib.parse.urlparse(u).path + '#' + urllib.parse.urlparse(u).fragment for u in navs]})")
+    page.wait_for_selector("#view-now", timeout=30000)
+    txt = page.inner_text("body")
+    check("Use your own card" in txt and "opendmd.dev" in txt, "desk: the plain app keeps Use your own card and the way back to the site")
+    page.context.close()
+    # the app in the frame: ?desk, no folder to pick, no site links, no mirror on Now
+    page, _ = desk_page(browser, errors, init=NO_WEBGL)
+    page.goto(f"{base}/demo/")
+    desk_world(page)
+    src = page.evaluate("document.querySelector('#app').getAttribute('src')")
+    check(src.startswith("app.html?desk"), f"desk: the app is framed as app.html?desk ({src})")
+    txt = app_text(page)
+    check("Use your own card" not in txt and "opendmd.dev" not in txt, "desk: the framed app has no Use your own card and no site links")
+    check(page.locator(".hello a").first.get_attribute("href") == "app.html", "desk: Just the app is the stage's first link, to app.html")
+    page.context.close()
+
+
+def desk_world_flat(browser, base: str, errors: list[str], shots: Path) -> None:
+    """The buttons change the app's state through its world (window.opendmdDemo), and the app
+    shows it; keyboard only; reduced motion pulls the card without turning round."""
+    for scheme in ("light", "dark"):
+        page, _ = desk_page(browser, errors, scheme=scheme, init=NO_WEBGL)
+        page.goto(f"{base}/demo/")
+        desk_world(page)
+        page.wait_for_timeout(800)
+        lights = page.evaluate("+document.querySelector('#b-light').value")
+        check(lights == (100 if scheme == "light" else 6), f"desk ({scheme}): the lights follow the system's theme ({lights})")
+        # unplug, by keyboard: Tab to the power button, Enter
+        page.focus("#b-power")
+        page.keyboard.press("Enter")
+        wait_js(page, "!desk.dev.state.power", 3000)
+        page.wait_for_timeout(400)
+        check(lit(page, "#panel") == 0 or page.evaluate("getComputedStyle(document.querySelector('#panel')).opacity") == "0",
+              f"desk ({scheme}): unplugged, the panel is black")
+        check(page.get_attribute("#b-power", "aria-pressed") is None and "Plug it back in" in page.inner_text("#b-power")
+              and page.evaluate("document.querySelector('#b-power').classList.contains('on')"),
+              f"desk ({scheme}): the power button says Plug it back in (its words change; no aria-pressed as well)")
+        check(page.inner_text("#say").startswith("Unplugged"), f"desk ({scheme}): the status line says unplugged")
+        try:
+            wait_js(page, """(() => { const d = document.querySelector('#app').contentDocument;
+                return /Offline/.test(d.querySelector('#now .dot.bad, .dot.bad')?.title || '') && /Panel not reachable/.test(d.body.innerText); })()""", 20000)
+            ok = True
+        except PlaywrightTimeout:
+            ok = False
+        check(ok, f"desk ({scheme}): unplugged, the app is Offline and says Panel not reachable")
+        if scheme == "dark":
+            page.screenshot(path=str(shots / "desk-flat-unplugged-dark.png"))
+        page.keyboard.press("Enter")
+        wait_js(page, "desk.dev.state.power && !desk.dev.state.up", 3000)
+        check(page.inner_text("#say").startswith("Starting up"), f"desk ({scheme}): plugged in, it starts up (the status line)")
+        page.wait_for_timeout(700)
+        check(lit(page, "#panel") > 50, f"desk ({scheme}): plugged in, the panel shows its start-up")
+        wait_js(page, "desk.dev.state.up", 8000)
+        try:
+            wait_js(page, "!document.querySelector('#app').contentDocument.querySelector('.dot.bad')", 15000)
+            ok = True
+        except PlaywrightTimeout:
+            ok = False
+        check(ok, f"desk ({scheme}): then the app finds it again (Live)")
+        # the card: from the front it turns round first, then the card goes; the app says No card
+        page.click("#b-card")
+        wait_js(page, "desk.S.back", 2000)
+        wait_js(page, "!desk.dev.state.card", 4000)
+        check(True, f"desk ({scheme}): Pull the SD card turns it round, then the card is out")
+        try:
+            wait_js(page, "/No card/.test(document.querySelector('#app').contentDocument.body.innerText)", 20000)
+            ok = True
+        except PlaywrightTimeout:
+            ok = False
+        check(ok, f"desk ({scheme}): no card, the app says No card")
+        page.click("#b-turn")
+        wait_js(page, "!desk.S.back", 2000)
+        page.wait_for_timeout(2500)
+        check(lit(page, "#panel") > 50, f"desk ({scheme}): no card, the panel shows its status card")
+        if scheme == "light":
+            page.screenshot(path=str(shots / "desk-flat-nocard.png"))
+        page.click("#b-card")
+        wait_js(page, "desk.dev.state.card", 3000)
+        try:
+            wait_js(page, "!/No card/.test(document.querySelector('#app').contentDocument.querySelector('#view-now').innerText)", 20000)
+            ok = True
+        except PlaywrightTimeout:
+            ok = False
+        check(ok, f"desk ({scheme}): the card back in, it plays again")
+        # the room's lights: the slider, and the lamp and the dimmer cycle 100 -> 30 -> 0
+        page.evaluate("(() => { const b = document.querySelector('#b-light'); b.value = 100; b.dispatchEvent(new Event('input')); })()")
+        seq = []
+        for _ in range(3):
+            page.evaluate("document.querySelector('#dial').click()")
+            seq.append(page.evaluate("desk.S.light"))
+        check(seq == [30, 0, 100], f"desk ({scheme}): the dimmer cycles the lights 30, 0, 100 ({seq})")
+        page.context.close()
+    # turned round: the parts' links, in order, by keyboard; each names itself; Enter on the card's pulls it; Escape turns back
+    page, _ = desk_page(browser, errors, init=NO_WEBGL)
+    page.goto(f"{base}/demo/")
+    desk_world(page)
+    page.focus("#b-turn")
+    page.keyboard.press("Enter")
+    wait_js(page, "!document.querySelector('#parts').hidden", 4000)
+    ids = page.evaluate("[...document.querySelectorAll('#parts .part')].map((a) => a.id)")
+    check(ids == ["p-panels", "p-carrier", "p-leads", "p-ribbon", "p-devkit", "p-sd", "p-usb"], f"desk: seven part links, in order ({ids})")
+    page.focus("#b-light")
+    page.keyboard.press("Tab")
+    check(page.evaluate("document.activeElement.id") == "p-panels", "desk: after the controls, Tab goes on to the first part (the parts come after them)")
+    check(page.evaluate("document.querySelector('#p-sd').tagName") == "BUTTON", "desk: the card's part is a button (it pulls the card)")
+    page.focus("#p-panels")
+    names = []
+    for i in range(7):
+        if i:
+            page.keyboard.press("Tab")
+        names.append((page.evaluate("document.activeElement.id"), page.evaluate("document.querySelector('#tip').classList.contains('on')"),
+                      page.inner_text("#tip").split("\n")[0]))
+    check([n[0] for n in names] == ids and all(n[1] for n in names), f"desk: Tab goes through the parts and each shows its label ({names})")
+    box = page.evaluate("(() => { const b = document.querySelector('#p-devkit').getBoundingClientRect(), v = document.querySelector('#view').getBoundingClientRect(); return [b.width, b.height, b.left >= v.left - 1 && b.right <= v.right + 1]; })()")
+    check(box[0] > 8 and box[1] > 8 and box[2], f"desk: the DevKit's link sits over the picture ({box})")
+    page.focus("#p-devkit")
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(shots / "desk-flat-back.png"))
+    page.focus("#p-sd")
+    page.keyboard.press("Enter")
+    wait_js(page, "!desk.dev.state.card", 3000)
+    check(True, "desk: Enter on the card's link pulls the card")
+    page.keyboard.press("Escape")
+    wait_js(page, "!desk.S.back && document.querySelector('#parts').hidden", 3000)
+    check(page.evaluate("document.activeElement.id") == "b-turn", "desk: Escape turns it back, the parts' links hidden, focus on Turn it round")
+    page.click("#b-card")
+    page.context.close()
+    # reduced motion: the card is pulled without turning round
+    page, _ = desk_page(browser, errors, motion="reduce")
+    page.goto(f"{base}/demo/")
+    desk_world(page)
+    page.click("#b-card")
+    wait_js(page, "!desk.dev.state.card", 2000)
+    check(not page.evaluate("desk.S.back"), "desk (reduced motion): the card is pulled without turning round")
+    page.context.close()
+
+
+def desk_guide_links(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Every part's link points at a section that exists in the built guide."""
+    hw = (site / "guide/hardware.html").read_text(encoding="utf-8")
+    ids = set(re.findall(r'id="([^"]+)"', hw))
+    page, _ = desk_page(browser, errors, init=NO_WEBGL)
+    page.goto(f"{base}/demo/")
+    wait_js(page, "document.querySelectorAll('#parts .part').length == 7", 20000)
+    hrefs = page.evaluate("[...document.querySelectorAll('#parts a')].map((a) => a.getAttribute('href'))")
+    bad = [h for h in hrefs if not h.startswith("../guide/hardware.html#") or h.split("#", 1)[1] not in ids]
+    check(not bad, f"desk: every part links to a section of the build guide ({bad})")
+    page.context.close()
+
+
+def desk_phone(browser, base: str, errors: list[str], shots: Path) -> None:
+    """A phone: the flat scene, a fixed split with a handle that folds it, no sideways scroll."""
+    for scheme in ("light", "dark"):
+        page, _ = desk_page(browser, errors, size="phone", scheme=scheme)
+        page.goto(f"{base}/demo/")
+        desk_world(page)
+        page.wait_for_timeout(800)
+        wide = page.evaluate("document.documentElement.scrollWidth - innerWidth")
+        check(wide <= 0, f"desk (phone, {scheme}): no sideways scroll ({wide})")
+        h = page.evaluate("document.querySelector('#view').getBoundingClientRect().height")
+        app = page.evaluate("document.querySelector('#app').getBoundingClientRect().height")
+        check(120 < h < 330 and app > 300, f"desk (phone, {scheme}): the scene a strip over the app ({h:.0f}, {app:.0f})")
+        vis_say = page.evaluate("getComputedStyle(document.querySelector('#say')).display != 'none'")
+        slider = page.evaluate("(() => { const b = document.querySelector('#b-light').getBoundingClientRect(); return b.width > 40 && b.right <= innerWidth && b.left >= 0; })()")
+        check(vis_say and slider, f"desk (phone, {scheme}): the status is read out (not display:none), the lights slider in sight ({vis_say}, {slider})")
+        page.screenshot(path=str(shots / f"desk-flat-phone-{scheme}.png"))
+        page.click("#grab")
+        page.wait_for_timeout(600)
+        h2 = page.evaluate("document.querySelector('#view').getBoundingClientRect().height")
+        check(h2 < h and page.get_attribute("#grab", "aria-expanded") == "false", f"desk (phone, {scheme}): the handle folds the scene ({h:.0f} -> {h2:.0f})")
+        page.click("#grab")
+        page.context.close()
+
+
+def desk_hd(browser, base: str, site: Path, errors: list[str], shots: Path) -> None:
+    """The 3D scene, asked for (?scene=hd&q=4: software WebGL, the lowest level): it starts behind
+    its still, draws, lights, unplugs, turns round to the parts, pauses; the governor hands over."""
+    page, asked = desk_page(browser, errors)
+    states: list[str] = []
+    page.goto(f"{base}/demo/?scene=hd&q=4")
+    states.append(page.evaluate("document.querySelector('#stage').dataset.scene || ''"))
+    wait_js(page, "document.querySelector('#stage').dataset.scene == 'hd'", 60000)
+    check(states[0] in ("", "hd-loading"), f"desk 3D: loads behind its still first ({states})")
+    paths = [urllib.parse.urlparse(u).path for u in asked]
+    poster = next((i for i, p in enumerate(paths) if "/desk/hd/poster-" in p), None)
+    three = next((i for i, p in enumerate(paths) if p == "/demo/desk/hd/three.js"), None)
+    check(poster is not None and three is not None and poster < three, f"desk 3D: the still is fetched before three.js ({poster}, {three})")
+    check(page.evaluate("document.querySelector('canvas.gl').classList.contains('on')"), "desk 3D: its canvas is shown")
+    desk_world(page, 40000)
+    page.wait_for_timeout(2500)
+    shot = page.screenshot()
+    s = page.evaluate("(() => { const b = document.querySelector('#scene').getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; })()")
+    crop = Image.open(io.BytesIO(shot)).convert("RGB").crop(tuple(int(v) for v in s)).tobytes()
+    colours = len(set(zip(*(iter(crop),) * 3)))
+    check(colours > 500, f"desk 3D: it drew a room ({colours} colours)")
+    page.screenshot(path=str(shots / "desk-hd-day.png"))
+    face = lit_px(shot, desk_hd_rect(page, "face"))
+    check(face > 300, f"desk 3D: the panel's face is lit ({face} bright pixels)")
+    fr = desk_hd_rect(page, "face")
+    check((fr[2] - fr[0]) / 128 >= 4.8, f"desk 3D (1280 x 800 at 1x): the face gets about 5 px an LED ({(fr[2] - fr[0]) / 128:.2f})")
+    # unplug: the face goes dark within a second; the status line says so; plugged back in it comes back
+    page.click("#b-power")
+    page.mouse.move(1270, 790)                    # (off the stage: the eye stops drifting)
+    page.wait_for_timeout(1000)
+    face2 = lit_px(page.screenshot(), desk_hd_rect(page, "face"))
+    check(face2 < face * .1, f"desk 3D: unplugged, the panel goes dark within a second ({face} -> {face2} bright pixels)")
+    check(page.inner_text("#say").startswith("Unplugged"), "desk 3D: the status line says unplugged")
+    page.wait_for_timeout(1500)
+    n0 = page.evaluate("desk.scene.stats.n")
+    page.wait_for_timeout(1500)
+    n1 = page.evaluate("desk.scene.stats.n")
+    check(n1 - n0 == 0, f"desk 3D: unplugged and still, it stops drawing ({n1 - n0} frames in 1.5 s)")
+    page.click("#b-power")
+    wait_js(page, "desk.dev.state.up", 8000)
+    page.wait_for_timeout(2500)
+    face3 = lit_px(page.screenshot(), desk_hd_rect(page, "face"))
+    check(face3 > 300, f"desk 3D: plugged in, the panel comes back ({face2} -> {face3} bright pixels)")
+    # the room's lights: off, the wall darkens by more than half
+    wall0 = mean_rgb(page.screenshot(), desk_hd_rect(page, "wall"))
+    page.evaluate("(() => { const b = document.querySelector('#b-light'); b.value = 0; b.dispatchEvent(new Event('input')); })()")
+    page.wait_for_timeout(1500)
+    wall1 = mean_rgb(page.screenshot(), desk_hd_rect(page, "wall"))
+    check(wall1 < wall0 * .5, f"desk 3D: lights off, the wall darkens ({wall0:.0f} -> {wall1:.0f})")
+    page.screenshot(path=str(shots / "desk-hd-night.png"))
+    seq = []
+    for sel in ("#s-lamp", "#s-lamp", "#s-dial"):
+        page.evaluate(f"document.querySelector('{sel}').click()")
+        seq.append(page.evaluate("desk.S.light"))
+    check(seq == [100, 30, 0], f"desk 3D: the lamp and the dimmer cycle the lights ({seq})")
+    # turn round: the parts' links at the back, the lamp's hot spot gone, Tab through them
+    page.click("#b-turn")
+    page.wait_for_timeout(2600)
+    wait_js(page, "!document.querySelector('#parts').hidden", 15000)
+    check(page.is_visible("#p-devkit") and not page.is_visible("#s-lamp"), "desk 3D: turned round, the parts' links show and the lamp's spot hides")
+    check(not page.evaluate("desk.scene.S && desk.scene.renderer && desk.scene.S.k < .98"), "desk 3D: the eye is round the back")
+    page.focus("#p-panels")
+    seen = []
+    for i in range(7):
+        if i:
+            page.keyboard.press("Tab")
+        seen.append(page.evaluate("[document.activeElement.id, document.querySelector('#tip').classList.contains('on')]"))
+    check([s[0] for s in seen] == ["p-panels", "p-carrier", "p-leads", "p-ribbon", "p-devkit", "p-sd", "p-usb"] and all(s[1] for s in seen),
+          f"desk 3D: Tab through the seven parts, each labelled ({seen})")
+    page.focus("#p-devkit")
+    page.wait_for_timeout(1200)
+    page.screenshot(path=str(shots / "desk-hd-back.png"))
+    page.focus("#p-sd")
+    page.keyboard.press("Enter")
+    wait_js(page, "!desk.dev.state.card", 3000)
+    check(True, "desk 3D: Enter on the card's link pulls it")
+    page.keyboard.press("Escape")
+    wait_js(page, "!desk.S.back && document.querySelector('#parts').hidden", 3000)
+    check(True, "desk 3D: Escape turns it back; the parts' links hide")
+    page.wait_for_timeout(3000)
+    page.screenshot(path=str(shots / "desk-hd-nocard.png"))
+    page.click("#b-card")
+    # out of sight: the scene's frames stop, and so does the player
+    n0 = page.evaluate("desk.scene.stats.n")
+    page.evaluate("""(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange')); })()""")
+    page.wait_for_timeout(300)
+    n1 = page.evaluate("desk.scene.stats.n")
+    page.wait_for_timeout(1500)
+    n2 = page.evaluate("desk.scene.stats.n")
+    check(n2 == n1, f"desk 3D: hidden, it stops drawing ({n0} -> {n1} -> {n2})")
+    page.evaluate("""(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange')); })()""")
+    page.wait_for_timeout(1500)
+    check(page.evaluate("desk.scene.stats.n") > n2, "desk 3D: shown again, it draws again")
+    foreign = [u for u in asked if not u.startswith(base) and not u.startswith(("data:", "blob:"))]
+    check(not foreign, f"desk 3D: every request same-origin ({foreign[:3]})")
+    page.context.close()
+    # the hand-over: slow frames at the last level -> the flat scene, remembered; one context lost
+    # (each WebGL canvas counted on itself: the scene's is out of the page by the time it is lost)
+    page, asked = desk_page(browser, errors, init="""(() => { window.__lost = 0; const g = HTMLCanvasElement.prototype.getContext, seen = new WeakSet();
+        HTMLCanvasElement.prototype.getContext = function (k, ...a) { const c = g.call(this, k, ...a);
+          if (c && /webgl/.test(k) && !seen.has(this)) { seen.add(this); this.addEventListener('webglcontextlost', () => window.__lost++); } return c; }; })()""")
+    page.goto(f"{base}/demo/?scene=try&q=4")
+    wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", 120000)
+    why = page.evaluate("document.querySelector('#stage').dataset.why")
+    mark = page.evaluate("+localStorage.getItem('opendmd-desk-flat')")
+    check(why == "slow frames" and mark > 0, f"desk 3D: slow frames hand over to the flat scene, remembered ({why}, {mark})")
+    page.wait_for_timeout(800)
+    check(page.evaluate("window.__lost") == 1, f"desk 3D: the hand-over loses exactly one WebGL context ({page.evaluate('window.__lost')})")
+    check(page.locator("canvas.gl").count() == 0, "desk 3D: the 3D canvas is gone")
+    desk_world(page)
+    page.click("#b-power")
+    wait_js(page, "!desk.dev.state.power", 3000)
+    page.click("#b-power")
+    check(page.evaluate("desk.scene.kind") == "flat", "desk: after the hand-over the buttons work on the flat scene")
+    page.goto(f"{base}/demo/")
+    wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", 20000)
+    got = page.evaluate("document.querySelector('#stage').dataset.why")
+    check(got == "slow last time", f"desk: slow last time, the flat scene next visit ({got})")
+    page.context.close()
+    # the governor against a faked frame clock: under 4 fps (every such interval was once thrown away)
+    # and 7.5 fps both hand over within seconds, not a minute
+    for ms, limit in ((300, 25000), (133, 15000)):
+        page, _ = desk_page(browser, errors, init=f"""(() => {{ window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), {ms});
+            window.cancelAnimationFrame = (id) => clearTimeout(id); }})()""")
+        page.goto(f"{base}/demo/?scene=try&q=0")
+        wait_js(page, "document.querySelector('#stage').dataset.scene == 'hd'", 90000)
+        t0 = time.monotonic()
+        try:
+            wait_js(page, "document.querySelector('#stage').dataset.scene == 'flat'", limit)
+            took = round(time.monotonic() - t0, 1)
+        except PlaywrightTimeout:
+            took = None
+        check(took is not None and page.evaluate("document.querySelector('#stage').dataset.why") == "slow frames",
+              f"desk 3D: frames every {ms} ms hand over to the flat scene within {limit / 1000:g} s ({took} s)")
+        page.context.close()
+
+
+def desk_files(site: Path) -> None:
+    """Nothing of the desk scene in the web app (its pack is built from www-dist); the demo's
+    policy lets the page frame the app; the vendored three.js keeps its header."""
+    www = ROOT / "opendmd-web/www-dist"
+    names = {"desk.js", "desk.css", "flat.js", "parts.js", "go.js", "three.js", "scene.js", "back.js", "atlas.js", "atlas.webp"}
+    leak = [p for p in www.rglob("*") if p.is_file() and (p.name.removesuffix(".gz") in names or "desk" in p.relative_to(www).parts)] if www.is_dir() else []
+    check(not leak, f"desk: no desk file in the web app's www-dist (the pack's source) ({leak[:3]})")
+    check((site / "demo/app.html").is_file() and (site / "demo/index.html").is_file() and (site / "demo/desk/hd/three.js").is_file(),
+          "desk: /demo/ is the desk page, /demo/app.html the app")
+    headers = (site / "_headers").read_text()
+    block = headers.split("/demo/*\n", 1)[1].split("\n\n", 1)[0]
+    csp = [line.strip().split(": ", 1)[1] for line in block.splitlines() if line.strip().startswith("Content-Security-Policy:")]
+    check(len(csp) == 1 and "frame-ancestors 'self'" in csp[0] and "script-src 'self' 'wasm-unsafe-eval'" in csp[0] and "cdn" not in csp[0],
+          f"desk: /demo/* has one CSP, the demo's, frame-ancestors 'self' ({csp})")
+    three = (site / "demo/desk/hd/three.js").read_text(encoding="utf-8")
+    head, _, body = three.partition("*/\n")
+    want = re.search(r"sha256 of what follows this comment: ([0-9a-f]{64})", head)
+    got = hashlib.sha256(body.encode()).hexdigest()
+    check("three.js 0.186.1" in head and "MIT" in head and want is not None and want.group(1) == got,
+          f"desk: the vendored three.js keeps its licence header, and its body is what the header's sha256 says ({got[:12]})")
+    check((site / "licenses/THIRD-PARTY-LICENSES-desk.txt").is_file() and "THIRD-PARTY-LICENSES-desk.txt" in (site / "licenses/index.html").read_text(),
+          "desk: three.js's notice is on the licences page")
 
 
 def main() -> int:
@@ -9236,6 +9660,13 @@ def main() -> int:
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
+        print("the demo's desk scene (/demo/; the app at /demo/app.html)")
+        desk_files(a.site)
+        desk_choice(browser, base, errors)
+        desk_guide_links(browser, base, a.site, errors)
+        desk_world_flat(browser, base, errors, a.shots or ROOT / "target/site-smoke")
+        desk_phone(browser, base, errors, a.shots or ROOT / "target/site-smoke")
+        desk_hd(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
         print("the demo's Copy code and Submit")
         demo_share(browser, base, errors)
         print("the art index (/art-index/)")

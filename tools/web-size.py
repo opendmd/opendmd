@@ -555,6 +555,38 @@ LICENCES = {"licenses.txt"}
 # resolved from formulas.json, as the player has the bundled ones built in.
 DEMO_GZ_BUDGET = 12 * 1024
 DEMO = {"js/demo.js"}
+# The demo's desk scene (`--share`'s desk/: the page at /demo/, the web app
+# beside it in a frame; site-only, never in the web app or its pack: a file
+# of it under the web app's root fails the build). Measured minified as the
+# site serves them when `--webmin` is given (make web), else as written and
+# not enforced. 2026-11-14, branch desk-scene (owner-approved: the HD-2D
+# scene with the flat one as its fallback; "170 to 200 KB" over the flat
+# page accepted for the 3D path):
+# - the page and the flat scene (first paint for everyone; all a phone, reduced
+#   motion or a machine without a fast WebGL2 ever loads): <= 16 KB gz;
+# - its backdrop (room/*.webp, lossless art): <= 16 KB;
+# - the flat scene's drawing of the display's back (flat-back.js), fetched when
+#   the page is idle or at the first turn, off the first paint: <= 4 KB;
+# - the loader (desk.js: the page's state, its controls and the choice of
+#   scene) <= 5 KB of that, and the old-address forwarder (go.js) <= 512 B;
+# - the 3D scene, fetched after first paint only when 3D is chosen: three.js
+#   0.186.1 vendored (hd/three.js, ~143 KB gz: the renderer pulls in every
+#   built-in material's shader) and the scene's own code, <= 164 KB gz
+#   together (~156 KB as built); its atlas <= 6 KB; each poster still (one is
+#   fetched with the page, as the scene's background) <= 20 KB.
+DESK_PAGE_FILES = ("index.html", "desk.css", "desk.js", "parts.js", "go.js", "flat.js")
+DESK_LINES = {  # name -> (budget, files, gzipped?)
+    "desk page": (16 * 1024, DESK_PAGE_FILES, True),
+    "desk room": (16 * 1024, ("room/wall.webp", "room/desk.webp", "room/near.webp"), False),
+    "desk load": (5 * 1024, ("desk.js",), True),
+    "desk back": (4 * 1024, ("flat-back.js",), True),
+    "desk go": (512, ("go.js",), True),
+    "desk 3d": (164 * 1024, ("hd/three.js", "hd/scene.js", "hd/back.js", "hd/atlas.js"), True),
+    "desk atlas": (6 * 1024, ("hd/atlas.webp",), False),
+    "desk day": (20 * 1024, ("hd/poster-day.webp",), False),
+    "desk night": (20 * 1024, ("hd/poster-night.webp",), False),
+}
+DESK_VENDORED = ("hd/three.js",)
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),
 # never by the first page; the tree's and the editor's stylesheet with them.
@@ -693,6 +725,38 @@ def q_ref(p: Path, share: Path) -> bool:
     return p.relative_to(share).parts[0] == "ref"
 
 
+def desk_lines(desk: Path, webmin: str | None, unminified: bool) -> bool:
+    """The desk scene's lines (DESK_LINES): every file of share/desk/ on one, measured minified
+    when `webmin` is given (as the site serves them), else printed only."""
+    import gzip
+    import shutil
+    import subprocess
+    import tempfile
+    files = sorted(p.relative_to(desk).as_posix() for p in desk.rglob("*") if p.is_file())
+    listed = {f for _, fs, _ in DESK_LINES.values() for f in fs}
+    ok = True
+    for f in files:
+        if f not in listed:
+            print(f"desk UNLISTED desk/{f}: every file of the desk scene is on a line (DESK_LINES in tools/web-size.py)")
+            ok = False
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        shutil.copytree(desk, t, dirs_exist_ok=True)
+        rel = [f for f in files if f.endswith((".js", ".css")) and f not in DESK_VENDORED]
+        if webmin and rel:
+            subprocess.run([webmin, str(t), str(t), *rel], check=True, stdout=subprocess.DEVNULL)
+        for name, (budget, fs, gz) in DESK_LINES.items():
+            raw = sum((t / f).stat().st_size for f in fs if (t / f).exists())
+            size = sum(len(gzip.compress((t / f).read_bytes(), 9, mtime=0)) if gz else (t / f).stat().st_size
+                       for f in fs if (t / f).exists())
+            missing = [f for f in fs if not (t / f).exists()]
+            enforce = bool(webmin) and not unminified or not gz
+            verdict = "MISSING" if missing else ("ok" if size <= budget else "OVER BUDGET") if enforce else "(as written: not enforced)"
+            print(f"{name:<12} raw {raw:>9,}         {'gz' if gz else '  '} {size:>9,} / {budget / 1024:g} KB {verdict}")
+            ok &= not missing and (not enforce or size <= budget)
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("root", nargs="?", default="opendmd-web/www-dist")
@@ -700,12 +764,19 @@ def main() -> int:
     ap.add_argument("--pack-limit", type=int, default=786_432, help="the www partition, bytes (firmware/partitions.csv)")
     ap.add_argument("--pack-spare", type=int, default=65_536, help="what the signed pack must leave of the partition, bytes")
     ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
+    ap.add_argument("--webmin", help="opendmd-webmin, built: the desk scene's lines measured minified, as the site serves them")
     ap.add_argument("--unminified", action="store_true",
                     help="a WEB_MINIFY=0 build: print the lines, enforce none")
     args = ap.parse_args()
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
                    and not p.name.startswith("."))
+    desk_names = {Path(f).name for _, fs, _ in DESK_LINES.values() for f in fs} - {"index.html"}
+    leak = [p for p in files if p.relative_to(root).parts[0] == "desk" or p.name in desk_names]
+    if leak:
+        print(f"{root}: the demo's desk scene is the site's alone (opendmd-web/share/desk/): never in the web app or its pack: "
+              + ", ".join(p.relative_to(root).as_posix() for p in leak))
+        return 1
     stray = [p for p in files if p.relative_to(root).parts[0] == "art"]
     if stray:
         print(f"{root}/art/ is the art index, which the site publishes (opendmd-web/art-index/, "
@@ -828,6 +899,8 @@ def main() -> int:
         stray: list[str] = []
         video = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
+            if p.relative_to(share).parts[0] == "desk":
+                continue
             if q_ref(p, share):
                 b = p.read_bytes()
                 g = len(gzip.compress(b, 9, mtime=0))
@@ -932,6 +1005,7 @@ def main() -> int:
         verdict = "ok" if leds[1] <= LEDS_GZ_BUDGET else "OVER BUDGET"
         print(f"{'leds':<10} raw {leds[0]:>9,}           gz {leds[1]:>9,} / {LEDS_GZ_BUDGET // 1024} KB {verdict}")
         ok &= 0 < leds[1] <= LEDS_GZ_BUDGET
+        ok &= desk_lines(share / "desk", args.webmin, args.unminified)
         print()
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),

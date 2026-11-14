@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="The OpenDMD web app, running in your browser, with a display on a desk to control: unplug it, pull its card, turn it round.">
+<title>Demo · OpenDMD</title>
+<script src="desk/go.js"></script>
+<link rel="stylesheet" href="desk/desk.css">
+<script type="module" src="desk/desk.js"></script>
+</head>
+<body>
+<header class="top"><a class="brand" href="../">OpenDMD</a></header>
+<main class="deskpage" id="main">
+  <section class="stage" id="stage" aria-label="A display on a desk">
+    <p class="hello"><a class="just" href="app.html">Just the app&nbsp;›</a> <span class="tail"><b>This is the real web app</b>, running in your browser, with a display to control. Change something, or poke the hardware.</span></p>
+    <div class="view" id="view">
+    <div class="scene" id="scene" aria-hidden="true"></div>
+    <template id="t-flat">
+      <div class="L far"><i class="wallfill"></i><i class="at art wall" style="--x:0;--y:0;--w:640;--h:316"></i>
+        <button class="at dial" id="dial" style="--x:486;--y:204;--w:14;--h:20" tabindex="-1" aria-label="Room lights: bright, evening, off"><i></i></button></div>
+      <div class="L mid"><i class="floor"></i><i class="at art desk" style="--x:0;--y:224;--w:640;--h:176"></i>
+        <button class="at lamp" id="lamp" style="--x:132;--y:230;--w:56;--h:86" tabindex="-1" aria-label="The lamp: room lights"></button></div>
+      <div class="L near" id="near"><i class="at art nearart" style="--x:0;--y:320;--w:640;--h:80"></i>
+        <div class="at cables" id="cables" style="--x:180;--y:300;--w:300;--h:80"></div>
+        <button class="at loose" id="loose" style="--x:366;--y:334;--w:14;--h:12" tabindex="-1" aria-label="The microSD card, on the desk: put it back"></button></div>
+      <canvas class="lm" id="lm" width="8" height="8"></canvas>
+      <div class="L mid"><i class="at crt" style="--x:465;--y:255;--w:43;--h:36"><b></b><b></b><b></b><b></b><u></u></i>
+        <i class="at shade" style="--x:150;--y:232;--w:38;--h:20"></i></div>
+      <div class="L near"><i class="at sw" style="--x:455;--y:356;--w:5;--h:5"></i></div>
+      <i class="grain" id="grain"></i>
+      <i class="vig"></i><i class="veil"></i>
+      <canvas class="halo" id="halo" width="88" height="38"></canvas>
+      <div class="L mid">
+        <div class="zoom" id="zoom"><div class="rig" id="rig"><div class="turn" id="turn">
+          <i class="ground"></i>
+          <div class="foot a"><i class="ft"></i><i class="fs l"></i><i class="fs r"></i><i class="ff"></i><i class="fb"></i></div>
+          <div class="foot b"><i class="ft"></i><i class="fs l"></i><i class="fs r"></i><i class="ff"></i><i class="fb"></i></div>
+          <i class="side l"></i><i class="side r"></i><i class="lid"></i>
+          <div class="face rear" id="rear"></div>
+          <div class="face kit" id="kit"></div>
+          <div class="face front"><canvas id="panel" width="640" height="160"></canvas><i class="seam"></i></div>
+        </div></div></div></div>
+    </template>
+    <p class="tip" id="tip" aria-hidden="true"></p>
+    </div>
+    <div class="ctl" role="group" aria-label="The display on the desk">
+      <span class="lbl" aria-hidden="true">On the desk</span>
+      <button type="button" id="b-power"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1h1v3h2V1h1v3h1v3H8v2H7v2H5V9H4V7H3V4h1z"/></svg><span>Unplug the power</span></button>
+      <button type="button" id="b-turn"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h1V4h1V3h4v1h1v1h1v2H9V5H8V4H4v1H3v1h2v1H1V3h1zM3 8h1v1h4V8h1v2H8v1H4v-1H3z"/></svg><span>Turn it round</span></button>
+      <button type="button" id="b-card"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1h5v1h1v1h1v8H3zM4 2v2h1V2zm2 0v2h1V2z" fill-rule="evenodd"/></svg><span>Pull the SD card</span></button>
+      <label class="dim"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M5 0h2v2H5zM1 2h1v1h1v1H2V3H1zm9 0h1v1h-1v1H9V3h1zM4 3h4v1h1v4H8v1H4V8H3V4h1zM0 5h2v2H0zm10 0h2v2h-2zM5 10h2v2H5z"/></svg><span>Room lights</span>
+        <input type="range" id="b-light" min="0" max="100" value="100" aria-label="Room lights"></label>
+      <p class="say" id="say" role="status" aria-live="polite"></p>
+    </div>
+    <div class="parts" id="parts" role="group" aria-label="The parts on the back" hidden></div>
+  </section>
+  <aside class="app" aria-label="The OpenDMD web app">
+    <div class="phone">
+      <button type="button" class="grab" id="grab" aria-label="Hide the desk" aria-expanded="true"><i></i></button>
+      <iframe id="app" title="The OpenDMD web app, running in your browser"></iframe>
+    </div>
+  </aside>
+</main>
+</body>
+</html>

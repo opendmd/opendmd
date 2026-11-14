@@ -35,9 +35,13 @@
                generated); live examples, search and a cheat sheet by
                /psiref.js (opendmd-web/share/ref/, on the demo's Psi), which
                the guide's Psi pages load too (PSI_PAGES)
-- /demo/       the web app with the demo card (tools/demo-card.py) beside it:
+- /demo/       the desk scene (opendmd-web/share/desk/, DESK_PAGE below): a display
+               on a desk beside the web app, which it frames: /demo/app.html (?desk),
+               the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
-               that card in the browser (js/source.js, demoCard)
+               that card in the browser (js/source.js, demoCard). /demo/#<view>
+               forwards to app.html#<view> (desk/go.js), so the demo's old
+               links and hand-offs keep working
 - /f/          a Formula's page, the web app's own editor on the demo's files
                (opendmd-web/share/f/; js/formulas.js `editorPage`): a gallery
                Formula by name (`/f/#gallery=<slug>`, the gallery's tiles) or
@@ -280,6 +284,8 @@ def section(page: str) -> tuple[str | None, str | None]:
         return "formulas", None
     if first == "create":
         return "create", None
+    if first == "demo":
+        return "demo", None
     return None, None
 # The installer page: ESP Web Tools, pinned (the flashing itself is
 # esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
@@ -430,6 +436,8 @@ FILES = {
     "licenses/THIRD-PARTY-LICENSES-web.txt": "licenses/THIRD-PARTY-LICENSES-web.txt",
     # The installer's (ESP Web Tools and what it bundles; written by hand).
     "licenses/THIRD-PARTY-LICENSES-installer.txt": "licenses/THIRD-PARTY-LICENSES-installer.txt",
+    # The demo's desk scene's (three.js; written by hand).
+    "licenses/THIRD-PARTY-LICENSES-desk.txt": "licenses/THIRD-PARTY-LICENSES-desk.txt",
 }
 # The licences page (licenses/index.html), linked from every page's footer.
 LICENCES_PAGE = "licenses/index.html"
@@ -504,6 +512,8 @@ with each licence's full text:
 - **[The installer](THIRD-PARTY-LICENSES-installer.txt)** uses
   [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0), served from this site
   with what it bundles (esptool-js, Lit, Material Web, pako).
+- **[The demo's desk scene](THIRD-PARTY-LICENSES-desk.txt)** draws its 3D room with
+  [three.js](https://threejs.org/) (MIT), served from this site.
 
 The display carries the firmware's and the web app's notices too, under **Settings › Device ›
 About › Open-source licences** in the web app.
@@ -580,10 +590,12 @@ CSP = {
     # nothing (drafts stay in IndexedDB), so no connect-src beyond 'self'.
     "studio": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
-    # update check (util.js SITE).
+    # update check (util.js SITE). The desk scene (/demo/) frames the app
+    # (app.html), same origin, so frame-ancestors 'self'.
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
                              "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    .replace("frame-ancestors 'none'", "frame-ancestors 'self'")
     + "; connect-src 'self' https://gifcities.archive.org https://blob.gifcities.org https://raw.githubusercontent.com "
     "https://opendmd.dev",
 }
@@ -1107,6 +1119,35 @@ def app_page(out: Path, page: str, wm: dict) -> None:
     dest.write_text(text, encoding="utf-8")
 
 
+# The demo's page (opendmd-web/share/desk/): the desk scene beside the web app,
+# which moves to demo/app.html. Its index.html becomes demo/index.html with the
+# site's header and stylesheet (no footer: the page is the window's height);
+# everything else goes to demo/desk/, minified, but the vendored three.js
+# (hd/three.js, tools/vendor-three.mjs: minified already). Nothing of it is in
+# the web app or its www pack (tools/web-size.py fails if a desk file is).
+DESK_PAGE = "demo/index.html"
+DESK_SRC = ROOT / "opendmd-web/share/desk"
+DESK_VENDORED = ("hd/three.js",)
+
+
+def desk_page(out: Path, wm: dict) -> None:
+    demo = out / "demo"
+    (demo / "index.html").rename(demo / "app.html")
+    shutil.copytree(DESK_SRC, demo / "desk", ignore=shutil.ignore_patterns("index.html"))
+    minify_in_place(demo / "desk", [f for f in (demo / "desk").rglob("*")
+                                    if f.is_file() and f.relative_to(demo / "desk").as_posix() not in DESK_VENDORED])
+    text = (DESK_SRC / "index.html").read_text(encoding="utf-8")
+    subs = [
+        (r'(<link rel="stylesheet" href="desk/desk.css">)', '<link rel="stylesheet" href="../site.css">\n\\1'),
+        (r'<body>\s*<header class="top">.*?</header>\s*', lambda m: '<body class="dpage">\n' + header(DESK_PAGE, wm) + '\n'),
+    ]
+    for pat, to in subs:
+        text, n = re.subn(pat, to, text, count=1, flags=re.S)
+        if n != 1:
+            raise SystemExit(f"opendmd-web/share/desk/index.html: no {pat!r} to replace (the page changed: change desk_page too)")
+    (demo / "index.html").write_text(text, encoding="utf-8")
+
+
 # The changelog (changelog/index.html, changelog/feed.xml), written in
 # site/pages/changelog.md, newest first:
 #   ## <version> · <YYYY-MM-DD>    a release: a summary line and a few bullets
@@ -1344,6 +1385,8 @@ def main() -> None:
     # The demo: the app (the player sends the .gz copies; Cloudflare compresses by itself) and its card.
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
+    art = json.loads((a.art / "art.json").read_text())
+    desk_page(out, art["wordmark"])
     # A formula's own page and Create Art's; they run on the demo's files.
     art = json.loads((a.art / "art.json").read_text())
     for page in APP_PAGES:

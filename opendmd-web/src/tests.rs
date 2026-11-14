@@ -288,6 +288,28 @@ fn show_rgb_replaces_the_file() {
 }
 
 #[test]
+fn raw_is_the_leds_before_the_look() {
+    // The desk scene's frame: one pixel an LED, tinted, whatever the LED
+    // look draws at its scale; nothing kept until asked for.
+    let mut player = Player::new(4, LOOK);
+    assert!(player.raw().is_none());
+    player.keep_raw(true);
+    let mut rgb = vec![0u8; WIDTH * HEIGHT * 3];
+    rgb[3..6].copy_from_slice(&[10, 20, 30]);
+    player.show_rgb(&rgb, ms(10));
+    let raw = player.raw().unwrap();
+    assert_eq!(raw.len(), WIDTH * HEIGHT * 4);
+    assert_eq!(&raw[4..8], &[10, 20, 30, 255]);
+    assert_eq!(&raw[..4], &[0, 0, 0, 255]);
+    player.set_display(Tint::Red, GlowLevel::Off);
+    player.draw();
+    let raw = player.raw().unwrap();
+    assert_eq!(raw[5], 0, "tinted red: no green left");
+    player.keep_raw(false);
+    assert!(player.raw().is_none());
+}
+
+#[test]
 fn over_draws_on_every_tick_before_the_look() {
     // The Formula look (the web demo's, drawn with Psi): the frame handed
     // over as RGB888 and drawn as changed, on every tick (a still picture
