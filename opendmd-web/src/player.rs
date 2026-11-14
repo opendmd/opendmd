@@ -628,7 +628,7 @@ impl Player {
         }
         let shown = self.model.present(shown, self.now);
         if let Some(raw) = self.raw.as_mut() {
-            for (o, p) in raw.chunks_exact_mut(4).zip(shown.as_slice()) {
+            for (o, p) in raw.as_chunks_mut::<4>().0.iter_mut().zip(shown.as_slice()) {
                 o[..3].copy_from_slice(&[p.r, p.g, p.b]);
             }
         }
