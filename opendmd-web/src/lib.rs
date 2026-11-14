@@ -437,6 +437,13 @@ impl Preview {
             .unwrap_or(f64::NAN)
     }
 
+    /// Where the preview is in this file at `at_ms` (`performance.now()`),
+    /// in ms, or NaN with nothing loaded. Read-only.
+    #[wasm_bindgen(js_name = positionAt)]
+    pub fn position_at(&self, at_ms: f64) -> f64 {
+        self.player.position_at(at_ms).unwrap_or(f64::NAN)
+    }
+
     #[wasm_bindgen(getter)]
     pub fn synced(&self) -> bool {
         self.player.is_synced()
