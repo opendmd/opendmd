@@ -93,6 +93,8 @@ export class PanelPreview {
   // (performance.now()), its position advancing `rate` ms per ms (left out:
   // 1, until Now has measured it); returns the drift before correction (NaN: nothing loaded).
   syncTo(elapsed, at, rate) { return this.p.syncTo(elapsed, at, rate); }
+  // Where the preview is in the file at `at` (performance.now()), ms; NaN: nothing loaded. Changes nothing.
+  positionAt(at) { return this.p.positionAt(at); }
   get synced() { return this.p.synced; }
   setDwell(min, max) { this.p.setDwell(min, max); }
   apply() { this.p.setLook(look.gamma, look.gain, look.bloom, look.flat); }

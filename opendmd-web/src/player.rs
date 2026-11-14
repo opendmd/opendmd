@@ -441,6 +441,14 @@ impl Player {
         self.sync.is_some()
     }
 
+    /// Where the preview is in the file at `at_ms` (page clock), or `None`
+    /// with nothing loaded; changes nothing (tools/web-smoke.py compares it
+    /// with the device at one instant).
+    pub fn position_at(&self, at_ms: f64) -> Option<f64> {
+        self.engine.as_ref()?;
+        Some(self.position_ms(at_ms))
+    }
+
     /// Where the preview is in the file at `at_ms` (page clock).
     fn position_ms(&self, at_ms: f64) -> f64 {
         match self.sync {
