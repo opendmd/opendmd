@@ -47,8 +47,12 @@ export function pacer(g) {
     const vs = refresh(now);
     if (pT && now <= pT) return null;
     pT = now;
-    if (at == null) return null;
-    if (at === pa) return t == null || t === at ? null : (t = at);
+    // (Held: the frames held aren't refreshes missed, so the count starts again from here.)
+    if (at == null || at === pa) {
+      p0 = now;
+      f = 0;
+      return at == null || t == null || t === at ? null : (t = at);
+    }
     pa = at;
     // k: the refreshes in the frame time, rounded down from a little past the half (20 ms at 120 Hz is
     // 2.4 refreshes: 2, unless the display is clearly slower); once the refresh is known (16 intervals),
@@ -131,6 +135,14 @@ async function source(p, start) {
 // null (the page's clock from now); `fail()` if it stops drawing. Throws
 // when it can't be previewed (a Later: not yet; a network error as it came).
 export async function play(p, pv, { pos, start, alive, fail }) {
+  // (The display's refresh learnt while the module and the Formula load, so its first frames don't run at
+  // 60 Hz's.)
+  let warm = 0;
+  const learn = (now) => { refresh(now); warm = requestAnimationFrame(learn); };
+  warm = requestAnimationFrame(learn);
+  try { return await play_(p, pv, { pos, start, alive, fail }); } finally { cancelAnimationFrame(warm); }
+}
+async function play_(p, pv, { pos, start, alive, fail }) {
   const P = await own();
   if (!alive()) return () => {};
   const src = await source(p, start);
