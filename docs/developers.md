@@ -64,6 +64,29 @@ your WiFi over USB with Improv Serial, or the firmware starts its
 bundles; the firmware checks the signature before installing, and a small
 updater program puts the new firmware in place from the SD card.
 
+### The demo's desk scene
+
+The site's `/demo/` is a display on a desk beside the web app (which is at
+`/demo/app.html`): `opendmd-web/share/desk/`, written into the site by
+`make site`, never into the web app or its www pack. It has two scenes: a
+3D one (three.js) for machines with a fast WebGL2, and a flat one made of
+pixel-art layers for everything else. Their files are made by hand-run
+tools, and the outputs are committed:
+
+```sh
+uv run tools/desk-art.py         # the flat scene's den: share/desk/room/*.webp (--preview: target/desk-preview.png)
+uv run tools/desk-art-hd.py      # the 3D scene's sprites, from the same drawing: share/desk/hd/atlas.webp + atlas.js
+node tools/vendor-three.mjs      # three.js at a pinned version, only the parts the scene uses: share/desk/hd/three.js
+make site && uv run tools/desk-posters.py   # the 3D scene's stills (shown until its first frame): share/desk/hd/poster-*.webp
+```
+
+Retake the stills when the 3D scene's look changes. After a three.js bump,
+read its licence and update `licenses/THIRD-PARTY-LICENSES-desk.txt`.
+Their sizes are lines in `tools/web-size.py`. `tools/site-smoke.py` checks
+both scenes, the choice between them, and the vendored file's checksum.
+On the page, `?scene=hd|flat|try`, `&q=0..4` and `?hud=1` force a scene,
+set the quality level, and show the GPU, frame rate and level.
+
 The repository's deploying notes (`docs/deploying.md`),
 firmware notes (`docs/firmware.md`) and OTA notes (`docs/ota.md`) cover the flash
 layout, recovery and the update flow in detail.

@@ -220,6 +220,10 @@ pub struct Player {
     over: Option<(Over, Canvas)>,
     buffer: Vec<u32>,
     rgba: Vec<u8>,
+    /// What the LEDs show, one RGBA pixel an LED (128 × 32, after the tint
+    /// and glow, before the LED look): kept only when asked for
+    /// ([`Player::keep_raw`]: the site's desk scene draws its own LEDs).
+    raw: Option<Vec<u8>>,
 }
 
 impl Player {
@@ -247,6 +251,7 @@ impl Player {
             over: None,
             buffer: vec![0; WIDTH * scale * HEIGHT * scale],
             rgba: vec![255; WIDTH * scale * HEIGHT * scale * 4],
+            raw: None,
         };
         player.set_look(look);
         player.draw();
@@ -622,6 +627,11 @@ impl Player {
             shown = c;
         }
         let shown = self.model.present(shown, self.now);
+        if let Some(raw) = self.raw.as_mut() {
+            for (o, p) in raw.chunks_exact_mut(4).zip(shown.as_slice()) {
+                o[..3].copy_from_slice(&[p.r, p.g, p.b]);
+            }
+        }
         match (self.mode, self.renderer.as_mut()) {
             (RenderMode::Led, Some(r)) => r.render(shown, &mut self.buffer),
             _ => paint_flat(shown, self.scale, &mut self.buffer),
@@ -639,6 +649,16 @@ impl Player {
     /// The RGBA bytes of the last [`Player::draw`], ready for `ImageData`.
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+
+    /// Keep [`Player::raw`] from the next draw on (or stop).
+    pub fn keep_raw(&mut self, on: bool) {
+        self.raw = on.then(|| vec![255; WIDTH * HEIGHT * 4]);
+    }
+
+    /// The last draw's LEDs, 128 × 32 RGBA (alpha 255), when kept.
+    pub fn raw(&self) -> Option<&[u8]> {
+        self.raw.as_deref()
     }
 
     #[cfg(test)]

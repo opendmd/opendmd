@@ -401,7 +401,7 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
+	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified,--webmin $(WEBMIN)/target/release/opendmd-webmin)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —

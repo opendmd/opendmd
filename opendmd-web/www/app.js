@@ -117,19 +117,23 @@ if (found) {
   route();
 } else if ((app.demo = await demoCard(app.wasm.cardPath))) {
   // The web demo: its own card, in memory; a card folder of yours can replace it.
-  $('#where').textContent = 'Demo · runs in your browser, nothing is uploaded';
-  const own = h('label.btn.sm.demo-own', 'Use your own card…', h('input', { type: 'file', webkitdirectory: true, hidden: true, onchange: (e) => {
-    const files = e.target.files;
-    if (!files.length) return;
-    const src = new LocalSource(files, app.wasm.cardPath);
-    app.demo = null;
-    own.remove();
-    $('#where').textContent = `${src.label || 'Picked files'} · ${src.count} files`;
-    setSource(src);
-  } }));
-  // The way back to the site, and to installing it on a display.
-  $('#top').append(own, h('span.demo-site', h('a', { href: '../' }, '‹ opendmd.dev'), h('a', { href: '../install/' }, 'Install')));
-  $('#top strong').replaceChildren(h('a', { href: '../', style: 'color:inherit;text-decoration:none' }, 'OpenDMD'));
+  // (`?desk`: inside the site's desk scene, whose page has the way back and no folder to pick.)
+  const desk = new URLSearchParams(location.search).has('desk');
+  $('#where').textContent = desk ? 'The display on the desk · runs in your browser' : 'Demo · runs in your browser, nothing is uploaded';
+  if (!desk) {
+    const own = h('label.btn.sm.demo-own', 'Use your own card…', h('input', { type: 'file', webkitdirectory: true, hidden: true, onchange: (e) => {
+      const files = e.target.files;
+      if (!files.length) return;
+      const src = new LocalSource(files, app.wasm.cardPath);
+      app.demo = null;
+      own.remove();
+      $('#where').textContent = `${src.label || 'Picked files'} · ${src.count} files`;
+      setSource(src);
+    } }));
+    // The way back to the site, and to installing it on a display.
+    $('#top').append(own, h('span.demo-site', h('a', { href: '../' }, '‹ opendmd.dev'), h('a', { href: '../install/' }, 'Install')));
+    $('#top strong').replaceChildren(h('a', { href: '../', style: 'color:inherit;text-decoration:none' }, 'OpenDMD'));
+  }
   // Its player's settings and status (js/demo.js).
   await (await import('./js/demo.js')).simulate(app.demo);
   setSource(app.demo);

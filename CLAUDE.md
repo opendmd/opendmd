@@ -159,7 +159,10 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
   (the web app and the site) and Fraunces (the site's headings,
   `site/fonts/`). The home page's scenes (`site/theme/den*.webp`) are our own,
   drawn by `tools/site-scene-alt.py` and `tools/site-scene.py`
-  (`site/theme/SCENES.md`).
+  (`site/theme/SCENES.md`). The demo's desk scene (`opendmd-web/share/desk/`,
+  site-only) is our own art too (`tools/desk-art.py`, `tools/desk-art-hd.py`);
+  its 3D renderer is three.js (MIT), vendored by `tools/vendor-three.mjs`
+  with a hand-written notice (`licenses/THIRD-PARTY-LICENSES-desk.txt`).
   Third-party notices are generated (`make notices`, checked by
   `fw-release` and CI); after a dependency or IDF bump, regenerate and read
   the diff.
