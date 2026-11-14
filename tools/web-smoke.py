@@ -601,9 +601,35 @@ def events_checks(page: Page, base: str) -> None:
     check(live() and conn() == "Live" and ev["listeners"] >= 1,
           f"now: the stream is live ({ev}), {n} status reads in 6 s (polling: ~12)")
     check(n <= 4, f"now: with the stream, status reads only at a new file ({n} in 6 s, dwell 4 s)")
-    st = wait_sync(page, int(sync_state(page)["k"]) + 2)
-    check(st.get("live") == "true" and abs(float(st.get("drift", 1e9))) < 60,
-          f"now: in step on the stream's events (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms)")
+    # In step on the events: every sync for 10 s but each file's first (the
+    # jump from free-running into step, minus the file's elapsed: 100-200 ms
+    # under load). (Not "the k-th sync of one file": at a 4 s dwell a file
+    # gets two or three syncs on the stream, fewer when the 3 s beat runs
+    # late, and a wait for one that never came ended on a first sync.)
+    drifts, rtts = drift_stats(page, 10)
+    check(live() and len(drifts) >= 2 and max(abs(d) for d in drifts) < 60,
+          "now: in step on the stream's events (" + summarise("syncs", drifts, rtts) + ")")
+    # The app's drift is each sync against the last: a mirror late by the
+    # same amount every time shows none. Against the panel itself, at one
+    # instant: in step; then a mirror 150 ms late (its syncs taken 150 ms
+    # after the panel was there, as an event latency nobody allowed for
+    # would be) must show as that.
+    got = mirror_vs_device(page)
+    check(len(got) >= 5 and abs(median(got)) < 60,
+          f"now: the mirror where the panel is, on the stream ({mirror_summary(got)})")
+    page.evaluate("""() => { const pv = document.querySelector('#now-panel').preview, f = pv.syncTo;
+        pv.syncTo = (e, at, r) => f.call(pv, e, at + 150, r); }""")
+    try:
+        next_sync(page)
+        late = mirror_vs_device(page)
+        st = sync_state(page)
+    finally:
+        page.evaluate("() => { delete document.querySelector('#now-panel').preview.syncTo; }")
+    check(len(late) >= 5 and -200 < median(late) < -100,
+          f"now: a mirror 150 ms late is caught ({mirror_summary(late)}; the app's own drift {st.get('drift')} ms)")
+    next_sync(page)
+    got = mirror_vs_device(page)
+    check(len(got) >= 5 and abs(median(got)) < 60, f"now: back in step at the next sync ({mirror_summary(got)})")
     # A skip: the stream brings the new file (no status read asked for it).
     path = sync_state(page).get("path")
     post_json(base + "/api/skip", {})
@@ -684,6 +710,58 @@ def drift_stats(page: Page, seconds: float) -> tuple[list[float], list[float]]:
     if rates:
         print(f"  position rate (panel ms per ms): {min(rates):.4f}..{max(rates):.4f}")
     return drifts, rtts
+
+
+def next_sync(page: Page, timeout_s: float = 12) -> dict:
+    """Until the preview syncs again (to any file)."""
+    seen = sync_state(page)
+    deadline = time.time() + timeout_s
+    st = seen
+    while time.time() < deadline:
+        st = sync_state(page)
+        if (st.get("path"), st.get("k")) != (seen.get("path"), seen.get("k")):
+            break
+        page.wait_for_timeout(50)
+    return st
+
+
+def mirror_vs_device(page: Page, n: int = 7, timeout_s: float = 15) -> list[tuple[float, float]]:
+    """[(ms, rtt)]: the mirror's position minus the panel's, at one instant,
+    `n` times. The panel's is the mock's `elapsed_ms` from one status read,
+    stamped somewhere in the read, taken at its middle on the page's clock
+    (so off by at most half its round trip); the mirror's there is
+    PanelPreview.positionAt (it changes nothing). Only while the preview is
+    synced to the file the mock is on, neither paused."""
+    out = []
+    deadline = time.time() + timeout_s
+    while len(out) < n and time.time() < deadline:
+        r = page.evaluate("""async () => {
+            const pv = document.querySelector('#now-panel').preview;
+            const t0 = performance.now();
+            const res = await fetch('/api/status', { cache: 'no-store' });
+            const t1 = performance.now();
+            const s = await res.json(), np = s.now_playing;
+            const ok = !s.paused && pv.synced && !pv.paused && pv.path === np.path;
+            return ok ? [pv.positionAt((t0 + t1) / 2) - np.elapsed_ms, t1 - t0] : null;
+        }""")
+        if r is not None:
+            out.append((r[0], r[1]))
+        page.wait_for_timeout(200)
+    return out
+
+
+def median(got: list[tuple[float, float]]) -> float:
+    d = sorted(x for x, _ in got)
+    return d[len(d) // 2] if d else float("nan")
+
+
+def mirror_summary(got: list[tuple[float, float]]) -> str:
+    if not got:
+        return "no reads"
+    d = sorted(x for x, _ in got)
+    r = sorted(x for _, x in got)
+    return (f"{len(d)} reads, mirror minus panel median {median(got):.1f} ms, "
+            f"range {d[0]:.1f}..{d[-1]:.1f} ms; read rtt median {r[len(r) // 2]:.1f} ms, max {r[-1]:.1f} ms")
 
 
 def summarise(what: str, drifts: list[float], rtts: list[float]) -> str:
@@ -11912,7 +11990,7 @@ def www_update_pass(browser) -> None:
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
 ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "now_sent": now_sent_checks, "thumbs_dark": thumbs_dark_checks}
-ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
+ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks, "events": events_checks}
 # (A sprite from a picture, on its own: WEB_SMOKE_ONLY=psi_import.)
 ONLY_BROWSER["psi_import"] = psi_import_checks
 # (The web demo's display and Now's dimmed mirror: WEB_SMOKE_ONLY=demo_world,now_dim,recent_demo,formulas_demo.)
