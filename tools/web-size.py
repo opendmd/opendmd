@@ -565,6 +565,8 @@ DEMO = {"js/demo.js"}
 # - the page and the flat scene (first paint for everyone; all a phone, reduced
 #   motion or a machine without a fast WebGL2 ever loads): <= 16 KB gz;
 # - its backdrop (room/*.webp, lossless art): <= 16 KB;
+# - the flat scene's drawing of the display's back (flat-back.js), fetched when
+#   the page is idle or at the first turn, off the first paint: <= 4 KB;
 # - the loader (desk.js: the page's state, its controls and the choice of
 #   scene) <= 5 KB of that, and the old-address forwarder (go.js) <= 512 B;
 # - the 3D scene, fetched after first paint only when 3D is chosen: three.js
@@ -577,6 +579,7 @@ DESK_LINES = {  # name -> (budget, files, gzipped?)
     "desk page": (16 * 1024, DESK_PAGE_FILES, True),
     "desk room": (16 * 1024, ("room/wall.webp", "room/desk.webp", "room/near.webp"), False),
     "desk load": (5 * 1024, ("desk.js",), True),
+    "desk back": (4 * 1024, ("flat-back.js",), True),
     "desk go": (512, ("go.js",), True),
     "desk 3d": (164 * 1024, ("hd/three.js", "hd/scene.js", "hd/back.js", "hd/atlas.js"), True),
     "desk atlas": (6 * 1024, ("hd/atlas.webp",), False),
