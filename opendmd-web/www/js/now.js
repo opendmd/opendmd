@@ -413,7 +413,8 @@ function mountDevice(el) {
     } catch (e) {
       conn.className = 'dot bad';
       conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
-      if (shownPath) cap.textContent = UNREACH;
+      // (No mirror: the desk scene's page shows the panel, the app still says it lost it.)
+      if (shownPath || app.noMirror) cap.textContent = UNREACH;
       down();
     } finally {
       // Polling (no stream): less often while a file goes to or from the card.
