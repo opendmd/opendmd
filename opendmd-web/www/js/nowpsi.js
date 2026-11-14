@@ -34,46 +34,66 @@ const bundled = () => (B ??= fetch('formulas.json').then((r) => (r.ok ? r.json()
 // info()[17]), which a monitor's 60 or 120 Hz can't show on that grid (a 10 ms
 // grid at 60 Hz steps its time 10, 20, 20 ms: motion that speeds up and slows
 // down; at 120 Hz, a frame held every 6th refresh). So a new frame every k
-// display frames (k: the whole number of them nearest the frame time, at least
-// 1), its time on by k of them (a missed frame counted as the frames it spans),
+// display frames (k: the refreshes in the frame time, rounded down from a
+// little past the half, at least 1), its time on by the refreshes since the last (k, or the frames a missed one spans),
 // eased towards where the panel is (`at`, ms), never back but for a jump of
 // more than 100 ms and k refreshes (a seek, a restart). Held (`at` the same
 // again: paused), it draws once more exactly at `at`, then nothing.
 // pacer(g)(now, at): the time to draw at, or null (nothing new: the last frame
 // stays).
 export function pacer(g) {
-  let pT = 0, acc = 0, t = null, pa = null, k = 0;
+  let pT = 0, p0 = 0, f = 0, t = null, pa = null, k = 0;
   return (now, at) => {
-    const vs = refresh(now), dt = pT ? now - pT : 0;
+    const vs = refresh(now);
+    if (pT && now <= pT) return null;
     pT = now;
-    if (at == null) return null;
-    if (at === pa) return t == null || t === at ? null : (t = at);
+    // (Held: the frames held aren't refreshes missed, so the count starts again from here.)
+    if (at == null || at === pa) {
+      p0 = now;
+      f = 0;
+      return at == null || t == null || t === at ? null : (t = at);
+    }
     pa = at;
-    // (k held while the frame time is within 3/4 of a refresh of it: 20 ms at 120 Hz is 2.4 refreshes,
-    // and a refresh read a little short must not make it 3 now and then.)
-    if (!k || Math.abs(g / vs - k) > 0.75) k = Math.max(1, Math.round(g / vs));
-    acc += dt > 0 ? Math.max(1, Math.round(dt / vs)) : k;
-    if (t != null && acc < k) return null;
-    const x = t == null ? at : t + acc * vs, e = at - x;
-    acc = 0;
+    // k: the refreshes in the frame time, rounded down from a little past the half (20 ms at 120 Hz is
+    // 2.4 refreshes: 2, unless the display is clearly slower); once the refresh is known (16 intervals),
+    // it moves only past its boundary with a margin (up past k + 0.75, down below k - 0.55), so a
+    // reading a little off can't make it 3 now and then, and a wrong one is left as soon as it's clear.
+    const r = g / vs, want = Math.max(1, Math.floor(r + 0.4));
+    if (!k || R.d.length < 16 || (want != k && (r > k + 0.75 || r < k - 0.55))) k = want;
+    // (The refreshes since the last new frame: the frames since, or more when the time since says some
+    // were missed — one timestamp's error, not each one's.)
+    f++;
+    const n = t == null ? k : Math.max(f, Math.round((now - p0) / vs));
+    if (n < k) return null;
+    const x = t == null ? at : t + n * vs, e = at - x;
+    p0 = now;
+    f = 0;
     return (t = t == null || Math.abs(e) > 100 + k * vs ? at : Math.max(t, x + e * 0.05));
   };
 }
-// The display's frame time, ms, shared by every pacer (a new Formula starts
-// with it known): the mean of the last 30 intervals within half of their
-// 20th percentile, the single refreshes (missed frames, coarse or fuzzed
-// timestamps — Firefox rounds them to 1 ms — and a janky start don't move
-// it; a display's new rate takes over within half a second), 60 Hz's until
-// 4 are in. Called with each frame's time (the same frame again: nothing).
-const R = { pT: 0, vs: 1000 / 60, d: [] };
-function refresh(now) {
+// The display's frame time, ms, shared by every pacer and fed every frame by
+// the player (`refresh(now)`, the frame's time; the same frame again:
+// nothing), so a Formula starts with it known. A first reading: the median of
+// the single refreshes (missed frames left out: the intervals under 1.5 times
+// their 20th percentile, then under 1.5 times the median of those, three times
+// over, so fuzzed timestamps don't read it short). Then the last 60 intervals' span over the
+// refreshes they hold (each counted as the whole number of those it spans):
+// the jitter of coarse or fuzzed timestamps (Firefox rounds them to 1 ms)
+// cancels but at its ends. Within 3% of a common rate, that rate. 60 Hz's
+// until 4 are in; a display's new rate takes over within a second.
+const R = { pT: 0, vs: 1000 / 60, d: [] }, RATES = [50, 60, 75, 90, 100, 120, 144, 165, 240];
+export function refresh(now) {
   const dt = now - R.pT, first = !R.pT;
   if (dt > 0) R.pT = now;
   if (first || !(dt > 2 && dt < 100)) return R.vs;
-  if (R.d.push(dt) > 30) R.d.shift();
+  if (R.d.push(dt) > 60) R.d.shift();
   if (R.d.length >= 4) {
-    const s = [...R.d].sort((a, b) => a - b), b = s[Math.floor(s.length / 5)], one = s.filter((x) => x > b / 2 && x < b * 1.5);
-    R.vs = one.reduce((a, x) => a + x, 0) / one.length;
+    const s = [...R.d].sort((a, b) => a - b);
+    let m = s[Math.floor(s.length / 5)], n = 0, span = 0;
+    for (let i = 0; i < 3; i++) { const one = s.filter((x) => x < m * 1.5); m = one[one.length >> 1]; }
+    for (const x of R.d) { n += Math.max(1, Math.round(x / m - 0.1)); span += x; }
+    const v = span / n, c = RATES.find((hz) => Math.abs(1000 / v - hz) < hz * 0.03);
+    R.vs = c ? 1000 / c : v;
   }
   return R.vs;
 }
@@ -115,6 +135,14 @@ async function source(p, start) {
 // null (the page's clock from now); `fail()` if it stops drawing. Throws
 // when it can't be previewed (a Later: not yet; a network error as it came).
 export async function play(p, pv, { pos, start, alive, fail }) {
+  // (The display's refresh learnt while the module and the Formula load, so its first frames don't run at
+  // 60 Hz's.)
+  let warm = 0;
+  const learn = (now) => { refresh(now); warm = requestAnimationFrame(learn); };
+  warm = requestAnimationFrame(learn);
+  try { return await play_(p, pv, { pos, start, alive, fail }); } finally { cancelAnimationFrame(warm); }
+}
+async function play_(p, pv, { pos, start, alive, fail }) {
   const P = await own();
   if (!alive()) return () => {};
   const src = await source(p, start);
