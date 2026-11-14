@@ -277,6 +277,9 @@ pub struct Preview {
     /// Exponential moving average of the render+blit cost.
     frame_ms: f64,
     error: String,
+    /// A second canvas, 128 × 32: what the LEDs show, one pixel an LED
+    /// ([`Preview::set_raw`]).
+    raw: Option<web_sys::CanvasRenderingContext2d>,
 }
 
 fn now_ms() -> f64 {
@@ -322,6 +325,7 @@ impl Preview {
             ctx,
             frame_ms: 0.0,
             error: String::new(),
+            raw: None,
         };
         p.blit()?;
         Ok(p)
@@ -518,7 +522,36 @@ impl Preview {
         self.frame_ms
     }
 
+    /// Also draw what the LEDs show, one pixel an LED (128 × 32, tinted,
+    /// before the LED look), into `canvas` on every frame (the site's desk
+    /// scene draws its own LEDs and lights its room with them);
+    /// `undefined` stops.
+    #[wasm_bindgen(js_name = setRaw)]
+    pub fn set_raw(&mut self, canvas: Option<web_sys::HtmlCanvasElement>) -> Result<(), JsValue> {
+        self.raw = None;
+        self.player.keep_raw(canvas.is_some());
+        if let Some(c) = canvas {
+            c.set_width(opendmd_core::canvas::WIDTH as u32);
+            c.set_height(opendmd_core::canvas::HEIGHT as u32);
+            self.raw = Some(
+                c.get_context("2d")?
+                    .ok_or_else(|| JsValue::from_str("no 2d context"))?
+                    .dyn_into()?,
+            );
+            self.player.draw();
+        }
+        self.blit()
+    }
+
     fn blit(&self) -> Result<(), JsValue> {
+        if let (Some(ctx), Some(raw)) = (&self.raw, self.player.raw()) {
+            let image = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+                Clamped(raw),
+                opendmd_core::canvas::WIDTH as u32,
+                opendmd_core::canvas::HEIGHT as u32,
+            )?;
+            ctx.put_image_data(&image, 0.0, 0.0)?;
+        }
         let (w, h) = self.player.size();
         let image = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
             Clamped(self.player.rgba()),
