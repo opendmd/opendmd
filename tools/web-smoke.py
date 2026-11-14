@@ -7238,10 +7238,14 @@ def now_formula_checks(browser, base: str, errors: list[str]) -> None:
     a = (canvas_sum(page, "#now-panel"), page.eval_on_selector("#now-panel", "c => c.dataset.ms"))
     page.wait_for_timeout(900)
     b = (canvas_sum(page, "#now-panel"), page.eval_on_selector("#now-panel", "c => c.dataset.ms"))
+    # (Held exactly where the panel is, not a frame eased towards it: js/nowpsi.js `pacer`.)
+    d = page.evaluate("""async () => { const s = await (await fetch('/api/status?now=1')).json();
+        return [s.paused, s.now_playing.elapsed_ms % 4800, +document.querySelector('#now-panel').dataset.ms]; }""")
     page.click("#now-pause")
     page.wait_for_timeout(900)
     c = page.eval_on_selector("#now-panel", "c => c.dataset.ms")
     check(a == b and c != b[1], f"now formula: paused, the preview holds its frame; resumed, it moves on ({a}, {b}, {c})")
+    check(d[0] and abs(d[1] - d[2]) <= 1, f"now formula: paused, the frame held is the panel's (preview {d[2]} ms, panel {d[1]} ms)")
     # The sliders from the path.
     post_json(base + "/api/play", {"path": "@formula:time-gate?a=0.9"})
     page.wait_for_function("document.querySelector('#now-panel').dataset.src == '@formula:time-gate?a=0.9'", timeout=15000)
