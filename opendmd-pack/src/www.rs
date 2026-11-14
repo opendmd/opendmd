@@ -83,11 +83,11 @@ pub fn collect(dir: &Path, skip: &[&Path]) -> Result<Vec<PackFile>> {
 }
 
 /// The site's own files, published with its demo, never packed: the web
-/// demo's player, the editor's What costs most and Tidy up, and their wasm
-/// module (a folder: everything under it). pkg-studio/, the site's Studio's
-/// GIF writers (opendmd.dev/studio/), is built by the site's repository and
-/// laid over its copy of the web app, never in this tree's www/: listed so
-/// that a stray copy is never packed either.
+/// demo's player, the editor's What costs most and Tidy up and their wasm
+/// module, the Studio's GIF writers (a folder: everything under it). The
+/// site's repository builds them and lays them over its copy of the web
+/// app; none is in this tree's www/. Listed so that a stray copy is never
+/// packed either.
 pub const SITE_ONLY: &[&str] = &["js/demo.js", "js/fcost.js", "pkg-psi-lang/", "pkg-studio/"];
 
 pub fn pack(

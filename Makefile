@@ -324,10 +324,10 @@ check-wasm:
 # so they are not packed. The Studio's own wasm (opendmd-art-web, "Make
 # art") goes to www/pkg-art, loaded only when the Studio opens; the Formulas'
 # (opendmd-psi-web: Psi, no std, its own allocator) to www/pkg-psi, loaded
-# only when the Library's Formulas tab opens; the site's language service to
-# www/pkg-psi-lang, site-only (the packer leaves it out: opendmd-pack www.rs
-# SITE_ONLY; the site's own wasm, the Studio's, is built and laid over the
-# web app by the site's repository). The budgets
+# only when the Library's Formulas tab opens (the site's own wasm, its
+# language service pkg-psi-lang/ and the Studio's pkg-studio/, and its
+# scripts js/demo.js and js/fcost.js, are built and laid over the web app by
+# the site's repository; opendmd-pack www.rs SITE_ONLY never packs them). The budgets
 # (gzipped) are enforced by tools/web-size.py; the packer refuses a pack over
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
@@ -339,8 +339,8 @@ check-wasm:
 # (gitignored) is the two committed third-party notices, firmware's then the
 # web app's (licenses/, `make notices`), served as text from the pack:
 # Settings -> Device -> About links it. www/js/build.js (gitignored) is
-# the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/, pkg-psi/
-# and the site's pkg-psi-lang/) that js/wasm.js puts on every wasm module's address, so a
+# the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/ and
+# pkg-psi/) that js/wasm.js puts on every wasm module's address, so a
 # browser never runs an earlier build's module (opendmd-notes docs/notes/web-app.md
 # "Module addresses").
 #
@@ -368,16 +368,12 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	cd $(WEB) && $(WASM_PACK) build --target web --release --out-dir www/pkg
 	cd $(ART) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
 	cd $(PSIWEB) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
-	@# The site's language service (What costs most, Tidy up: js/fcost.js): the same crate with only observe() and
-	@# format() (`lang`), never packed (opendmd-pack www.rs SITE_ONLY).
-	cd $(PSIWEB) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi-lang -- --features bare,bump,lang
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
-	rm -f $(WEB_WWW)/pkg-psi-lang/package.json $(WEB_WWW)/pkg-psi-lang/*.d.ts $(WEB_WWW)/pkg-psi-lang/README.md $(WEB_WWW)/pkg-psi-lang/.gitignore
-	@# pkg-studio/ (the site's Studio wasm) is built by the site's repository now: an old checkout's copy goes.
-	rm -rf $(WEB_WWW)/pkg-studio
-	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the four folders.
+	@# pkg-psi-lang/ and pkg-studio/ (the site's wasm) are built by the site's repository now: an old checkout's copies go.
+	rm -rf $(WEB_WWW)/pkg-psi-lang $(WEB_WWW)/pkg-studio
+	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
 	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
 	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json

@@ -107,11 +107,10 @@ The Formulas editor's names at the caret and its cheat sheet
 own, <= 7 KB.
 The Formulas editor's error codes (`js/psierr.js`, imported at a formula's
 first error) have a line of their own, <= 4 KB.
-The web demo's player (`js/demo.js`: the device's settings API answered in
-the page for the site's demo, and what the settings do to its panel;
-imported by app.js only when the page is the demo; `opendmd-pack www`
-leaves it out of the pack, so a player never carries it) has a line of its
-own, <= 8 KB.
+The web demo's player (`js/demo.js`), the site editor's What costs most and
+Tidy up (`js/fcost.js`) and its wasm (`pkg-psi-lang/`) are the site's
+(its repository builds them and measures them, tools/site-size.py); the
+web app imports them only on the site.
 The Library's folder tree and the row thumbnails (`js/tree.js`,
 `js/thumbs.js` and `tree.css`, which holds the playlist editor's panes too;
 imported with the Library or the editor, never by the first page) have a
@@ -397,19 +396,6 @@ FSUBMIT_GZ_BUDGET = 4 * 1024
 FSUBMIT = {"js/fsubmit.js"}
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
-# The web demo's display (js/demo.js: a simulated player, its panel, the
-# device API answered in the page, its power and card): imported by app.js
-# only for the site's demo and left out of the pack (opendmd-pack www.rs
-# SITE_ONLY), so outside the 60 KB line.
-# 12 KB since demo-player (2026-11-13, owner-approved, site-only): the demo
-# became a device — its own panel and player (playlist, transport, Show on
-# panel, Formulas), the device calls the Library, Playlists and Formulas
-# make, the status stream, and the world the site's desk scene drives
-# (power, card, network, run, mirror): 6,514 -> 9,994 B gz.
-# 9 KB since formula-refs (2026-10-29): a look named `@formula:<stem>`
-# resolved from formulas.json, as the player has the bundled ones built in.
-DEMO_GZ_BUDGET = 12 * 1024
-DEMO = {"js/demo.js"}
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),
 # never by the first page; the tree's and the editor's stylesheet with them.
@@ -469,17 +455,6 @@ FHIST = {"js/fhist.js"}
 # 103 B of headroom left.
 FHINT_GZ_BUDGET = 8 * 1024
 FHINT = {"js/fhint.js"}
-# The site editor's What costs most and Tidy up (2026-11-07, branch
-# editor-cost): js/fcost.js (imported by js/formulas.js only on the site's
-# /f/ and demo) and its wasm, pkg-psi-lang/ (opendmd-psi-web's `lang`
-# build: observe() and format() on the compiler with its `syntax` hook),
-# both left out of the pack (opendmd-pack www.rs SITE_ONLY). The wasm is
-# loaded only when a Formula is past light or Tidy up is pressed. It is the
-# whole compiler (the observations need it), 121,347 B gz with its glue: the same module
-# with the device's exports too would be ~154 KB (pkg-psi + ~24.6 KB).
-FCOST_GZ_BUDGET = 3 * 1024
-FCOST = {"js/fcost.js"}
-PSI_LANG_GZ_BUDGET = 124 * 1024
 # The Formula editor's picture and palette editors (js/fsprite.js, branch
 # editor-sprite, 2026-11-07: a sprite's grid to paint from its key, a
 # palette's strip as the panel reads it with a handle per colour; imported
@@ -540,10 +515,6 @@ def main() -> int:
             kind = "art wasm"
         elif rel.startswith("pkg-psi/"):
             kind = "psi wasm"
-        elif rel.startswith("pkg-psi-lang/"):
-            kind = "psi lang"
-        elif rel in FCOST:
-            kind = "fcost"
         elif rel in FORMULAS:
             kind = "formulas"
         elif rel in SHOW:
@@ -590,8 +561,6 @@ def main() -> int:
             kind = "font"
         elif rel in LICENCES:
             kind = "licences"
-        elif rel in DEMO:
-            kind = "demo"
         elif rel in TREE:
             kind = "tree"
         elif rel in EDITOR:
@@ -633,9 +602,9 @@ def main() -> int:
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
-                         ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
+                         ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("plbuild", PLBUILD_GZ_BUDGET), ("smart", SMART_GZ_BUDGET), ("tags", TAGS_GZ_BUDGET), ("refs", REFS_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
-                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
+                         ("fsprite", FSPRITE_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

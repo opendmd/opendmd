@@ -512,7 +512,7 @@ writes stay in the page. **Use your own card…** in the header swaps in a
 card folder (local mode, with Now's simulator).
 
 The demo is a display of its own, simulated in the page (`js/demo.js`,
-loaded only there), so every view runs the code it runs on a display. Its
+the site's: its repository lays it over the web app; loaded only there), so every view runs the code it runs on a display. Its
 panel is a canvas with the same renderer, playing the card's playlist with
 the firmware's dwell; Now mirrors it as it mirrors a real panel, with the
 remote control (Skip, Pause, Previous, Replay, Recently played). It answers
@@ -564,8 +564,8 @@ a real display, and comes back at the first good answer.
 
 The Formula editor on the site (the demo's and `/f/`) has two aids the
 player's copy leaves out (`js/fcost.js`, imported only there, and its wasm
-module `pkg-psi-lang/`, opendmd-psi-web's `lang` build; neither is in the
-www pack). **What costs most**: a bar in the gutter beside each line for
+module `pkg-psi-lang/`, opendmd-psi-web's `lang` build; both are the
+site's, built by its repository, and neither is in the www pack). **What costs most**: a bar in the gutter beside each line for
 its share of the panel's work, and the compiler's notes on the cost, each
 with a **Line N** button; shown by itself once a Formula is past light, and
 for any other on its button (a light one says so). **Tidy up** lays the

@@ -1,4 +1,4 @@
-//! The site's language service (feature `lang`, `make web`'s pkg-psi-lang/,
+//! The site's language service (feature `lang`, the site's pkg-psi-lang/,
 //! never packed): what the compiler saw in a formula ([`observe`]: each
 //! line's share of the panel's work, the cost notes, every name read and
 //! its definition) and the canonical layout ([`format`], `psi fmt`). The
