@@ -25,7 +25,7 @@ const MB = 1 << 20, SIDE = 4096, WORK = 512, RW = 512, RH = 256, TIERS = [2, 4, 
 // A new key character after its colour's initial (js/fsprite.js addKey's).
 const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz*+=%&@$';
 const HEX = /^#([\da-f]{3}|[\da-f]{6})$/i;
-// Den 16, OpenDMD's own palette (the Studio's, opendmd-web/share/studio/palettes.js).
+// Den 16, OpenDMD's own palette (the Studio's, the site repo's share/studio/palettes.js).
 const DEN = [0x0a0e2a, 0x161d52, 0x2e3a8c, 0x6447c8, 0x33d1ff, 0x8a4f1d, 0x14532d, 0x2f9e4f, 0xf7a531, 0xe8601c, 0xc92a2a, 0xff4f8b, 0xf1ebdd, 0x7c7f8a, 0xffffff];
 const say = (t) => Object.assign(new Error(t), { said: 1 });
 const rgbOf = (v) => parseInt(six(v).slice(1), 16);

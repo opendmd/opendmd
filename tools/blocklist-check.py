@@ -24,10 +24,13 @@ Where the URLs come from (so a new route is covered without editing this):
     (wildcards filled with sample names), with the query strings the web
     app's source and tools/mock-device.py use;
   - the web app's assets: every file under opendmd-web/www and the wasm
-    packages' files (pkg, pkg-art, pkg-psi, pkg-studio);
-  - the site's Worker routes: site/worker/src/index.ts (and its /formulas/
-    paths), the site's pages: the built site if there is one (--site, default
-    target/site), else site/pages, the theme and public-repo sources.
+    packages' files (pkg, pkg-art, pkg-psi);
+  - with --site-root (the site's repository, which runs this with it): the
+    site's Worker routes (site/worker/src/index.ts, and its /formulas/
+    paths), the site's own wasm (pkg-studio, its opendmd-studio-web) and the
+    site's pages: the built site (--site, default <site-root>/target/site) if
+    there is one, else site/pages, the theme and public-repo sources;
+  - --site alone: a built site's files.
 
 Each is asked as the web app asks (xhr for the API, script/stylesheet/font/
 image/document for assets), first-party from http://opendmd.local/ and from a
@@ -142,17 +145,21 @@ def panel_urls():
     return out
 
 
-def web_assets():
+def web_assets(site_root=None):
     www = ROOT / "opendmd-web/www"
     rels = set()
     for f in www.rglob("*"):
         if f.is_file() and not f.name.endswith(".gz"):
             rels.add(f.relative_to(www).as_posix())
     # The wasm packages are built, not committed: their file names are the crates'.
+    pkgs = {"pkg": ROOT / "opendmd-web", "pkg-art": ROOT / "opendmd-art-web", "pkg-psi": ROOT / "opendmd-psi-web"}
+    if site_root:
+        pkgs["pkg-studio"] = site_root / "opendmd-studio-web"  # the site's own, laid over the web app
     for d, crate in (("pkg", "opendmd_web"), ("pkg-art", "opendmd_art_web"), ("pkg-psi", "opendmd_psi_web"), ("pkg-studio", "opendmd_studio_web")):
+        if d not in pkgs:
+            continue
         crate_name = crate
-        toml = {"pkg": "opendmd-web", "pkg-art": "opendmd-art-web", "pkg-psi": "opendmd-psi-web", "pkg-studio": "opendmd-studio-web"}[d]
-        ct = ROOT / toml / "Cargo.toml"
+        ct = pkgs[d] / "Cargo.toml"
         if ct.exists():
             m = re.search(r'^name\s*=\s*"([^"]+)"', ct.read_text(), re.M)
             if m:
@@ -170,8 +177,10 @@ def asset_type(rel):
             "wasm": "xmlhttprequest", "json": "xmlhttprequest", "txt": "xmlhttprequest"}.get(ext, "other")
 
 
-def worker_paths():
-    src = (ROOT / "site/worker/src/index.ts").read_text()
+def worker_paths(site_root):
+    if not site_root:
+        return []
+    src = (site_root / "site/worker/src/index.ts").read_text()
     paths = set(re.findall(r'pathname\s*===\s*"(/[^"]*)"', src))
     paths |= {"/formulas/", "/formulas/src/sample.psi", "/formulas/thumbs/sample.png"}
     for m in re.finditer(r'startsWith\("(/[^"]*)"\)', src):
@@ -180,9 +189,9 @@ def worker_paths():
     return sorted(paths)
 
 
-def site_paths(site_dir):
+def site_paths(site_dir, site_root):
     paths = set()
-    if site_dir.is_dir():
+    if site_dir and site_dir.is_dir():
         for f in site_dir.rglob("*"):
             if f.is_file() and not f.name.endswith((".gz", ".br")):
                 rel = f.relative_to(site_dir).as_posix()
@@ -190,11 +199,13 @@ def site_paths(site_dir):
                 if rel.endswith("/index.html"):
                     paths.add("/" + rel[: -len("index.html")])
         return sorted(paths), f"built site {site_dir}"
+    if not site_root:
+        return [], "no site (the site's repository checks its own: --site-root)"
     paths.add("/")
     for sub in ("site/pages", "site/theme", "site/public-repo"):
-        for f in (ROOT / sub).rglob("*"):
+        for f in (site_root / sub).rglob("*"):
             if f.is_file():
-                rel = f.relative_to(ROOT / sub).as_posix()
+                rel = f.relative_to(site_root / sub).as_posix()
                 paths.add("/" + (rel[:-3] + "/" if rel.endswith(".md") else rel))
     paths |= {"/guide/", "/install/", "/create/", "/studio/", "/demo/", "/dev/api/", "/formulas/", "/install/release.json", "/install/beta.json", "/art-index/v1/NES.json"}
     return sorted(paths), "site sources (no built site; run make site for the full file list)"
@@ -204,19 +215,22 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--offline", action="store_true", help="never fetch: use the newest cached lists")
     ap.add_argument("--cache", default=str(ROOT / "target/blocklists"))
-    ap.add_argument("--site", default=str(ROOT / "target/site"), help="a built site (make site) to take its files from")
+    ap.add_argument("--site-root", help="the site's repository (opendmd-site): its Worker's routes, its pages, its wasm")
+    ap.add_argument("--site", help="a built site to take its files from (default with --site-root: <site-root>/target/site)")
     ap.add_argument("--list-urls", action="store_true", help="print the URLs checked and exit")
     a = ap.parse_args()
+    site_root = Path(a.site_root).resolve() if a.site_root else None
+    site_dir = Path(a.site) if a.site else site_root / "target/site" if site_root else None
 
     reqs = []  # (url, source, type, label)
     for host in PANEL_HOSTS:
         src = host + "/"
         for p, t in panel_urls():
             reqs.append((host + p, src, t, f"panel route from {host}"))
-        for rel in web_assets():
+        for rel in web_assets(site_root):
             reqs.append((f"{host}/{rel}", src, asset_type(rel), f"web asset from {host}"))
-    sp, how = site_paths(Path(a.site))
-    for p in worker_paths():
+    sp, how = site_paths(site_dir, site_root)
+    for p in worker_paths(site_root):
         t = "xmlhttprequest" if p.startswith("/api/") else "other"
         reqs.append((SITE + p, SITE + "/", t, "worker route, first-party"))
         reqs.append((SITE + p, PANEL_HOSTS[0] + "/", t, "worker route, third-party from the panel's app"))
@@ -226,11 +240,12 @@ def main():
         if p.endswith((".json", ".psi", ".txt")):
             reqs.append((SITE + p, PANEL_HOSTS[0] + "/", "xmlhttprequest", "site file, third-party from the panel's app"))
 
-    # The counted requests (site/worker/src/counts.ts) as they are made, query
+    # The counted requests (the site's Worker, its counts.ts) as they are made, query
     # strings included: the web app's update check (update.js, from the panel's
     # page and from the demo) and the installer's firmware download (ESP Web
     # Tools' fetch, from /install/), and the page that shows the counts.
-    rel_ver = json.loads(Path(a.site, "install/release.json").read_text())["version"] if Path(a.site, "install/release.json").is_file() else "1.0.0-beta.14"
+    rel_ver = (json.loads((site_dir / "install/release.json").read_text())["version"]
+               if site_dir and (site_dir / "install/release.json").is_file() else "1.0.0-beta.14")
     for host in PANEL_HOSTS + [SITE + "/demo"]:
         for lay in ("4mb",):
             for feed in ("release.json", "beta.json"):  # beta.json: Get beta updates on
@@ -248,7 +263,7 @@ def main():
         return 0
 
     eng = engines(load_lists(Path(a.cache), a.offline))
-    print(f"routes: {len(firmware_routes())} firmware, {len(worker_paths())} worker; site: {how}")
+    print(f"routes: {len(firmware_routes())} firmware, {len(worker_paths(site_root))} worker; site: {how}")
     seen = set()
     blocked = []
     for url, src, typ, label in reqs:

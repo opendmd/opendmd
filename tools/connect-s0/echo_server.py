@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""A local stand-in for the echo Worker (connect/s0-echo), for the emulator
+"""A local stand-in for the echo Worker (the site repo's connect/s0-echo), for the emulator
 lane (m8_emu.py) only: TLS 1.2 with a test chain made here (`certs`), the
 same four messages (ping, echo, stream, credit), `?k=` checked. Python's
 standard library only; it listens where it is told (the lane: 10.0.2.2:8443

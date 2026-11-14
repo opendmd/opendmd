@@ -16,7 +16,7 @@ One JSON file per platform tag, `<out>/<PLATFORM>.json`:
 demos, hacks and bad dumps left out), sorted; `kinds` holds one
 hex digit per name, a bit per folder that has it (1 titles, 2 snaps, 4 box
 art, 8 logos). The files are committed. They are not in the www pack: the
-site publishes them (tools/site.py) at `/art-index/v1/<PLATFORM>.json`,
+site publishes them (the site repo's tools/site.py) at `/art-index/v1/<PLATFORM>.json`,
 and Create Art's Game art (`www/js/find.js`) fetches the platform's file
 from there on the first search, matches titles in the browser, and loads
 the pictures from raw.githubusercontent.com (which, unlike
@@ -24,9 +24,9 @@ thumbnails.libretro.com, sends `Access-Control-Allow-Origin: *`).
 
 `v1` is the format above. A web app asks for the format it reads, so a
 change to the shape (a key added, renamed or reinterpreted) is a new
-version: a new entry in ART_INDEX_FORMATS in tools/site.py (its own
+version: a new entry in ART_INDEX_FORMATS in the site repo's tools/site.py (its own
 source folder and validator; the old entry stays, so the web apps already
-on players keep their format) and `ART_INDEX` in find.js. tools/site.py
+on players keep their format) and `ART_INDEX` in find.js. the site repo's tools/site.py
 refuses files that are not exactly their format's shape.
 
 Why a prepared index and not the GitHub API (which pages can read): one

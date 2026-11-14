@@ -15,7 +15,7 @@
 // flash layout (`variants.<variant>.firmware`; a release.json from before
 // there were two names only `firmware`, the 4mb one; another `layout`: USB). The official feed is
 // asked as release.json (or beta.json)?v=<firmware version>&layout=<4mb>, which the
-// site counts (site/worker/src/counts.ts); a feed of your own is asked as given.
+// site counts (the site repo's site/worker/src/counts.ts); a feed of your own is asked as given.
 
 import { app } from './state.js';
 import { h, store, SITE } from './util.js';

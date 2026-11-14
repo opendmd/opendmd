@@ -12,7 +12,7 @@
 //!   first retry after a session that ran (CONNECT.md 5.3, 9.4).
 //! - [`Hist`]: handshake times in fixed millisecond buckets, p50/p95.
 //! - [`Payload`], [`Fnv`]: M10's test stream, the same bytes the echo
-//!   Worker (`connect/s0-echo/src/payload.js`) makes from a seed.
+//!   Worker (the site repo's `connect/s0-echo/src/payload.js`) makes from a seed.
 //! - [`cert_subject`]: a certificate's subject Name (its DER, tag and
 //!   length included), how the probe finds a pinned root without parsing
 //!   any it does not need.
@@ -501,7 +501,7 @@ impl Hist {
 // --- M10's stream ------------------------------------------------------------
 
 /// The test stream: xorshift32 from `seed` (0 is taken as 0x9E3779B9), each
-/// step's word sent little-endian. `connect/s0-echo/src/payload.js` makes
+/// step's word sent little-endian. the site repo's `connect/s0-echo/src/payload.js` makes
 /// the same bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct Payload {
@@ -935,7 +935,7 @@ mod tests {
 
     #[test]
     fn payload_matches_the_worker() {
-        // The same numbers are asserted by connect/s0-echo/test/echo.test.mjs.
+        // The same numbers are asserted by the site repo's connect/s0-echo/test/echo.test.mjs.
         let mut p = Payload::new(1);
         let first: Vec<u8> = (0..8).map(|_| p.next_byte()).collect();
         assert_eq!(first, [0x21, 0x20, 0x04, 0x00, 0x01, 0x06, 0x08, 0x04]);

@@ -29,7 +29,7 @@ plays while the fake RePlayOS runs "Rift Patrol" (a made-up game: nothing
 in a shot is anyone else's art).
 
 panels.json, beside the shots, says where the panel is in the ones the
-site's home page plays a Formula over (tools/site.py, home.js): the
+site's home page plays a Formula over (the site repo's tools/site.py, home.js): the
 picture's name -> [left, top, width, height] in hundredths of the
 picture, the Formula on it, the web app's pixels a LED there, and the
 frame it shows (ms into the Formula, at its seed).

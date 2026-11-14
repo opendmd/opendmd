@@ -574,49 +574,19 @@ module is the whole compiler (~121 KB gzipped), so it loads only for a
 heavy Formula or one of the two buttons.
 
 The site's Studio (`/studio/`, the pixel editor) writes its GIFs with a
-wasm module of its own, `pkg-studio/` (`opendmd-studio-web`), loaded at
-its first download; like `pkg-psi-lang/` it is published with the demo
-and never in the www pack.
-
-On a window of 1000 × 620 or more the Studio is one screen (`studio.css`'s
-workspace): the piece bar on top, the tools a column on the left, the bench
-a column on the right, the canvas at the top of the stage between them and
-the frames under it; zoom and the guides sit in the chin under the canvas.
-Fit is the largest whole step, 16× at most, the stage has the width and
-the height for. Its colours are the site's theme tokens in both themes
-(`--bg2`, `--bg3`, `--line`, `--mut`, `--ink`), never a home-page scene's
-(`--den*`). `panels.js` (loaded at that size only, before the page shows)
-makes Tools, Colours, Layers, Stamps and This piece panels: each docks
-left, right or **under the canvas**, or floats. A window with 200 px to
-spare below the canvas at Fit and the frames, or with it once Fit gives up
-one step (never below 7×), makes the stage only as tall as the canvas and
-puts a row of panels under the frames, Layers and Stamps to begin with
-(by the window's size alone: 1440 × 820 and up, 1710 × 917, not
-1280 × 800, whose 7× leaves a little under 200 px). In a window without
-that room the row's panels sit in the right column, and their menus still
-say they are docked under the canvas. With the row, the selection bar
-lies over the bezel's chin, so picking Select moves nothing. A
-piece's colours past 23 are a grid that scrolls in itself, so Swatches and
-Layers stay in reach. A panel is dragged by its title bar (to the stage's
-edge or onto that row to dock it), moved by
-the arrow keys on its name, resized by its corner, folded, closed and shown
-again from the **Panels** menu; **H** (or PANELS in the chin) hides them
-all for the visit. The layout is kept in `localStorage`
-(`odmd.studio.panels`, version 2, one arrangement under 1600 px wide and
-one wider; an older version's is dropped); the default and Reset are every
-panel docked. Below that size,
-and on a phone (its four tabs), the page is as before.
+wasm module of its own, `pkg-studio/`, which the site's repository builds
+and lays over its copy of the web app; like `pkg-psi-lang/` it is never in
+the www pack.
 
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
-(`tools/demo-card.py`). `make site` builds the whole public site into
-`target/site`: the README as the landing page, these docs as HTML, and the
-app with the demo card under `demo/` (`tools/site.py`). `make site-serve`
-serves it on :8081; `make site-deploy` puts it on
-[opendmd.dev](https://opendmd.dev/) (the `opendmd-site` Worker on
-Cloudflare, `site/worker/`; see [deploying.md](deploying.md)).
+(`tools/demo-card.py`). The site's repository builds the public site
+from this tree: the guide and the developers' docs as HTML, and this
+app's `make web` output with the demo card under `demo/`, on
+[opendmd.dev](https://opendmd.dev/) (see [deploying.md](deploying.md),
+"The project site").
 
-**A formula's page** (`/f/#gallery=<slug>`, from `opendmd-web/share/f/`)
+**A formula's page** (`/f/#gallery=<slug>`, a page of the site's)
 is the app's own Formulas editor on the demo's files (`js/formulas.js`
 `editorPage`: the live preview, errors, sliders, cheat sheet and settings),
 with Open on my panel, Copy code and Submit to the gallery
@@ -681,14 +651,13 @@ view, ms): the loop draws that moment until it plays on.
 **The formula gallery** (`/formulas/`) is the app's examples plus the
 files merged into the public gallery repository's `gallery/`
 (github.com/opendmd/opendmd.github.io) by pull request. A workflow there
-(`site/public-repo/.github/`, installed by `make gallery-repo-publish`,
-which otherwise leaves `gallery/` alone) checks each
-contribution with `opendmd-gallery` (`opendmd-gallery/`: the path, the
-text, the header, the licence, that it compiles and its cost on the panel;
-its threat model is in `site/public-repo/.github/gallery-check/README.md`).
-`make site GALLERY=<a checkout's gallery/>` checks every file again before
-publishing it and draws the thumbnails; the release workflow fetches it.
-`make site-smoke` drives both pages in Chromium.
+(its `.github/`, which the site's repository installs and which otherwise
+leaves `gallery/` alone) checks each contribution with `opendmd-gallery`
+(`opendmd-gallery/`: the path, the text, the header, the licence, that it
+compiles and its cost on the panel; its threat model is in that repo's
+`.github/gallery-check/README.md`). The site's build checks every file
+again with this tree's `opendmd-gallery` before publishing it and draws the
+thumbnails, and its smoke test drives both pages in Chromium.
 
 ## The mock device
 

@@ -26,9 +26,8 @@ make clippy                  # clippy -D warnings, every crate
 make sim ARGS="--root /path/to/card"
 make web && make web-mock ROOT=/path/to/card   # the web app against a fake device on :8080
 make web-smoke               # headless Chromium through every view
-make blocklist-check         # no API path, asset or site URL may match EasyPrivacy/EasyList (ad blockers); lists cached in target/blocklists
+make blocklist-check         # no API path or asset may match EasyPrivacy/EasyList (ad blockers); lists cached in target/blocklists
 make font                    # the headings' pixel font (Silkscreen): subset it again
-make site-font site-scene    # the site's heading face (Fraunces) and the home page's pixel-art scene, made again
 make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 ```
@@ -47,7 +46,6 @@ make flasher                 # the browser installer with dist/ on http://localh
 make improv-check            # the real Improv Serial host library against the firmware's framing (node, npm)
 make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
-make site                    # this site, with dist/'s release under install/
 make notices                 # rewrite the third-party licence notices from the last fw-release (needs cargo-about)
 ```
 
@@ -64,28 +62,15 @@ your WiFi over USB with Improv Serial, or the firmware starts its
 bundles; the firmware checks the signature before installing, and a small
 updater program puts the new firmware in place from the SD card.
 
-### The demo's desk scene
+### This site
 
-The site's `/demo/` is a display on a desk beside the web app (which is at
-`/demo/app.html`): `opendmd-web/share/desk/`, written into the site by
-`make site`, never into the web app or its www pack. It has two scenes: a
-3D one (three.js) for machines with a fast WebGL2, and a flat one made of
-pixel-art layers for everything else. Their files are made by hand-run
-tools, and the outputs are committed:
-
-```sh
-uv run tools/desk-art.py         # the flat scene's den: share/desk/room/*.webp (--preview: target/desk-preview.png)
-uv run tools/desk-art-hd.py      # the 3D scene's sprites, from the same drawing: share/desk/hd/atlas.webp + atlas.js
-node tools/vendor-three.mjs      # three.js at a pinned version, only the parts the scene uses: share/desk/hd/three.js
-make site && uv run tools/desk-posters.py   # the 3D scene's stills (shown until its first frame): share/desk/hd/poster-*.webp
-```
-
-Retake the stills when the 3D scene's look changes. After a three.js bump,
-read its licence and update `licenses/THIRD-PARTY-LICENSES-desk.txt`.
-Their sizes are lines in `tools/web-size.py`. `tools/site-smoke.py` checks
-both scenes, the choice between them, and the vendored file's checksum.
-On the page, `?scene=hd|flat|try`, `&q=0..4` and `?hud=1` force a scene,
-set the quality level, and show the GPU, frame rate and level.
+This site (opendmd.dev) is built from a repository of its own, which pins
+a commit of this one and builds the site from it: these docs, the web
+app's `make web` output (the demo runs it), the formulas, the fonts, the
+installer in `flasher/` and the licences, with the simulator, the gallery
+checker and the minifier built here. The site's own pages, its Studio, its
+Create Art and Formula pages and the demo's desk scene live there. A
+change here reaches the site when that repository moves its pin to it.
 
 The repository's deploying notes (`docs/deploying.md`),
 firmware notes (`docs/firmware.md`) and OTA notes (`docs/ota.md`) cover the flash
@@ -100,7 +85,6 @@ layout, recovery and the update flow in detail.
 | `opendmd-sim` | The desktop simulator |
 | `opendmd-web` | The web app: wasm module plus hand-written HTML, CSS and JS in `www/` |
 | `opendmd-art-web` | Create Art's image processing and GIF writer, loaded on demand |
-| `opendmd-studio-web` | The site's Studio's GIF writers (`/studio/`), loaded at its first download; never in the www pack |
 | `opendmd-pack` | Prepares a card's GIFs for playback, offline |
 | `opendmd-psi` | Psi, the Formula language: its compiler and VM (`no_std`), shared by the firmware, the simulator and the browser |
 | `opendmd-psi-cli` | `psi`, Formulas from the command line: `psi check` and `psi fmt` (`make psi` installs it) |

@@ -15,7 +15,7 @@ in the pack's zip:
 | `SampleA.png`, `SampleB.png` | `d_scroll.gif` |
 
 `scene.py` (ours, not Kenney's) draws a little level from the tiles and the
-green alien: the site's "Using it" panel on the home page (`tools/site-art.py`
+green alien: the site's "Using it" panel on the home page (the site repo's `tools/site-art.py`
 imports its `scene()`; `uv run scene.py OUT.gif` writes it on its own).
 
 kenney.nl moved the pack's zip behind a download page (2026-10-29), so there

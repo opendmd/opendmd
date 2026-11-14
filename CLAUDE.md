@@ -3,7 +3,10 @@
 Open-source replacement for DMDoS, the closed ESP32 firmware that plays 128x32
 animated GIFs from microSD onto two chained 64x32 HUB75 panels: a
 platform-independent Rust core, a desktop simulator, the web app the player
-serves, the ESP32 firmware in `firmware/`, and the opendmd.dev site.
+serves and the ESP32 firmware in `firmware/`. The opendmd.dev site (its
+pages and Worker, the Studio, the Formula and Create Art pages, the desk
+demo) is built from a repository of its own, which pins a commit of this
+one and builds the site from its docs, web app, formulas and tools.
 
 This file is the short version for anyone working on the repository (people
 and coding assistants alike). Contributor docs: `docs/developers.md`,
@@ -54,7 +57,7 @@ make web-smoke   # headless Chromium through every view against the mock
 make sim ARGS="--root <card copy>"   # the desktop simulator; `make sim-build` on a headless box
 make pack ARGS="convert <card copy> --verify"   # prepare a card's cache/
 make psi-check F=my.psi           # check a Formula: errors, cost estimates, a contact sheet
-make blocklist-check              # no route, asset or site URL may look like a tracker to ad blockers
+make blocklist-check              # no route or asset of the web app may look like a tracker to ad blockers
 make fw-build    # ESP32 firmware (bench build)
 make fw-clippy   # clippy -D warnings, firmware feature sets
 make fw-flash PORT=/dev/ttyUSB0   # bench build + web app + flash + monitor
@@ -93,7 +96,6 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
 - **`opendmd-web/`**: the web app the device serves: a wasm module plus
   hand-written HTML/CSS/ES modules in `www/`, no framework, no bundler.
   **`opendmd-art-web/`**: the second wasm module (Create Art, Smooth motion).
-  **`opendmd-studio-web/`**: the site's Studio's GIF writers (site-only wasm).
 - **`opendmd-psi/`, `opendmd-psi-web/`, `opendmd-psi-cli/`**: Psi, the
   Formula language: compiler, VM and ESP32 JIT, its wasm module, the `psi`
   command. **`opendmd-gallery/`**: the Formula gallery checker.
@@ -101,7 +103,6 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
 - **`firmware/`**: the ESP32 crate (esp-idf std Rust, ESP-IDF v5.3, classic
   ESP32 DevKit V1, 4 MB flash). **`ota/updater/`**: the
   C updater app. **`flasher/`**: the browser installer.
-- **`site/`**: the opendmd.dev site and its Cloudflare Worker.
 - **`tools/`**: build, test and release scripts. **`hardware/`**: the
   measured pin map (`hardware/PINOUT.md`, the source of truth) and photos.
 - **`docs/`**: the docs (`docs/guide/`, the user guide; `api.md`,
@@ -155,20 +156,14 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
   (contact sheets from card GIFs, ROM screenshots, console logos, title
   cards) or lists of the pack's files. Test fixtures are generated in code;
   example names in docs use made-up author handles.
-- The only bundled third-party assets are two fonts, both OFL: Silkscreen
-  (the web app and the site) and Fraunces (the site's headings,
-  `site/fonts/`). The home page's scenes (`site/theme/den*.webp`) are our own,
-  drawn by `tools/site-scene-alt.py` and `tools/site-scene.py`
-  (`site/theme/SCENES.md`). The demo's desk scene (`opendmd-web/share/desk/`,
-  site-only) is our own art too (`tools/desk-art.py`, `tools/desk-art-hd.py`);
-  its 3D renderer is three.js (MIT), vendored by `tools/vendor-three.mjs`
-  with a hand-written notice (`licenses/THIRD-PARTY-LICENSES-desk.txt`).
-  Third-party notices are generated (`make notices`, checked by
-  `fw-release` and CI); after a dependency or IDF bump, regenerate and read
-  the diff.
-- The site is public: its demo card holds only our own recordings, the CC0
-  Kenney sprites and Formulas. Published docs describe how things are, not
-  how they got there.
+- The only bundled third-party asset is a font, Silkscreen (OFL; the web app,
+  and the site). The site's own assets and their rules are the site
+  repository's (its CLAUDE.md). Third-party notices are generated (`make
+  notices`, checked by `fw-release` and CI); after a dependency or IDF bump,
+  regenerate and read the diff.
+- The docs are published on the site, and the demo card `tools/demo-card.py`
+  makes for it holds only our own recordings, the CC0 Kenney sprites and
+  Formulas. Published docs describe how things are, not how they got there.
 - **One exception, for screenshots only** (owner, 2026-11-09): web app
   screenshots may show panel GIFs that Create Art made from
   libretro-thumbnails **title screens** (`make screenshots GAME_ART=1`;
@@ -176,9 +171,7 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
   published shots show our own Formulas instead and carry no credit.
   Publishing GAME_ART shots means restoring the credit ("Game title screens
   from libretro-thumbnails, made into panel GIFs with Create Art") in
-  `README.md`, `site/theme/footer.html` and the licences text in
-  `tools/site.py`, and removing the `{{plays:}}` markers from
-  `site/pages/home.html` (a live Formula would cover the game's panel).
+  `README.md` and on the site (its repository's CLAUDE.md says where).
   The GIFs are never committed, hosted or put on a published card; no box
   art or logos beyond what a title screen holds; never pack or card GIFs,
   nothing from GifCities.

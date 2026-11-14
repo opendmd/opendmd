@@ -1,4 +1,4 @@
-// The wasm modules (pkg/, pkg-psi/, pkg-art/; the site's pkg-psi-lang/, pkg-studio/) at addresses that change with
+// The wasm modules (pkg/, pkg-psi/, pkg-art/; the site's pkg-psi-lang/, and pkg-studio/, which the site's repository builds) at addresses that change with
 // every build: `?v=<build id>` (js/build.js, written by `make web`: a hash
 // of the five folders). wasm-pack's file names carry no hash, so without
 // it a browser that kept a module from an earlier build would run it with

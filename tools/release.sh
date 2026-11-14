@@ -3,19 +3,19 @@
 # (.github/workflows/release.yml on the tag this pushes; docs/deploying.md
 # "Releasing").
 #
-#   tools/release.sh VERSION                         dry run: plan, bump, build, check, site; publishes nothing
+#   tools/release.sh VERSION                         dry run: plan, bump, build, check (and the site); publishes nothing
 #   tools/release.sh VERSION --publish               the same, then pushes main and the tag; CI publishes; waits and checks
 #   tools/release.sh VERSION --publish --resume      after a push: waits for CI's run again and checks what it published
 #   tools/release.sh VERSION --publish-local         fallback while CI is down: publishes everything from here
 #   tools/release.sh VERSION --publish-local --resume   after a local publish that stopped part way
 #   (make release VERSION=1.0.1 [PUBLISH=1|PUBLISH=local] [RESUME=1])
 #
-# 1. Plan: the version is semver (the site's grammar, tools/site.py
+# 1. Plan: the version is semver (the site's grammar, the site repo's tools/site.py
 #    API_FROZEN: no "-" inside the pre-release part), newer than every v*
 #    tag here and on GitHub; the tag exists nowhere; the tree is clean, on
 #    main, and GitHub's and origin's main are in it; gh may push; the signing
 #    key is there (only its size is read). --publish: the repository has the
-#    secrets release.yml needs (their names only). --publish-local: no
+#    secret release.yml needs (OTA_SIGNING_KEY: its name only). --publish-local: no
 #    release.yml run exists for the tag and no GitHub release either.
 # 2. Bump: every opendmd crate's Cargo.toml and the opendmd-* entries of
 #    every Cargo.lock, committed as "Release <version>" on a detached HEAD
@@ -29,11 +29,13 @@
 #    factory spare per layout; the bundle and pack verify against
 #    firmware/keys/opendmd.pub.
 # 4. Assets: release.yml's list, SHA256SUMS, and the release notes.
-# 5. Site: make site with the public gallery repo's gallery/ and dev/api/
-#    (a fresh sparse clone) and this release's API page frozen; release.yml's
-#    release.json, beta.json and installer checks; site-smoke;
-#    site-deploy-check (cf deploy --dry-run, uploads nothing); the tree clean
-#    after it all.
+# 5. Site, with SITE_REPO (a checkout of the site's repository, set in
+#    local.mk; without it this step is skipped, said): the site built
+#    against this checkout (its make deploy-check OPENDMD=<here>: make check,
+#    the site with the public gallery repo's gallery/ and dev/api/, a fresh
+#    sparse clone, and this release's API page frozen, every test, cf deploy
+#    --dry-run, which uploads nothing); the release.json, beta.json and
+#    installer checks; the tree clean after it all.
 #
 # The channels (docs/deploying.md "Betas"): install/release.json names the
 # newest final release, install/beta.json the newest release of all (what
@@ -48,20 +50,22 @@
 #    the tag pushed to GitHub (https, gh's credentials) and to origin (the
 #    local mirror). The tag starts release.yml, which builds the release
 #    again, signs it with the OTA_SIGNING_KEY secret (the same key) and
-#    publishes it: the GitHub release and its assets, the public gallery
-#    repo, the site. This waits for that run (gh run watch), then checks
-#    what it published: the release (not a draft, a pre-release for a "-"
-#    version), its assets (this build's names; CI's bytes, as builds are not
-#    byte-reproducible: SHA256SUMS, and the bundle and pack verify against
-#    opendmd.pub), and opendmd.dev live (tools/site-live-check.sh: the feeds
-#    name the right versions and serve the release's own bytes). The build
-#    here is the check that the tag is releasable; CI's is what ships.
+#    publishes it: the GitHub release and its assets. This waits for that
+#    run (gh run watch), then checks what it published: the release (not a
+#    draft, a pre-release for a "-" version), its assets (this build's
+#    names; CI's bytes, as builds are not byte-reproducible: SHA256SUMS, and
+#    the bundle and pack verify against opendmd.pub). The build here is the
+#    check that the tag is releasable; CI's is what ships. Then the site,
+#    with SITE_REPO: its pin moved to the tag (a commit there: push it), make
+#    deploy (the release's files from GitHub, every check, cf deploy, checked
+#    live: the feeds name the right versions and serve the release's own
+#    bytes) and make gallery-repo-publish (the public gallery repo, over
+#    https). Without SITE_REPO it says what to run there: players see the
+#    release in their update check only once the site is deployed.
 # 6. --publish-local (CI down): the same pushes (the tag says "Publisher:
 #    local", so a release.yml run, should one start, does nothing); the
 #    GitHub release and its assets from this build (tools/release-publish.sh:
-#    a draft until every asset is up); the public gallery repo
-#    (tools/gallery-repo-publish.sh over https); the site on Cloudflare (make
-#    site-deploy-built, cf's OAuth login), checked live the same way.
+#    a draft until every asset is up); then the site as above.
 #
 # A dry run, or a publish that fails before anything is pushed, leaves the
 # checkout as it found it: back on main, the local tag deleted. Once a push
@@ -82,6 +86,7 @@
 # FW_RELEASE_TARGET_DIR: as for make fw-release. UPDATER_BUILD (default: one
 # per checkout under $SCRATCH, else target/updater). RELEASE_TRAILERS: the
 # release commit's trailer lines, newline-separated (default: none).
+# SITE_REPO: the site's repository (a checkout; the Makefile passes local.mk's).
 set -euo pipefail
 export LC_ALL=C
 
@@ -90,6 +95,8 @@ GH_URL=https://github.com/$GH_REPO.git
 GALLERY_URL=https://github.com/opendmd/opendmd.github.io.git
 SITE_URL=https://opendmd.dev
 TRAILERS=${RELEASE_TRAILERS:-}
+SITE_REPO=${SITE_REPO:-}
+[ -z "$SITE_REPO" ] || SITE_REPO=$(cd "$SITE_REPO" && pwd) || { echo "SITE_REPO=$SITE_REPO: no such directory" >&2; exit 2; }
 
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -237,18 +244,16 @@ valid_version "$VERSION" || die "'$VERSION' is not a version this project releas
 pass "version $VERSION ($KIND, tag $TAG)"
 for t in git gh jq uv make rsync curl sha256sum; do command -v $t >/dev/null || die "$t is not installed"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
-PUSH_REPOS=("$GH_REPO"); [ "$MODE" != local ] || PUSH_REPOS+=(opendmd/opendmd.github.io)
+PUSH_REPOS=("$GH_REPO"); [ -z "$SITE_REPO" ] || [ "$MODE" = dry ] || PUSH_REPOS+=(opendmd/opendmd.github.io)
 for r in "${PUSH_REPOS[@]}"; do
   [ "$(gh api "repos/$r" --jq .permissions.push 2>/dev/null)" = true ] || die "gh's account cannot push to $r"
 done
 pass "gh logged in, may push to ${PUSH_REPOS[*]}"
 if [ "$MODE" = ci ]; then
-  # release.yml refuses a real release without them (before building); find out now, before the push.
+  # release.yml refuses a real release without it (before building); find out now, before the push.
   secrets=$(gh secret list -R "$GH_REPO" --json name --jq '.[].name') || die "cannot list $GH_REPO's secrets (gh needs admin on it)"
-  for n in OTA_SIGNING_KEY SITE_DEPLOY_KEY CLOUDFLARE_API_TOKEN; do
-    grep -qx "$n" <<<"$secrets" || die "$GH_REPO has no $n secret, which release.yml needs to publish (docs/deploying.md \"Releasing\"); or PUBLISH=local while CI cannot"
-  done
-  pass "$GH_REPO has the secrets release.yml publishes with (OTA_SIGNING_KEY, SITE_DEPLOY_KEY, CLOUDFLARE_API_TOKEN; names only)"
+  grep -qx OTA_SIGNING_KEY <<<"$secrets" || die "$GH_REPO has no OTA_SIGNING_KEY secret, which release.yml needs to publish (docs/deploying.md \"Releasing\"); or PUBLISH=local while CI cannot"
+  pass "$GH_REPO has the secret release.yml signs with (OTA_SIGNING_KEY; its name only)"
 fi
 
 [ -z "$(git status --porcelain)" ] || { git status --short; die "the working tree is not clean"; }
@@ -346,13 +351,20 @@ fi
 [ $(( 8#$(stat -c %a "$FW_SIGN_KEY") & 8#077 )) -eq 0 ] || die "$FW_SIGN_KEY is readable by others (mode $(stat -c %a "$FW_SIGN_KEY")): chmod 600 it"
 pass "signing key present (32 bytes, mode $(stat -c %a "$FW_SIGN_KEY"); its contents are never read here)"
 
-# The site's changelog: a reminder, never a failure (docs/deploying.md "The changelog").
-odd=$(grep -nE '^###? v?[0-9]' site/pages/changelog.md 2>/dev/null | grep -vE '^[0-9]+:###? v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)? · [0-9]{4}-[0-9]{2}-[0-9]{2}$' || true)
-[ -z "$odd" ] || printf 'NOTE  %s\n' "site/pages/changelog.md: not \"<version> · <YYYY-MM-DD>\" (make site will refuse it): $(head -1 <<<"$odd")"
-if grep -qE "^## v?${VERSION//./\\.} · " site/pages/changelog.md 2>/dev/null; then
-  pass "changelog: site/pages/changelog.md has $VERSION's highlights"
+# The changelog: a reminder, never a failure (docs/deploying.md "The changelog").
+odd=$(grep -nE '^###? v?[0-9]' docs/changelog.md 2>/dev/null | grep -vE '^[0-9]+:###? v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)? · [0-9]{4}-[0-9]{2}-[0-9]{2}$' || true)
+[ -z "$odd" ] || printf 'NOTE  %s\n' "docs/changelog.md: not \"<version> · <YYYY-MM-DD>\" (the site's build will refuse it): $(head -1 <<<"$odd")"
+if grep -qE "^## v?${VERSION//./\\.} · " docs/changelog.md 2>/dev/null; then
+  pass "changelog: docs/changelog.md has $VERSION's highlights"
 else
-  printf 'NOTE  %s\n' "no \"## $VERSION · <date>\" in site/pages/changelog.md: opendmd.dev/changelog/ will not list $VERSION until its highlights are added (docs/deploying.md \"The changelog\")"
+  printf 'NOTE  %s\n' "no \"## $VERSION · <date>\" in docs/changelog.md: opendmd.dev/changelog/ will not list $VERSION until its highlights are added (docs/deploying.md \"The changelog\")"
+fi
+if [ -n "$SITE_REPO" ]; then
+  [ -f "$SITE_REPO/tools/site.py" ] && [ -f "$SITE_REPO/Makefile" ] || die "SITE_REPO=$SITE_REPO is not the site's repository"
+  [ -z "$(git -C "$SITE_REPO" status --porcelain)" ] || die "the site's repository ($SITE_REPO) is not clean"
+  pass "the site: $SITE_REPO (clean), built against this checkout in step 5"
+else
+  printf 'NOTE  %s\n' "no SITE_REPO (local.mk): the site is neither built against $TAG here nor deployed after it (docs/deploying.md \"The site\")"
 fi
 
 # ---- 2. bump --------------------------------------------------------------
@@ -403,8 +415,8 @@ STAMP=$REL/built
 built_ok() {
   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$RELEASE_COMMIT" ] && [ -f "$ASSETS/SHA256SUMS" ] &&
     (cd "$ASSETS" && sha256sum --quiet -c SHA256SUMS) &&
-    [ "$(jq -r .version "$SITE/install/beta.json" 2>/dev/null)" = "$VERSION" ] &&
-    [ "$(jq -r .version "$SITE/install/release.json" 2>/dev/null)" = "$REL_VERSION" ]
+    { [ -z "$SITE_REPO" ] || { [ "$(jq -r .version "$SITE/install/beta.json" 2>/dev/null)" = "$VERSION" ] &&
+      [ "$(jq -r .version "$SITE/install/release.json" 2>/dev/null)" = "$REL_VERSION" ]; }; }
 }
 
 if [ "$RESUME" = 1 ] && [ "$MODE" = ci ]; then
@@ -482,131 +494,119 @@ else
   tools/release-notes.sh "$VERSION" "$CHANNEL" "$ASSETS/SHA256SUMS" "$(git rev-parse "refs/tags/$TAG")" "$PUBLISHER" > "$REL/notes.md"
   pass "$(( ${#files[@]} + 1 )) assets (with SHA256SUMS) in $ASSETS; notes in $REL/notes.md"
 
-  step "5. The public site"
-  # The demo card's Kenney (CC0) animations: made from the sprites committed
-  # in the art pipeline (offline), as release.yml "The art demos' GIFs" does.
-  out=opendmd-web/experiments/art/process/out
-  gifs=(b_walk.gif b_pan.gif d_scroll.gif)
-  have_gifs() { local f; for f in "${gifs[@]}"; do [ -f "$1/$f" ] || return 1; done; }
-  if have_gifs $out; then
-    skip "the art demos' GIFs are there"
+  step "5. The site (SITE_REPO: the site's repository, built against this checkout)"
+  if [ -z "$SITE_REPO" ]; then
+    skip "no SITE_REPO: the site is not built against $TAG (set it in local.mk to build and check it here)"
   else
-    (cd opendmd-web/experiments/art/process && export ART_TMP=$RELEASE_DIR/art PYTHONDONTWRITEBYTECODE=1 &&
-      uv run --quiet fetch_inputs.py kenney && uv run --quiet demos.py b d && git checkout -- out)
-    pass "the art demos' GIFs made"
-  fi
-  # The gallery's contributions and the earlier API pages: the public repo,
-  # read-only over https (release.yml "Fetch the formula gallery ...").
-  g=$REL/site-gallery
-  rm -rf "$g"
-  git clone -q --filter=blob:none --no-checkout "$GALLERY_URL" "$g"
-  git -C "$g" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
-  git -C "$g" checkout -q
-  mkdir -p "$g/gallery" "$g/dev/api"
-  pass "public gallery repo: $(find "$g/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files, $(find "$g/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
-  # The release.json side: this build, or (a beta after a final) the final's
-  # files from its GitHub release, downloaded here (read only) and checked.
-  if [ "$CHANNEL" = beta ]; then
-    FINAL_DIST=$REL/final-dist
-    rm -rf "$FINAL_DIST"; mkdir -p "$FINAL_DIST"
-    gh release download "v$FINAL" -R "$GH_REPO" -D "$FINAL_DIST" || die "cannot download v$FINAL's assets"
-    (cd "$FINAL_DIST" && sha256sum --quiet -c SHA256SUMS) || die "v$FINAL's assets do not match its SHA256SUMS"
-    for v in 4mb; do
-      [ "$(jq -r .version "$FINAL_DIST/manifest-$v.json")" = "$FINAL" ] || die "v$FINAL's manifest-$v.json is not $FINAL"
-      uv run --quiet tools/fw-sign.py verify "$FINAL_DIST/opendmd-$FINAL-$v.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
-        die "v$FINAL's opendmd-$FINAL-$v.odfw does not verify against firmware/keys/opendmd.pub"
-      uv run --quiet tools/fw-sign.py inspect "$FINAL_DIST/opendmd-$FINAL-$v.odfw" > "$REL/inspect-final-$v.txt"
-    done
-    uv run --quiet tools/fw-sign.py verify-www "$FINAL_DIST/opendmd-$FINAL-www.pack" --pub firmware/keys/opendmd.pub >/dev/null ||
-      die "v$FINAL's opendmd-$FINAL-www.pack does not verify against firmware/keys/opendmd.pub"
-    pass "v$FINAL's assets from its GitHub release (SHA256SUMS, manifests, bundles and www pack verify) in $FINAL_DIST"
-    SITE_DISTS=(DIST="$FINAL_DIST" BETA_DIST="$DIST")
-  else
-    SITE_DISTS=(DIST="$DIST")
-  fi
-  rm -rf "$SITE"
-  make site "${SITE_DISTS[@]}" SITE="$SITE" GALLERY="$g/gallery" API_ARCHIVE="$g/dev/api" API_FREEZE=yes
-  pass "make site (${SITE_DISTS[*]})"
-
-  step "5b. Check the site's release.json, beta.json and installer"
-  inst=$SITE/install
-  # check_feed FILE VER DIR SRC INSPECT: install/FILE names VER's bundles and
-  # www pack under install/DIR/, byte for byte SRC's (a dist), each layout
-  # the one its bundle is for (INSPECT: fw-sign.py inspect's output, per layout).
-  check_feed() {
-    local file=$1 ver=$2 dir=$3 src=$4 insp=$5 f l v
-    cat "$inst/$file"
-    [ "$(jq -r .version "$inst/$file")" = "$ver" ] || die "$file's version is not $ver"
-    [ "$(jq -r .firmware "$inst/$file")" = "$dir/opendmd-$ver-4mb.odfw" ] || die "$file's firmware is not the 4mb bundle"
-    for v in 4mb; do
-      f="$(jq -r ".variants[\"$v\"].firmware" "$inst/$file")"
-      [ "$f" = "$dir/opendmd-$ver-$v.odfw" ] || die "$file's variants.$v.firmware is '$f'"
-      cmp "$inst/$f" "$src/opendmd-$ver-$v.odfw" || die "$inst/$f is not $src's"
-      l="$(jq -r ".variants[\"$v\"].layout" "$inst/$file")"
-      grep -Eq "^layout   v$l( |\$)" "$insp-$v.txt" || die "$file's variants.$v.layout is '$l', not the bundle's table"
-    done
-    f="$(jq -r .www "$inst/$file")"
-    [ "$f" = "$dir/opendmd-$ver-www.pack" ] && cmp "$inst/$f" "$src/opendmd-$ver-www.pack" || die "$file's www is '$f', not $src's pack"
-    pass "$file: version $ver, every layout's bundle and the www pack under install/$dir/ ($src's)"
-  }
-  # check_offline DIR BUTTON SRC: SRC's offline install (its manifest and
-  # NVS image) under install/DIR/ byte for byte, and BUTTON's box that
-  # swaps to it. SRC is this build (it has one: 3b) or a final's release
-  # (one from before the offline install has none: then none on the page).
-  check_offline() {
-    local dir=$1 button=$2 src=$3 f
-    if [ ! -f "$src/manifest-4mb-offline.json" ]; then
-      [ "$src" != "$DIST" ] || die "$DIST has no manifest-4mb-offline.json"
-      [ ! -e "$inst/$dir/manifest-4mb-offline.json" ] && ! grep -q "data-offline-for=\"$button\"" "$inst/index.html" ||
-        die "install/$dir/ has an offline install $src does not have"
-      skip "install page: $src has no offline install (a release from before it): no box for $button"
-      return
+    # The gallery's contributions and the earlier API pages: the public repo,
+    # read-only over https.
+    g=$REL/site-gallery
+    rm -rf "$g"
+    git clone -q --filter=blob:none --no-checkout "$GALLERY_URL" "$g"
+    git -C "$g" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
+    git -C "$g" checkout -q
+    mkdir -p "$g/gallery" "$g/dev/api"
+    pass "public gallery repo: $(find "$g/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files, $(find "$g/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
+    # The release.json side: this build, or (a beta after a final) the final's
+    # files from its GitHub release, downloaded here (read only) and checked.
+    if [ "$CHANNEL" = beta ]; then
+      FINAL_DIST=$REL/final-dist
+      rm -rf "$FINAL_DIST"; mkdir -p "$FINAL_DIST"
+      gh release download "v$FINAL" -R "$GH_REPO" -D "$FINAL_DIST" || die "cannot download v$FINAL's assets"
+      (cd "$FINAL_DIST" && sha256sum --quiet -c SHA256SUMS) || die "v$FINAL's assets do not match its SHA256SUMS"
+      for v in 4mb; do
+        [ "$(jq -r .version "$FINAL_DIST/manifest-$v.json")" = "$FINAL" ] || die "v$FINAL's manifest-$v.json is not $FINAL"
+        uv run --quiet tools/fw-sign.py verify "$FINAL_DIST/opendmd-$FINAL-$v.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
+          die "v$FINAL's opendmd-$FINAL-$v.odfw does not verify against firmware/keys/opendmd.pub"
+        uv run --quiet tools/fw-sign.py inspect "$FINAL_DIST/opendmd-$FINAL-$v.odfw" > "$REL/inspect-final-$v.txt"
+      done
+      uv run --quiet tools/fw-sign.py verify-www "$FINAL_DIST/opendmd-$FINAL-www.pack" --pub firmware/keys/opendmd.pub >/dev/null ||
+        die "v$FINAL's opendmd-$FINAL-www.pack does not verify against firmware/keys/opendmd.pub"
+      pass "v$FINAL's assets from its GitHub release (SHA256SUMS, manifests, bundles and www pack verify) in $FINAL_DIST"
+      SITE_DISTS=(DIST="$FINAL_DIST" BETA_DIST="$DIST")
+    else
+      SITE_DISTS=(DIST="$DIST")
     fi
-    for f in manifest-4mb-offline.json nvs-offline-4mb.bin; do
-      cmp "$inst/$dir/$f" "$src/$f" || die "install/$dir/$f is not $src's"
-    done
-    grep -q "data-manifest-offline=\"$dir/manifest-4mb-offline.json\"" "$inst/index.html" &&
-      grep -q "data-offline-for=\"$button\"" "$inst/index.html" || die "the install page has no offline box for $button"
-    pass "install page: $button's offline box, install/$dir/manifest-4mb-offline.json and nvs-offline-4mb.bin ($src's)"
-  }
-  if [ "$CHANNEL" = beta ]; then
-    check_feed release.json "$FINAL" firmware "$FINAL_DIST" "$REL/inspect-final"
-    check_feed beta.json "$VERSION" firmware/beta "$DIST" "$REL/inspect"
-    INSTALL_SRC=$FINAL_DIST
-    grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || die "the install page has no beta button"
-    cmp "$inst/firmware/beta/manifest-4mb.json" "$DIST/manifest-4mb.json" || die "install/firmware/beta/manifest-4mb.json is not this beta's"
-    pass "install page: the beta's own button, its 4mb manifest under firmware/beta/"
-    check_offline firmware/beta install-beta-4mb "$DIST"
-  else
-    check_feed release.json "$VERSION" firmware "$DIST" "$REL/inspect"
-    cmp "$inst/beta.json" "$inst/release.json" || die "beta.json is not release.json (no beta is newer than $VERSION)"
-    [ ! -e "$inst/firmware/beta" ] && ! grep -q 'beta-install' "$inst/index.html" || die "the site has a beta installer, with no beta newer than $VERSION"
-    pass "beta.json is release.json; no beta installer"
-    INSTALL_SRC=$DIST
+    rm -rf "$SITE"
+    # The site's make deploy-check: its make check (the site from this tree's
+    # make web with the site's own wasm laid over, this release's API page
+    # frozen; every test of the site's) and cf deploy --dry-run (uploads nothing).
+    make -C "$SITE_REPO" --no-print-directory deploy-check OPENDMD="$ROOT" "${SITE_DISTS[@]}" SITE="$SITE" \
+      GALLERY="$g/gallery" API_ARCHIVE="$g/dev/api" API_FREEZE=yes || die "the site's make deploy-check failed (in $SITE_REPO)"
+    pass "the site: make deploy-check in $SITE_REPO (${SITE_DISTS[*]})"
+
+    step "5b. Check the site's release.json, beta.json and installer"
+    inst=$SITE/install
+    # check_feed FILE VER DIR SRC INSPECT: install/FILE names VER's bundles and
+    # www pack under install/DIR/, byte for byte SRC's (a dist), each layout
+    # the one its bundle is for (INSPECT: fw-sign.py inspect's output, per layout).
+    check_feed() {
+      local file=$1 ver=$2 dir=$3 src=$4 insp=$5 f l v
+      cat "$inst/$file"
+      [ "$(jq -r .version "$inst/$file")" = "$ver" ] || die "$file's version is not $ver"
+      [ "$(jq -r .firmware "$inst/$file")" = "$dir/opendmd-$ver-4mb.odfw" ] || die "$file's firmware is not the 4mb bundle"
+      for v in 4mb; do
+        f="$(jq -r ".variants[\"$v\"].firmware" "$inst/$file")"
+        [ "$f" = "$dir/opendmd-$ver-$v.odfw" ] || die "$file's variants.$v.firmware is '$f'"
+        cmp "$inst/$f" "$src/opendmd-$ver-$v.odfw" || die "$inst/$f is not $src's"
+        l="$(jq -r ".variants[\"$v\"].layout" "$inst/$file")"
+        grep -Eq "^layout   v$l( |\$)" "$insp-$v.txt" || die "$file's variants.$v.layout is '$l', not the bundle's table"
+      done
+      f="$(jq -r .www "$inst/$file")"
+      [ "$f" = "$dir/opendmd-$ver-www.pack" ] && cmp "$inst/$f" "$src/opendmd-$ver-www.pack" || die "$file's www is '$f', not $src's pack"
+      pass "$file: version $ver, every layout's bundle and the www pack under install/$dir/ ($src's)"
+    }
+    # check_offline DIR BUTTON SRC: SRC's offline install (its manifest and
+    # NVS image) under install/DIR/ byte for byte, and BUTTON's box that
+    # swaps to it. SRC is this build (it has one: 3b) or a final's release
+    # (one from before the offline install has none: then none on the page).
+    check_offline() {
+      local dir=$1 button=$2 src=$3 f
+      if [ ! -f "$src/manifest-4mb-offline.json" ]; then
+        [ "$src" != "$DIST" ] || die "$DIST has no manifest-4mb-offline.json"
+        [ ! -e "$inst/$dir/manifest-4mb-offline.json" ] && ! grep -q "data-offline-for=\"$button\"" "$inst/index.html" ||
+          die "install/$dir/ has an offline install $src does not have"
+        skip "install page: $src has no offline install (a release from before it): no box for $button"
+        return
+      fi
+      for f in manifest-4mb-offline.json nvs-offline-4mb.bin; do
+        cmp "$inst/$dir/$f" "$src/$f" || die "install/$dir/$f is not $src's"
+      done
+      grep -q "data-manifest-offline=\"$dir/manifest-4mb-offline.json\"" "$inst/index.html" &&
+        grep -q "data-offline-for=\"$button\"" "$inst/index.html" || die "the install page has no offline box for $button"
+      pass "install page: $button's offline box, install/$dir/manifest-4mb-offline.json and nvs-offline-4mb.bin ($src's)"
+    }
+    if [ "$CHANNEL" = beta ]; then
+      check_feed release.json "$FINAL" firmware "$FINAL_DIST" "$REL/inspect-final"
+      check_feed beta.json "$VERSION" firmware/beta "$DIST" "$REL/inspect"
+      INSTALL_SRC=$FINAL_DIST
+      grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || die "the install page has no beta button"
+      cmp "$inst/firmware/beta/manifest-4mb.json" "$DIST/manifest-4mb.json" || die "install/firmware/beta/manifest-4mb.json is not this beta's"
+      pass "install page: the beta's own button, its 4mb manifest under firmware/beta/"
+      check_offline firmware/beta install-beta-4mb "$DIST"
+    else
+      check_feed release.json "$VERSION" firmware "$DIST" "$REL/inspect"
+      cmp "$inst/beta.json" "$inst/release.json" || die "beta.json is not release.json (no beta is newer than $VERSION)"
+      [ ! -e "$inst/firmware/beta" ] && ! grep -q 'beta-install' "$inst/index.html" || die "the site has a beta installer, with no beta newer than $VERSION"
+      pass "beta.json is release.json; no beta installer"
+      INSTALL_SRC=$DIST
+    fi
+    grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || die "the install page has no 4mb button"
+    grep -q "OpenDMD $REL_VERSION\." "$inst/index.html" || die "the install page does not name $REL_VERSION"
+    ! grep -q '8mb' "$inst/index.html" || die "the install page names an 8mb build"
+    [ -f "$inst/firmware/manifest-4mb.json" ] || die "install/firmware/manifest-4mb.json is missing"
+    ! ls "$inst/firmware" | grep -q 8mb || die "install/firmware has 8mb files"
+    cmp "$inst/firmware/manifest-4mb.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest-4mb.json is not $REL_VERSION's"
+    cmp "$inst/firmware/manifest.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest.json is not the 4mb manifest"
+    pass "install page: $REL_VERSION's 4mb button, its manifest published, no 8mb files"
+    check_offline firmware install-4mb "$INSTALL_SRC"
+    [ -f "$SITE/dev/api/$TAG.html" ] || die "the site has no frozen dev/api/$TAG.html"
+    grep -q "OpenDMD $VERSION" "$SITE/dev/api/$TAG.html" || die "dev/api/$TAG.html does not name $VERSION"
+    grep -q "api/$TAG.html" "$SITE/dev/api.html" || die "dev/api.html does not link $TAG.html"
+    pass "this release's API page frozen: dev/api/$TAG.html, linked from dev/api.html"
   fi
-  grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || die "the install page has no 4mb button"
-  grep -q "OpenDMD $REL_VERSION\." "$inst/index.html" || die "the install page does not name $REL_VERSION"
-  ! grep -q '8mb' "$inst/index.html" || die "the install page names an 8mb build"
-  [ -f "$inst/firmware/manifest-4mb.json" ] || die "install/firmware/manifest-4mb.json is missing"
-  ! ls "$inst/firmware" | grep -q 8mb || die "install/firmware has 8mb files"
-  cmp "$inst/firmware/manifest-4mb.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest-4mb.json is not $REL_VERSION's"
-  cmp "$inst/firmware/manifest.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest.json is not the 4mb manifest"
-  pass "install page: $REL_VERSION's 4mb button, its manifest published, no 8mb files"
-  check_offline firmware install-4mb "$INSTALL_SRC"
-  [ -f "$SITE/dev/api/$TAG.html" ] || die "the site has no frozen dev/api/$TAG.html"
-  grep -q "OpenDMD $VERSION" "$SITE/dev/api/$TAG.html" || die "dev/api/$TAG.html does not name $VERSION"
-  grep -q "api/$TAG.html" "$SITE/dev/api.html" || die "dev/api.html does not link $TAG.html"
-  pass "this release's API page frozen: dev/api/$TAG.html, linked from dev/api.html"
 
-  step "5c. site-smoke"
-  make site-smoke "${SITE_DISTS[@]}" SITE="$SITE"
-  pass "make site-smoke"
-
-  step "5d. site-deploy-check (cf deploy --dry-run: uploads nothing)"
-  make site-deploy-check SITE="$SITE"
-  pass "make site-deploy-check"
-
-  step "5e. The tree is clean after the build"
+  step "5c. The tree is clean after the build"
   git status --porcelain
   [ -z "$(git status --porcelain)" ] || die "the build left the tree dirty"
   pass "the tree is clean"
@@ -617,7 +617,7 @@ if [ "$PUBLISH" = 0 ]; then
   step "Dry run done"
   pass "every build and check step passed for $TAG; nothing was pushed or published"
   info "assets: $ASSETS"
-  info "site:   $SITE"
+  [ -z "$SITE_REPO" ] || info "site:   $SITE"
   info "to publish: tools/release.sh $VERSION --publish (make release VERSION=$VERSION PUBLISH=1): rebuilds from a fresh release commit, pushes the tag, CI publishes"
   exit 0
 fi
@@ -666,6 +666,37 @@ step "6b. Push to GitHub$( [ "$TAG_PUBLISHER" = ci ] && echo ' (the tag starts r
 push_to github "$GH_URL" ghgit
 step "6c. Push to origin (the local mirror)"
 push_to origin origin git
+
+# The site, after the GitHub release (6f): the site's repository's pin moved
+# to the tag (a commit there), its make deploy (the release's files from
+# GitHub, every check, cf deploy, checked live) and the public gallery repo.
+site_publish() {
+  step "6f. The site (opendmd.dev) and the public gallery repo, from $SITE_REPO"
+  if [ -z "$SITE_REPO" ]; then
+    printf 'NOTE  %s\n' "no SITE_REPO: opendmd.dev does not serve $TAG until the site is deployed (players' update checks read it): in the site's repository, make bump REF=$TAG && make deploy && make gallery-repo-publish, then push it"
+    return 0
+  fi
+  live() {
+    if [ "$CHANNEL" = beta ]; then
+      gh release download "v$FINAL" -R "$GH_REPO" -p SHA256SUMS -O "$REL/SHA256SUMS-final" --clobber >/dev/null 2>&1 &&
+        "$SITE_REPO/tools/site-live-check.sh" "$VERSION" "$FINAL" "$REL/SHA256SUMS-final"
+    else
+      "$SITE_REPO/tools/site-live-check.sh" "$VERSION" "$VERSION"
+    fi
+  }
+  (cd "$SITE_REPO" && tools/bump.sh "$TAG") || die "the site's pin did not move to $TAG ($SITE_REPO)"
+  if SITE_LIVE_WAIT=0 live >/dev/null 2>&1 && [ "$(git -C "$SITE_REPO" rev-parse HEAD:opendmd)" = "$RELEASE_COMMIT" ]; then
+    skip "$SITE_URL already serves $TAG (beta.json $VERSION, release.json $REL_VERSION)"
+  else
+    make -C "$SITE_REPO" --no-print-directory deploy || die "the site's make deploy failed ($SITE_REPO; fix it, then make deploy there, or RESUME=1 here)"
+    published "site deployed from $SITE_REPO at $TAG: beta.json $VERSION, release.json $REL_VERSION, checked live"
+  fi
+  out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' \
+    make -C "$SITE_REPO" --no-print-directory gallery-repo-publish GALLERY_REPO="$GALLERY_URL") || { echo "$out"; die "the site's make gallery-repo-publish failed"; }
+  echo "$out"
+  case $out in *"no changes"*) skip "the gallery repo already has $TAG's files" ;; *) published "gallery repo updated: $(tail -1 <<<"$out")" ;; esac
+  info "push the site repository's pin commit: git -C $SITE_REPO push"
+}
 
 if [ "$MODE" = ci ]; then
   # ---- 6d-6f (--publish): release.yml publishes; wait for it, then check.
@@ -719,14 +750,7 @@ if [ "$MODE" = ci ]; then
     die "$TAG's www pack does not verify against firmware/keys/opendmd.pub"
   pass "$TAG: published ($KIND), $(wc -l <<<"$have") assets, SHA256SUMS holds; the bundle and the www pack verify against firmware/keys/opendmd.pub"
 
-  step "6f. opendmd.dev serves it (tools/site-live-check.sh)"
-  if [ "$CHANNEL" = beta ]; then
-    gh release download "v$FINAL" -R "$GH_REPO" -p SHA256SUMS -O "$pub/SHA256SUMS-final" --clobber || die "cannot download v$FINAL's SHA256SUMS"
-    SITE_LIVE_WAIT=30 tools/site-live-check.sh "$VERSION" "$FINAL" "$pub/SHA256SUMS-final" "$pub/SHA256SUMS" || die "opendmd.dev does not serve $TAG as it should"
-  else
-    SITE_LIVE_WAIT=30 tools/site-live-check.sh "$VERSION" "$VERSION" "$pub/SHA256SUMS" || die "opendmd.dev does not serve $TAG as it should"
-  fi
-  pass "opendmd.dev: beta.json $VERSION, release.json $REL_VERSION, the release's own bytes"
+  site_publish
 else
   # ---- 6d-6f (--publish-local): everything from here.
   step "6d. GitHub release $TAG on $GH_REPO (tools/release-publish.sh)"
@@ -737,31 +761,7 @@ else
   what=$(sed -n 's/^published: //p' <<<"$out" | tail -1)
   if [ "$what" = nothing ]; then skip "the release and every asset were already there"; else published "GitHub release: $what"; fi
 
-  step "6e. The public gallery repo (opendmd/opendmd.github.io)"
-  rm -rf "$REL/gallery-repo"
-  out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' \
-    GALLERY_REPO_DESCRIBE="$TAG" GALLERY_REPO_WORK="$REL/gallery-repo" \
-    tools/gallery-repo-publish.sh "$SITE" "$GALLERY_URL") || { echo "$out"; die "tools/gallery-repo-publish.sh failed"; }
-  echo "$out"
-  case $out in *"no changes"*) skip "the gallery repo already has $TAG's files" ;; *) published "gallery repo updated: $out" ;; esac
-
-  step "6f. The site on Cloudflare (opendmd.dev)"
-  # (beta.json names this release whatever the channel; release.json this
-  # one, or for a beta after a final, the final still.)
-  live() {
-    if [ "$CHANNEL" = beta ]; then
-      tools/site-live-check.sh "$VERSION" "$FINAL" "$REL/final-dist/SHA256SUMS" "$ASSETS/SHA256SUMS"
-    else
-      tools/site-live-check.sh "$VERSION" "$VERSION" "$ASSETS/SHA256SUMS"
-    fi
-  }
-  if SITE_LIVE_WAIT=0 live >/dev/null 2>&1; then
-    skip "$SITE_URL already serves $TAG (beta.json $VERSION, release.json $REL_VERSION, this build's bytes)"
-  else
-    make site-deploy-built SITE="$SITE" || die "make site-deploy-built failed"
-    SITE_LIVE_VERSION=$(git describe --always --dirty --tags --match 'v*') live || die "deployed, but $SITE_URL does not serve $TAG as it should"
-    published "site deployed: $SITE_URL/install/beta.json says $VERSION, release.json $REL_VERSION"
-  fi
+  site_publish
 fi
 
 step "Published $TAG"

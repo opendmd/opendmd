@@ -1,10 +1,9 @@
 //! OpenDMD Connect, spike S0: a measurement probe, not a feature (feature
 //! `connect-probe`, off in every other build and compiled out entirely;
-//! `/srv/scratch/connect-design/CONNECT.md` sections 5 and 10, the
-//! private notes' `docs/research/connect.md` once written).
+//! the Connect design's sections 5 and 10, in the maintainers' notes).
 //!
 //! **What it is.** One outbound WebSocket over TLS 1.2 (`wss://`, port 443)
-//! to the scratch echo Worker (`connect/s0-echo/`), held open with pings,
+//! to the scratch echo Worker (the site repo's `connect/s0-echo/`), held open with pings,
 //! reconnected with backoff. No protocol, no pairing: it exists to measure
 //! what a secure outbound session costs this device (heap, flash, CPU0
 //! time, the display's frame deadlines) beside play.

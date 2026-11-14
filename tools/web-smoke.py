@@ -391,7 +391,7 @@ def card_gifs() -> list[str]:
     lines = (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n")
     return [l.strip() for l in lines if l.strip().endswith(".gif") and (CARD / l.strip().lstrip("/")).is_file()]
 OUT = Path(os.environ.get("WEB_SMOKE_OUT", REPO / "target" / "web-smoke"))
-# Create Art's game name index, published on the site (tools/site.py); every
+# Create Art's game name index, published on the site (the site repo's tools/site.py); every
 # page's context answers it from the committed files (site_art_index), so no
 # test reaches the network. Requests seen: [(url, Origin header)].
 SITE_ART = "https://opendmd.dev/art-index/v1/"
@@ -437,7 +437,7 @@ _www_snap: Path | None = None
 def www_snapshot() -> Path:
     """The web app as it was when the run began, copied once: the mock serves
     this, not opendmd-web/www-dist (make web's output: the sources with their
-    scripts minified, tools/web-minify.py). `make web` and `make site` rewrite that
+    scripts minified, tools/web-minify.py). `make web` (and the site's build) rewrite that
     directory (delete the .gz files, replace pkg/), and a page that loads
     its modules in that moment gets a 404 and never draws: a build running
     beside the smoke made a bare wait time out. (A reload would not do:
@@ -4479,7 +4479,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     w0 = get_json(base + "/api/www")["version"]
 
     def release(name: str, **kw) -> str:
-        # As tools/site.py writes it: `firmware` (the 4mb bundle) and
+        # As the site repo's tools/site.py writes it: `firmware` (the 4mb bundle) and
         # `variants`, the layout's file and table.
         fw4 = kw.get("firmware", f"firmware/opendmd-{UPD_VERSION}.odfw")
         obj = {"version": UPD_VERSION, "firmware": fw4,
@@ -4611,7 +4611,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         n_before = len(asked)
         t = check_now()
         # The official feed is told the firmware version and the flash layout
-        # (the site counts checks by them: site/worker/src/counts.ts), and nothing else.
+        # (the site counts checks by them: the site repo's site/worker/src/counts.ts), and nothing else.
         lay = get_json(base + "/api/firmware").get("variant") or ""
         feed = f"https://opendmd.dev/install/release.json?v={urllib.parse.quote(UPD_VERSION, safe='')}&layout={lay}"
         check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == [feed]

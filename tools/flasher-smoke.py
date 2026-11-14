@@ -70,7 +70,7 @@ LAYOUTS = {
 SHOWN = tuple(LAYOUTS)
 # Each layout's partition table: where the offline install's NVS image goes.
 TABLES = {"4mb": REPO / "firmware" / "partitions.csv"}
-# What the offline box's card file holds (flasher/index.html, tools/site.py OFFLINE_FILE).
+# What the offline box's card file holds (flasher/index.html, the site repo's tools/site.py OFFLINE_FILE).
 OFFLINE_FILE = b'{"network":"off"}\n'
 
 

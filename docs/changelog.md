@@ -2,8 +2,8 @@
 
 What's new in each OpenDMD release, newest first. These are the highlights:
 what you'd notice on the panel and in the web app. To get the newest
-version, [update over WiFi](../../docs/guide/updating.md) or use the
-[installer](../../docs/guide/install.md). Betas are early versions of the
+version, [update over WiFi](guide/updating.md) or use the
+[installer](guide/install.md). Betas are early versions of the
 next release, and are marked.
 
 <!--
@@ -58,7 +58,7 @@ Tools for a big library: tags, stars and smart playlists.
 - The display can play from its card with WiFi turned off, and the
   start-up show can be one of your own Formulas.
 - A display on 1.0.0 or 1.0.1 needs one install over USB from the
-  [installer](../../docs/guide/install.md) to move to this version. It
+  [installer](guide/install.md) to move to this version. It
   keeps its WiFi details and settings.
 
 ## 1.0.1 · 2026-11-08

@@ -6,7 +6,7 @@ Every example is one file there, `<slug>.psi`: a header of comment lines
 (`-- author: …`, `-- licence: …`, and `-- bundle` on the ones the firmware
 ships), then the Formula itself, which says its own name, what it is, its
 controls and whether it can be the panel's look (`name "…"`, `about "…"`,
-`control …`, `look`). The site's gallery shows all of them (tools/site.py
+`control …`, `look`). The site's gallery shows all of them (the site repo's tools/site.py
 hands the folder to opendmd-gallery, which reads those lines from the
 compiler); the panel's web app gets only the bundled ones, as
 `[{"stem": …, "src": …}, …]` (the file's stem, which a playlist line or the

@@ -2,16 +2,18 @@
 # requires-python = ">=3.11"
 # dependencies = ["pillow"]
 # ///
-"""Draw the README's header: the wordmark from tools/site-art.py as the
-site shows it, lit LEDs on a black plate with an amber glow.
+"""Draw the README's header: the site's wordmark as the site shows it, lit
+LEDs on a black plate with an amber glow.
 
-    uv run tools/readme-art.py [WORDMARK] [OUT]
+    uv run tools/readme-art.py WORDMARK [OUT]
 
-WORDMARK defaults to target/site-art/wordmark.png, OUT to
-docs/images/wordmark.png. GitHub can't use the site's CSS, so this does in
-pixels what .hero .plate and .led do there.
+WORDMARK is the site's wordmark.png (the site's repository draws it with
+its tools/site-art.py: target/site-art/wordmark.png there, after its make
+site; $SITE_REPO/target/site-art/wordmark.png when SITE_REPO is set and no
+WORDMARK is given), OUT defaults to docs/images/wordmark.png. GitHub can't
+use the site's CSS, so this does in pixels what .hero .plate and .led do there.
 """
-
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +41,10 @@ def led(colour: tuple[int, int, int]) -> Image.Image:
 
 
 def main() -> None:
-    src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target/site-art/wordmark.png"
+    site = os.environ.get("SITE_REPO")
+    if len(sys.argv) < 2 and not site:
+        raise SystemExit("usage: tools/readme-art.py WORDMARK [OUT] (the site's target/site-art/wordmark.png; or SITE_REPO=<the site's checkout>)")
+    src = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(site) / "target/site-art/wordmark.png"
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "docs/images/wordmark.png"
     word = Image.open(src).convert("RGB")
     cols, rows = word.width + 2 * PAD[0], word.height + 2 * PAD[1]

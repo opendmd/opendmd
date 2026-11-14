@@ -39,7 +39,7 @@ FORMULAS = ROOT / "opendmd-web/formulas"
 # Only whole-picture Formulas: none of the looks meant to sit over a GIF.
 RECORD = [
     # The full-screen ones first: the Demoscene playlist opens on them (and
-    # site-smoke's demo checks read the panel's colour while they play).
+    # the site's site-smoke demo checks read the panel's colour while they play).
     ("Tunnel", "Tunnel", "", 75),
     ("Plasma", "Plasma", "", 75),
     ("Rotozoom", "Rotozoom", "", 75),

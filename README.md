@@ -130,8 +130,9 @@ Kottke, a pixel font under the [SIL Open Font License 1.1](opendmd-web/www/fonts
 small subset of it is bundled with the web app and the setup page, so they work without the
 internet, and published with the site. The site's own headings use
 [Fraunces](https://github.com/undercasetype/Fraunces) by the Fraunces Project Authors, also
-under the [SIL Open Font License 1.1](site/fonts/OFL-Fraunces.txt); one cut of it is served
-from the site itself.
+under the [SIL Open Font License 1.1](https://opendmd.dev/fonts/OFL-Fraunces.txt); one cut of
+it is served from the site itself. The site's licences page lists everything else it serves
+([opendmd.dev/licenses/](https://opendmd.dev/licenses/)).
 
 The firmware and the web app are built on other open-source software (ESP-IDF, FreeRTOS,
 lwIP, Mbed TLS and the Rust crates among it), listed with each licence's full text in

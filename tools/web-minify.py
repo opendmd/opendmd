@@ -24,7 +24,7 @@ every top-level name and export keeps its spelling; ids, classes and
 is minified too: its JSDoc is most of it. The build id
 (tools/www-build-id.py) hashes the glue as wasm-pack wrote it, so it still
 changes exactly when the glue does. Not minified: `js/build.js`, one line,
-read by tools/site-worker-test.py by pattern.
+read by the site repo's tools/site-worker-test.py by pattern.
 
 `--no-minify` (`make web WEB_MINIFY=0`) copies the files as they are, for
 reading the app in a browser's debugger on a device or the mock.

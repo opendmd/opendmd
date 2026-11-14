@@ -6,6 +6,7 @@
 
     uv run tools/logo.py            # (make logo) rewrite the files below
     uv run tools/logo.py --favicon  # print the web app's favicon, a data: URL
+    uv run tools/logo.py --create-out DIR   # only Create Art's app icons, into DIR
 
 The mark: "OD" in square pixels, the O in off-white and the D in orange, a
 row of lit LEDs beneath, on near-black. It is rectangles and circles in a
@@ -17,8 +18,9 @@ row of lit LEDs beneath, on near-black. It is rectangles and circles in a
 - docs/images/social-preview.png: 1280x640, the mark beside the wordmark
   (read back from docs/images/wordmark.png, tools/readme-art.py's), for the
   repository's Settings > Social preview.
-- opendmd-web/share/create/icon-192.png, icon-512.png: Create Art's app
-  icons, the mark drawn smaller so that a maskable crop keeps all of it.
+- with --create-out DIR: DIR/icon-192.png, icon-512.png, Create Art's app
+  icons on the site, the mark drawn smaller so that a maskable crop keeps
+  all of it (the site's repository runs it for its share/create/).
 
 The web app's favicon is the two letters alone (the LED row is noise at
 16 px), inlined in opendmd-web/www/index.html as a data: URL: no file, no
@@ -32,7 +34,6 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 IMAGES = ROOT / "docs/images"
-CREATE = ROOT / "opendmd-web/share/create"
 ORANGE, BLACK, INK, UNLIT = "#ffb902", "#0d0e11", "#ecebe7", "#24262b"
 O = ["####", "#..#", "#..#", "#..#", "####"]
 D = ["###.", "#..#", "#..#", "#..#", "###."]
@@ -95,7 +96,7 @@ def save(im: Image.Image, path: Path, colours: int = 0) -> None:
     if colours:
         im = im.convert("RGB").quantize(colours, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
     im.save(path, optimize=True)
-    print(f"{path.relative_to(ROOT)}: {path.stat().st_size} B")
+    print(f"{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: {path.stat().st_size} B")
 
 
 def wordmark() -> list[list[tuple[int, int, int] | None]]:
@@ -144,6 +145,14 @@ def main() -> None:
     if "--favicon" in sys.argv:
         print("data:image/svg+xml," + FAVICON.replace("#", "%23").replace("<", "%3C").replace(">", "%3E"))
         return
+    if "--create-out" in sys.argv:
+        i = sys.argv.index("--create-out")
+        if i + 1 >= len(sys.argv):
+            raise SystemExit("usage: tools/logo.py --create-out DIR")
+        out = Path(sys.argv[i + 1]).resolve()
+        for n in (192, 512):  # the letters inside the maskable safe zone (the middle 80%)
+            save(raster(mark(scale=0.86), n), out / f"icon-{n}.png", colours=24)
+        return
     (IMAGES / "logo.svg").write_text(svg(mark(radius=90)))
     print(f"docs/images/logo.svg: {(IMAGES / 'logo.svg').stat().st_size} B")
     for n in (512, 1024):
@@ -151,8 +160,6 @@ def main() -> None:
     for n in (500, 1024):
         save(raster(mark(), n), IMAGES / f"avatar-{n}.png", colours=32)
     save(social(), IMAGES / "social-preview.png", colours=64)
-    for n in (192, 512):  # the letters inside the maskable safe zone (the middle 80%)
-        save(raster(mark(scale=0.86), n), CREATE / f"icon-{n}.png", colours=24)
 
 
 if __name__ == "__main__":

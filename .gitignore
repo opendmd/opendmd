@@ -24,7 +24,6 @@ opendmd-web/www/pkg/
 opendmd-web/www/pkg-art/
 opendmd-web/www/pkg-psi/
 opendmd-web/www/pkg-psi-lang/
-opendmd-web/www/pkg-studio/
 opendmd-web/www/**/*.gz
 opendmd-web/www/version.txt
 opendmd-web/www/js/build.js
@@ -44,8 +43,8 @@ __pycache__/
 *.pem
 
 # Secrets anywhere in the tree: .env files (firmware/.env's bench WiFi and
-# any other), wrangler's local secrets (site/worker/.dev.vars). The examples
-# (names, no values) stay committed.
+# any other), wrangler's local secrets (.dev.vars). The examples (names, no
+# values) stay committed.
 .env
 .env.*
 !.env.example

@@ -287,7 +287,7 @@ fn the_examples_pass() {
         let e = check_file_as(slug, &std::fs::read(p).unwrap(), true)
             .unwrap_or_else(|ps| panic!("{slug}: {ps:?}"));
         assert_eq!(e.author, "OpenDMD");
-        // Its thumbnail is lit (as site-smoke checks the gallery page: some
+        // Its thumbnail is lit (as the site's site-smoke checks the gallery page: some
         // pixel's r + g + b over 90); one that draws over a GIF is drawn
         // over the sample picture, not black.
         let prog = compile(&e.src).unwrap();

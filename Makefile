@@ -6,7 +6,6 @@ RENDER := opendmd-render
 SIM    := opendmd-sim
 WEB    := opendmd-web
 ART    := opendmd-art-web
-STUDIO := opendmd-studio-web
 PACK   := opendmd-pack
 PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
@@ -181,25 +180,18 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	site site-serve gallery-repo-publish site-smoke gallery-tool \
-	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release studio-starter
+	gallery-tool release
 
-# The Studio starter pack (studio-starter/README.md): check every record in
-# studio-starter/src/ and write studio-starter/starter.dmdpack.
-# make studio-starter ARGS="--sheets <dir>" also draws the contact sheet;
-# ARGS=--check only verifies that the committed pack is current.
-studio-starter:
-	uv run studio-starter/build.py $(ARGS)
-
-# No request URL the web app or the site makes may match EasyPrivacy or EasyList
-# (uBlock Origin / Brave blocked /api/stat?). Fetches the lists once a day into
+# No request URL the web app makes may match EasyPrivacy or EasyList (uBlock
+# Origin / Brave blocked /api/stat?). Fetches the lists once a day into
 # target/blocklists/ and works offline from that cache (BLOCKLIST_ARGS=--offline);
-# not part of `make test`, which needs no network.
+# not part of `make test`, which needs no network. The site's routes and pages
+# are checked by the site's own repository (it passes --site-root).
 blocklist-check:
 	uv run tools/blocklist-check.py $(BLOCKLIST_ARGS)
 
@@ -223,8 +215,6 @@ test:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
-	@echo "==> Testing $(STUDIO) (the site's Studio: its GIF writers)"
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
@@ -242,16 +232,12 @@ test:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEBMIN) (make web's minifier)"
 	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo test
-	tools/gallery-repo-publish-test.sh
-	uv run tools/gallery-check-test.py
-	uv run tools/gallery-pages-test.py
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
@@ -324,8 +310,6 @@ check-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(ART) for $(WASM_TARGET)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
-	@echo "==> Checking $(STUDIO) for $(WASM_TARGET)"
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features psi
@@ -340,9 +324,10 @@ check-wasm:
 # so they are not packed. The Studio's own wasm (opendmd-art-web, "Make
 # art") goes to www/pkg-art, loaded only when the Studio opens; the Formulas'
 # (opendmd-psi-web: Psi, no std, its own allocator) to www/pkg-psi, loaded
-# only when the Library's Formulas tab opens; the site's Studio's GIF writers
-# (opendmd-studio-web) to www/pkg-studio, site-only like pkg-psi-lang (the
-# packer leaves both out: opendmd-pack www.rs SITE_ONLY). The budgets
+# only when the Library's Formulas tab opens; the site's language service to
+# www/pkg-psi-lang, site-only (the packer leaves it out: opendmd-pack www.rs
+# SITE_ONLY; the site's own wasm, the Studio's, is built and laid over the
+# web app by the site's repository). The budgets
 # (gzipped) are enforced by tools/web-size.py; the packer refuses a pack over
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
@@ -355,7 +340,7 @@ check-wasm:
 # web app's (licenses/, `make notices`), served as text from the pack:
 # Settings -> Device -> About links it. www/js/build.js (gitignored) is
 # the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/, pkg-psi/
-# and the site's pkg-psi-lang/ and pkg-studio/) that js/wasm.js puts on every wasm module's address, so a
+# and the site's pkg-psi-lang/) that js/wasm.js puts on every wasm module's address, so a
 # browser never runs an earlier build's module (opendmd-notes docs/notes/web-app.md
 # "Module addresses").
 #
@@ -364,29 +349,35 @@ check-wasm:
 # (tools/web-minify.py running opendmd-webmin: oxc for JS, lightningcss for
 # CSS, pinned in its Cargo.lock), so the sources keep their comments. The
 # .gz files, the pack, the size lines, the mock (web-mock, web-smoke) and
-# the site's /demo/ all read $(WEB_DIST). WEB_MINIFY=0 stages the files as
+# the site's /demo/ (the site's repository) read $(WEB_DIST). WEB_MINIFY=0 stages the files as
 # they are, for a debugger (the size lines are then printed, not enforced):
 # opendmd-notes docs/notes/web-app.md "Minified build".
 WEB_WWW := $(WEB)/www
 WEB_DIST := $(WEB)/www-dist
 WEB_MINIFY ?= 1
+# The wasm keeps no machine's paths (its panic locations name source files):
+# this tree is /opendmd, the cargo registry /cargo, the toolchain's std
+# sources /rustup, so the modules are the same bytes from any checkout and
+# carry no home directory.
+WASM_RUSTFLAGS = --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(or $(CARGO_HOME),$(HOME)/.cargo)=/cargo \
+	--remap-path-prefix=$(or $(RUSTUP_HOME),$(HOME)/.rustup)=/rustup
+WASM_PACK = RUSTUP_TOOLCHAIN=stable RUSTFLAGS="$(WASM_RUSTFLAGS)" wasm-pack
 webmin:
 	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked --quiet
 web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
-	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
-	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
-	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
+	cd $(WEB) && $(WASM_PACK) build --target web --release --out-dir www/pkg
+	cd $(ART) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
+	cd $(PSIWEB) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
 	@# The site's language service (What costs most, Tidy up: js/fcost.js): the same crate with only observe() and
 	@# format() (`lang`), never packed (opendmd-pack www.rs SITE_ONLY).
-	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi-lang -- --features bare,bump,lang
-	@# The site's Studio's GIF writers (opendmd.dev/studio/, opendmd-studio-web), never packed (opendmd-pack www.rs SITE_ONLY).
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-studio
+	cd $(PSIWEB) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi-lang -- --features bare,bump,lang
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi-lang/package.json $(WEB_WWW)/pkg-psi-lang/*.d.ts $(WEB_WWW)/pkg-psi-lang/README.md $(WEB_WWW)/pkg-psi-lang/.gitignore
-	rm -f $(WEB_WWW)/pkg-studio/package.json $(WEB_WWW)/pkg-studio/*.d.ts $(WEB_WWW)/pkg-studio/README.md $(WEB_WWW)/pkg-studio/.gitignore
-	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the five folders.
+	@# pkg-studio/ (the site's Studio wasm) is built by the site's repository now: an old checkout's copy goes.
+	rm -rf $(WEB_WWW)/pkg-studio
+	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the four folders.
 	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
 	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json
@@ -401,7 +392,7 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified,--webmin $(WEBMIN)/target/release/opendmd-webmin)
+	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) $(if $(filter 0,$(WEB_MINIFY)),--unminified)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -410,17 +401,6 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 # change the subset; `make web` uses the committed files.
 font:
 	uv run tools/font-subset.py
-
-# The site's own pieces, committed like the font: its heading face (Fraunces,
-# OFL 1.1, from google/fonts at a pinned commit: site/fonts/) and the home
-# page's scenes (original pixel art drawn by the scripts: site/theme/den*.webp,
-# everyone's and the ones a viewer can ask for: site/theme/SCENES.md).
-# Only needed to change them; `make site` uses the committed files.
-site-font:
-	uv run tools/site-font.py
-site-scene:
-	uv run tools/site-scene-alt.py
-	uv run tools/site-scene.py
 
 # The OpenDMD mark and what is made from it (tools/logo.py): docs/images/
 # logo.*, avatar-*, social-preview.png and Create Art's app icons, all
@@ -491,142 +471,28 @@ screenshots: web sim-build
 	$(if $(GAME_ART),uv run tools/game-art.py --card target/demo-card --out target/game-art)
 	uv run tools/screenshots.py --card target/demo-card --out docs/images $(if $(GAME_ART),--game-art target/game-art)
 
-# The public site (https://opendmd.dev/): the README, the docs, and the web app
-# with a demo card of the panel's own effects and CC0 sprites (tools/site.py,
-# tools/demo-card.py, and tools/site-art.py for the site's own animations).
-# site-serve to look at it; site-deploy (below) puts it on opendmd.dev. The
-# formula gallery (formulas/) is the web app's examples plus the
-# contributions in the public gallery repo's gallery/: GALLERY=<a checkout's
-# gallery/> (release.yml fetches it; without it, the examples only). Each
-# file is checked again by opendmd-gallery (make gallery-tool) before it is
-# published.
-SITE ?= target/site
-GALLERY ?=
-# The public gallery repo's dev/api/ (the HTTP API page as each earlier release
-# described it; release.yml fetches it): API_ARCHIVE=<a checkout's dev/api/>.
-# This release's own copy is frozen when API_FREEZE says so: auto (only
-# when `git describe --match 'v*'` is exactly v<version>), yes (release.yml
-# for a tag), no.
-API_ARCHIVE ?=
-API_FREEZE ?= auto
+# The formula gallery's checker (opendmd-gallery), built for the site: the
+# site's repository (opendmd-site, private; it pins this
+# one) runs it over the gallery's contributions, with the simulator
+# (sim-build, the demo card's recordings) and the minifier (webmin), and
+# builds the site from this tree's docs, web app, formulas and fonts.
 GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
-# The public gallery repo (gallery/ takes contributions by pull request; the
-# name is from its GitHub Pages days, it serves nothing now).
-GALLERY_REPO ?= git@github.com:opendmd/opendmd.github.io.git
-# The installer under install/ publishes whatever release dist/ holds; site
-# does not build one (fw-release needs the xtensa toolchain). DIST is the
-# release install/release.json and the Install button name (the newest
-# final; before the first final, the newest beta); BETA_DIST=<a dist> a
-# beta newer than it (a beta after a final: tools/release.sh fetches the
-# final's files for DIST), which install/beta.json then names. Without it
-# beta.json is release.json (docs/deploying.md "Betas").
-BETA_DIST ?=
 gallery-tool:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked
 
-site: web sim-build gallery-tool
-	@test -f $(DIST)/manifest-4mb.json || { echo "no $(DIST)/manifest-4mb.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
-	uv run tools/demo-card.py target/demo-card
-	uv run tools/site-art.py target/site-art
-	@test -z "$(BETA_DIST)" || test -f $(BETA_DIST)/manifest-4mb.json || { echo "no $(BETA_DIST)/manifest-4mb.json (BETA_DIST)"; exit 2; }
-	uv run tools/site.py $(SITE) --www $(WEB_DIST) --card target/demo-card --art target/site-art --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) \
-		--gallery-tool $(GALLERY_TOOL) $(if $(filter 0,$(WEB_MINIFY)),,--webmin $(WEBMIN)/target/release/opendmd-webmin) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
-		--api-freeze $(API_FREEZE)
-
-# The site's pages in Chromium (the formula page, the gallery, the API pages and
-# the install page), after make site.
-site-smoke:
-	uv run tools/site-smoke.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) --art target/site-art $(if $(SITE_BASE),--base $(SITE_BASE))
-
-site-serve: site
-	uv run python -m http.server 8081 -d $(SITE)
-
-# The site on Cloudflare (opendmd-notes docs/research/site-cloudflare.md): the opendmd-site
-# Worker in site/worker/ (cf's cloudflare.config.ts + wrangler.config.ts; cf
-# and wrangler pinned in its package.json/package-lock.json, installed by
-# site-worker-deps) serves $(SITE) as static assets plus /f/* and /api/*.
-# None of these rebuilds the site except site-deploy; make site first.
-#   site-dev           cf dev, the Worker and the assets on http://127.0.0.1:$(SITE_DEV_PORT), with
-#                      a local D1 (site/worker/.wrangler/state; the migrations applied first)
-#   site-worker-test   tools/site-worker-test.py: starts cf dev itself (or SITE_BASE=<url>),
-#                      checks the Worker's routes, short links, _headers, _redirects and the CSP in Chromium
-#   site-d1-migrate    cf d1 migrations apply: site/worker/migrations/ to the opendmd-site D1
-#                      (remote; site-deploy-built runs it before every deploy)
-#   site-stats         the usage counts (/stats) in the terminal: SELECTs only, through
-#                      cf d1 query on the opendmd-site D1 (remote, read-only; tools/site-stats.py)
-#   site-dev-smoke     site-worker-test, then site-smoke against the same cf dev
-#   site-deploy-check  cf deploy --dry-run: builds and checks, uploads nothing
-#   site-deploy        make site, then site-d1-migrate and cf deploy: uploads a new version of the
-#                      opendmd-site Worker and makes it live on opendmd.dev (auth:
-#                      cf's OAuth profile, or CLOUDFLARE_API_TOKEN in the environment)
-#   site-deploy-built  the same without rebuilding $(SITE); then POST /api/gallery/sync, so the
-#                      gallery store (S6) holds this build's examples at once
-# The Worker's cron syncs the public gallery repo's gallery/ into the store every 5 minutes
-# (site/worker/src/gallery.ts): a merged contribution needs no deploy.
-# site-smoke takes SITE_BASE=<url> too (the files it reads are still $(SITE)).
-SITE_WORKER := site/worker
-SITE_DEV_PORT ?= 8787
-SITE_BASE ?=
-CF = cd $(SITE_WORKER) && SITE_DIR="$(abspath $(SITE))" SITE_DEV_PORT=$(SITE_DEV_PORT) \
-	SITE_VERSION="$$(git describe --always --dirty --tags --match 'v*')" npx --no-install cf
-# The DB binding's database (cloudflare.config.ts, the one place its id is written).
-SITE_D1 = $(shell sed -n 's/.*DB: {.* id: "\([0-9a-f-]*\)".*/\1/p' $(SITE_WORKER)/cloudflare.config.ts)
-$(SITE_WORKER)/node_modules/.package-lock.json: $(SITE_WORKER)/package-lock.json $(SITE_WORKER)/package.json
-	cd $(SITE_WORKER) && npm ci --no-audit --no-fund
-site-worker-deps: $(SITE_WORKER)/node_modules/.package-lock.json
-
-site-dev: site-worker-deps
-	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
-	$(CF) d1 migrations apply $(SITE_D1) --local --persist-to .wrangler/state </dev/null
-	$(CF) dev
-
-site-d1-migrate: site-worker-deps
-	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
-	$(CF) d1 migrations apply $(SITE_D1) </dev/null
-
-site-stats: site-worker-deps
-	uv run tools/site-stats.py
-
-site-worker-test: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE))
-
-site-dev-smoke: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
-
-site-deploy-check: site-worker-deps
-	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
-	$(CF) deploy --dry-run
-
-# Refuses a dirty tree (the version says what is live).
-# site-deploy-built deploys $(SITE) as it is (release.yml and site.yml, after
-# their own make site).
-site-deploy: site
-	$(MAKE) site-deploy-built
-site-deploy-built: site-worker-deps
-	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
-	@case "$$(git describe --always --dirty --tags --match 'v*')" in *-dirty) echo "refusing: the working tree is dirty; commit first"; exit 1;; esac
-	$(MAKE) site-d1-migrate
-	unset SITE_TEST_GALLERY_SOURCE SITE_TEST_RELAY_UPSTREAM; $(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
-	@# The gallery store: this build's examples and the public repo's gallery/ now, not at the next cron.
-	@curl -fsS -X POST -A 'opendmd-site-deploy/1 (+https://opendmd.dev)' --retry 3 --retry-delay 11 --retry-all-errors \
-		https://opendmd.dev/api/gallery/sync -o /dev/null -w 'gallery sync: %{http_code}\n' || echo "gallery sync: not now (the cron runs it within 5 minutes)"
-
-# The public gallery repo's own files (tools/gallery-repo-publish.sh): the
-# gallery check and its vendored checker, the READMEs, and dev/api/ (this
-# release's frozen API page, from $(SITE), added to the archive). release.yml
-# runs it for a tag; by hand only by the maintainer.
-gallery-repo-publish: site
-	tools/gallery-repo-publish.sh $(SITE) $(GALLERY_REPO)
-
 # A release (tools/release.sh; docs/deploying.md "Releasing"). make release
 # VERSION=1.0.1 is a dry run: plan, bump (a detached commit + local tag,
-# undone after), build signed with the real key, every check, the assets and
-# the site; nothing pushed. PUBLISH=1 then pushes main and the tag, and
-# .github/workflows/release.yml publishes (the GitHub release, the gallery
-# repo, the Cloudflare deploy); it waits for that run and checks the result.
-# PUBLISH=local is the fallback while CI is down: it publishes everything
-# from here (and refuses once CI has run for the tag). RESUME=1 with either
-# continues one that stopped part way.
+# undone after), build signed with the real key, every check and the assets;
+# nothing pushed. PUBLISH=1 then pushes main and the tag, and
+# .github/workflows/release.yml publishes the GitHub release; it waits for
+# that run and checks the result. PUBLISH=local is the fallback while CI is
+# down: it publishes the release from here (and refuses once CI has run for
+# the tag). RESUME=1 with either continues one that stopped part way. With
+# SITE_REPO (in local.mk: a checkout of the site's repository), the dry run
+# also builds and checks the site against this release, and a publish then
+# moves the site's pin to the tag and deploys it (docs/deploying.md "The site").
+SITE_REPO ?=
+export SITE_REPO
 release:
 	@test -n "$(VERSION)" || { echo "make release VERSION=X.Y.Z[-beta.N] [PUBLISH=1|PUBLISH=local [RESUME=1]]"; exit 2; }
 	tools/release.sh $(VERSION) $(if $(filter local,$(PUBLISH)),--publish-local,$(if $(PUBLISH),--publish)) $(if $(RESUME),--resume)
@@ -637,7 +503,6 @@ fmt:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -658,9 +523,6 @@ clippy:
 	@echo "==> Clippy $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
-	@echo "==> Clippy $(STUDIO)"
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(PSI) (+ core's and the simulator's psi feature)"
@@ -687,14 +549,13 @@ clean:
 	cd $(SIM) && cargo clean
 	cd $(WEB) && cargo clean
 	cd $(ART) && cargo clean
-	cd $(STUDIO) && cargo clean
 	cd $(PACK) && cargo clean
 	cd $(PSI) && cargo clean
 	cd $(PSIWEB) && cargo clean
 	cd $(GAL) && cargo clean
 	cd $(WEBMIN) && cargo clean
 	cd $(PSICLI) && cargo clean
-	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB)/www/pkg-psi-lang $(WEB)/www/pkg-studio $(WEB_DIST) $(WWW_PACK) ./target
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB)/www/pkg-psi-lang $(WEB_DIST) $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

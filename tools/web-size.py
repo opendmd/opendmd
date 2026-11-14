@@ -85,17 +85,13 @@ formula inside another, drawn at other places: the compiler's scopes,
 re-reading and messages, ~+3 KB): the spike's 24.7 KB measured a module that never read an error
 message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
-The Formula page on the site (`--share opendmd-web/share`: `f/`'s page,
-script and style, gzipped here since `make web` does not compress them;
-never packed) has a line of its own, <= 8 KB (Create Art's page, `create/`,
-another, <= 5 KB, on the Studio's lines; the Studio's own page, `studio/`,
-the site's pixel editor, another, <= 32 KB, and what it loads later, <= 5 KB); it is the web app's editor on
-the demo's files (the main wasm, js/formulas.js and its imports, pkg-psi,
-app.css and formulas.css), which are counted in their own lines and printed
-as the page's first-visit total for information. js/psikit.js (where a
+The site's own pages (its Formula page, Create Art's, the Studio, the Psi
+reference's scripts, the desk demo) and its own wasm (pkg-studio/) have
+lines of their own in the site's repository (tools/site-size.py there; they
+left this file at the split, 2026-11-14). js/psikit.js (where a
 link says a Formula comes from, the highlighting) counts with the Formulas
-line; Submit to the gallery (`js/fsubmit.js`, the editor's and the page's
-form) has a line of its own, <= 4 KB. Their "Show
+line; Submit to the gallery (`js/fsubmit.js`, the editor's and the site's
+Formula page's form) has a line of its own, <= 4 KB. Their "Show
 on panel" (`js/psishow.js`: the formula's path, the throttled live edits
 and their errors; imported with the view on a device only) has a line of
 its own, <= 2 KB. Any Formula as the panel's look (`js/looks.js`: the
@@ -110,16 +106,7 @@ The Formulas editor's names at the caret and its cheat sheet
 (`js/fhint.js`, imported at the editor's first key) have a line of their
 own, <= 7 KB.
 The Formulas editor's error codes (`js/psierr.js`, imported at a formula's
-first error) have a line of their own, <= 4 KB, and so does the site's Psi
-language reference script (`--share`'s `ref/psiref.js` with the drawing it
-shares, `ref/psiled.js`, outside the share line), <= 6 KB; the home page's
-live panels (`ref/home.js`) and the gallery's tiles on hover
-(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB; the hero's
-show (`ref/hero.js`: the panel's transitions, a GIF decoder and the
-playlist; imported by home.js after the page has loaded) a line of its
-own, <= 5 KB, and so do the web app's LEDs over the home page's
-screenshots (`ref/leds.js`), <= 2 KB; the gallery's
-sorting and filtering (`ref/ftsort.js`) a line of its own, <= 3 KB.
+first error) have a line of their own, <= 4 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
@@ -137,7 +124,7 @@ its own, never part of a page load) have a line of their own, <= 40 KB:
 they cost flash, not load time, and grow with the dependencies.
 The name index for "Find art
 for a game" is not packed (until 2026-10-26 it was `art/*.json`, ~527 KB
-gz, half the pack): the site publishes it (tools/site.py, `art-index/`)
+gz, half the pack): the site publishes it (the site repo's tools/site.py, `art-index/`)
 and find.js fetches it from there. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -408,138 +395,6 @@ LOCATION = {"js/location.js"}
 # it first opens (the site's page: once the editor is up). ~3.0 KB gz.
 FSUBMIT_GZ_BUDGET = 4 * 1024
 FSUBMIT = {"js/fsubmit.js"}
-# 8 KB since f-editor (2026-10-30): the page is the web app's editor
-# (formulas.js, counted in its own line), with no QR code, no preview of its
-# own, no short links and the Submit form in js/fsubmit.js: ~6.0 KB. It was
-# 14 (Add to my panel), 13 (short links), 12.
-SHARE_GZ_BUDGET = 8 * 1024
-# What the formula page loads from the demo (its own files aside).
-SHARE_USES = ("pkg/", "pkg-psi/", "js/fcost.js", "js/wasm.js", "js/web.js", "js/build.js", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
-              "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
-# Create Art's page on the site (`--share`'s create/: its page, script and
-# style; never packed): a line of its own, <= 5 KB (2026-11-02, branch
-# create-art: ~2.7 KB for C1, ~3.8 KB with Send to my panel). It is the web app's Studio on the demo's files (js/studio.js,
-# js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
-# printed as the page's first-visit total for information.
-# 8 KB since byo-gif (2026-11-04): the relay's refusals in plain words, ?url=, a page's address, the
-# search links and the bookmarklet under Your own, the pick-up of a shared
-# file, and the share target's manifest and service worker (sw.js, fetched
-# when the page registers it): 7,457 B gz. The app icons (PNG, fetched only when
-# the page is installed) are printed, not counted.
-# 12 KB since S2 branch 4 (2026-11-11, studio-s2-import; the owner: the site's
-# limits are growth alarms, the display's are the real ones): the framed mode
-# the Studio's Import sheet runs it in (one action, Use in the Studio, and the
-# message to the Studio), the GIF read back into frames (gifread.js, loaded
-# at Use), "Start at" for a long video, and the cutover's hand-off into the
-# Studio behind its switch: ~12.4 KB gz as written (gifread.js 2.3 of it).
-CREATE_GZ_BUDGET = 14 * 1024
-# Create Art's video reader (`create/video.js`: an MP4 or WebM played into
-# frames for the Studio; site-only, imported only when a video arrives): a
-# line of its own, <= 3 KB (2026-11-04, branch byo-gif: ~1.5 KB gz).
-VIDEO_GZ_BUDGET = 3 * 1024
-VIDEO_JS = "video.js"
-CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
-               "js/gifs.js", "js/details.js", "js/prepare.js", "app.css", "studio.css", "find.css", "fonts/silkscreen.woff2")
-# The Studio's page on the site (`--share`'s studio/: the pixel editor, its
-# page, script, style, the record store and the starter palettes; site-only,
-# never packed): a line of its own, <= 20 KB (2026-11-11, branch studio-s0:
-# the S0 spike, 17.4 KB gz as written here, comments and all; the site serves
-# it minified). Its GIF writer was the demo's pkg-art until S2 (now
-# pkg-studio, the studio wasm line below), fetched at the first download,
-# not with the page.
-# 32 KB since S1 (2026-11-11, branch studio-s1, under the budget authority:
-# ~30.2 KB gz as written): the line, rectangle, ellipse, dither, selection
-# and picker tools with their live previews (tools.js), brushes, the piece's
-# own colours with two-byte keys, the undo journal kept across reloads,
-# snapshots, the tab-safe store version, pinch zoom. What can wait is a line
-# of its own below; the site serves both minified (about half this).
-# 40 KB since S2 (2026-11-11, branch studio-s2-doc, under the budget
-# authority, as the S2 plan has it): first paint is only what a one-layer
-# still needs plus the model that opens and shows any piece (doc.js: cels by
-# layer and frame, the composite, the colour keys, the undo steps), the
-# seven files of STUDIO_FIRST; the GIF went out to out.js.
-# 42 KB since S2 branch 2 (2026-11-11, studio-s2-frames, under the budget
-# authority the coordinator passed on): the first-paint wiring for frames and
-# layers (doc.js applying and undoing structure steps, which a journal can
-# replay before frames.js is in; the strip's one cell and "+", the Layers
-# section, the phone's tabs, Send to panel's button, the kind line) at
-# 42,827 B gz as written (after the review round: mid-stroke guards, the
-# phone layout, the keys behind a sheet). The frames code itself is lazy (frames.js).
-# 48 KB since S2 branch 3 (2026-11-11, studio-s2-library; the owner: the
-# site's limits matter less than the display's, so these lines are growth
-# alarms): the wiring for the Library, files and stamps (the Library
-# button and #library view, the Stamp tool and Save as stamp, the Stamps
-# section and its phone tab, This piece's Save as file / Open a file and
-# what it was made from), check() reading stamps, fonts, templates and
-# packs, the starter pack's every record: ~45.3 KB gz as written.
-# 50 KB since S2 branch 4 (2026-11-11, studio-s2-import, the same authority):
-# the Import… button and #import route, the paste event (an image to
-# paste.js, an address to Import, else the Studio's own copy), Copy's PNG on
-# the system clipboard, drops routed (Studio files to files.js, pictures and
-# videos to Import), a whole body as one step for an import's layer:
-# ~47.6 KB gz as written.
-# 52 KB since studio-share (2026-11-12, the coordinator's OK, site-only): the
-# one notice pinned in view (say/offer: under its control or at the top, in
-# the open sheet, Escape and Dismiss, two live regions, focus back):
-# ~50.4 KB gz as written.
-# 54 KB since studio-float F0 (2026-11-13, the owner's OK, site-only): the one-screen
-# workspace from 1000 x 620 up (FLOAT.md: the tools a column, the bench a scrolling column, the
-# frames under the stage, zoom and the guides in the chin, the bench's width set so Fit lands on
-# a whole step) and Space pressing a focused button rather than playing: ~52.9 KB gz as written.
-STUDIO_PAGE_GZ_BUDGET = 54 * 1024
-STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
-# What the Studio's page imports only when it is first used: a line each
-# (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
-# studio/ is first paint or on one of these lines; one on neither fails the
-# build, so nothing joins the page uncounted. A line whose files are not
-# written yet prints as such and passes. colour.js (the picker, the palette
-# tools, the Lospec import) was the one lazy line, 5 KB, in S1 (~3.8 KB gz).
-# The starter pack the page fetches once it is up
-# (studio-starter/starter.dmdpack, copied beside it by tools/site.py) is
-# content, not code, and counts against none of them.
-STUDIO_LAZY = {
-    "colour": (6 * 1024, ("colour.js",)),        # New colour…, Palettes…
-    "frames": (7 * 1024, ("frames.js", "frames.css")),  # more than one frame or layer, Add frame, Add layer, Play
-    "out": (5 * 1024, ("out.js",)),              # Download, Send to panel, Share: flatten, the GIF table
-    # files 10 KB (was 5, then 8; branch 3 and its reviews): every foreign record checked and hashed, packs walked for
-    # cycles, the merge shown before anything is stored, backups split to open, copies found across the files of one opening.
-    "files": (10 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
-    "library": (10 * 1024, ("library.js", "library.css")),  # Library (10 KB, was 8: branch 3's detail, duplicate, templates)
-    "stamps": (5 * 1024, ("stamps.js",)),        # the Stamp tool, Save as stamp (5 KB, was 4: the ghost and the two sets)
-    # link 6 KB (4 in the plan; branch 5, ~5.2 KB): the #p= reader checks every byte against what came before it, the preview plays.
-    "link": (6 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
-    # paste 3 KB (was 2): a picture's size read from its first bytes (PNG, GIF, JPEG, WebP, BMP) before it is decoded.
-    "paste": (3 * 1024, ("paste.js",)),          # a paste that carries an image
-    # import 6 KB (3 in the plan; branch 4, ~4.9 KB): the sheet and its frame, every message checked, frames to a piece or a layer.
-    "import": (6 * 1024, ("import.js",)),        # Import…, a picture or video dropped, a paste too big to place, #import
-    # panels 10 KB (studio-float F1, 2026-11-13; ~4 in FLOAT.md before the owner added resizing and hide-all): the
-    # workspace's panels, docked or floating, dragged, moved by keys, resized, folded, closed, hidden all at once, kept.
-    # 11 KB since studio-dark (2026-11-13, site-only, ~10.5 KB): the row of panels under the canvas, a third dock (its room
-    # worked out from the window, kept through a drag, its place in the menus).
-    "panels": (11 * 1024, ("panels.js", "panels.css")),  # a window of the workspace's size (1000 x 620 or more)
-}
-# Everything Import's frame fetches the first time it opens (S2 plan,
-# 2026-11-11, branch studio-s2-import): Create Art's page in its framed mode
-# and the demo's files it runs on (the main wasm, pkg-art, the Make art
-# editor and its styles), and the Studio's import.js. ~303 KB gz on the built
-# site when planned; counted here as written for the page's own files.
-IMPORT_OPEN_GZ_BUDGET = 330 * 1024
-# First paint and every lazy line together. 92 KB since S2 branch 4 (was 84;
-# import.js and paste.js, as their lines).
-# 96 KB since S2 branch 5 (studio-s2-links: link.js, the pack's Share link, ~92.7 KB).
-# 98 KB since studio-share (2026-11-12, the notice above, ~96.2 KB).
-# 110 KB since studio-float (2026-11-13, the owner's OK for 104 with "raise to what resizing and hide-all
-# need"): the workspace (F0) and the panels line (F1).
-STUDIO_ALL_GZ_BUDGET = 110 * 1024
-STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
-# The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
-# indexed, wide and fitted encoders over the gif crate; site-only, left out
-# of the pack by opendmd-pack www.rs SITE_ONLY): a line of its own, <= 32 KB
-# (2026-11-11, branch studio-encoders, under the budget authority: 29,253 B
-# gz; 40 KB at first, lowered in studio-enc-tidy). They were in pkg-art
-# (S1), which also ships in the device's www pack and had ~0.5 KB of its
-# 150 KB left; moved out, pkg-art is at 147,638 B gz, 2.4 KB under it.
-STUDIO_WASM_GZ_BUDGET = 32 * 1024
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's display (js/demo.js: a simulated player, its panel, the
@@ -555,38 +410,6 @@ LICENCES = {"licenses.txt"}
 # resolved from formulas.json, as the player has the bundled ones built in.
 DEMO_GZ_BUDGET = 12 * 1024
 DEMO = {"js/demo.js"}
-# The demo's desk scene (`--share`'s desk/: the page at /demo/, the web app
-# beside it in a frame; site-only, never in the web app or its pack: a file
-# of it under the web app's root fails the build). Measured minified as the
-# site serves them when `--webmin` is given (make web), else as written and
-# not enforced. 2026-11-14, branch desk-scene (owner-approved: the HD-2D
-# scene with the flat one as its fallback; "170 to 200 KB" over the flat
-# page accepted for the 3D path):
-# - the page and the flat scene (first paint for everyone; all a phone, reduced
-#   motion or a machine without a fast WebGL2 ever loads): <= 16 KB gz;
-# - its backdrop (room/*.webp, lossless art): <= 16 KB;
-# - the flat scene's drawing of the display's back (flat-back.js), fetched when
-#   the page is idle or at the first turn, off the first paint: <= 4 KB;
-# - the loader (desk.js: the page's state, its controls and the choice of
-#   scene) <= 5 KB of that, and the old-address forwarder (go.js) <= 512 B;
-# - the 3D scene, fetched after first paint only when 3D is chosen: three.js
-#   0.186.1 vendored (hd/three.js, ~143 KB gz: the renderer pulls in every
-#   built-in material's shader) and the scene's own code, <= 164 KB gz
-#   together (~156 KB as built); its atlas <= 6 KB; each poster still (one is
-#   fetched with the page, as the scene's background) <= 20 KB.
-DESK_PAGE_FILES = ("index.html", "desk.css", "desk.js", "parts.js", "go.js", "flat.js")
-DESK_LINES = {  # name -> (budget, files, gzipped?)
-    "desk page": (16 * 1024, DESK_PAGE_FILES, True),
-    "desk room": (16 * 1024, ("room/wall.webp", "room/desk.webp", "room/near.webp"), False),
-    "desk load": (5 * 1024, ("desk.js",), True),
-    "desk back": (4 * 1024, ("flat-back.js",), True),
-    "desk go": (512, ("go.js",), True),
-    "desk 3d": (164 * 1024, ("hd/three.js", "hd/scene.js", "hd/back.js", "hd/atlas.js"), True),
-    "desk atlas": (6 * 1024, ("hd/atlas.webp",), False),
-    "desk day": (20 * 1024, ("hd/poster-day.webp",), False),
-    "desk night": (20 * 1024, ("hd/poster-night.webp",), False),
-}
-DESK_VENDORED = ("hd/three.js",)
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),
 # never by the first page; the tree's and the editor's stylesheet with them.
@@ -680,81 +503,11 @@ FSPRITE = {"js/fsprite.js"}
 # with 1 B left.
 FIMPORT_GZ_BUDGET = 11 * 1024
 FIMPORT = {"js/fimport.js"}
-# The site's Psi pages' script (`--share`'s ref/psiref.js, copied to the
-# site's root and loaded by the reference, its error codes and the guide's
-# Psi pages: the live examples, highlighting, the name index, search and the
-# cheat sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
-# ref-ergo: ~4.1 KB gz; branch psi-machinery, every page's ```psi blocks,
-# row ids and the index, the old #E addresses sent on: unchanged budget),
-# apart from /f/'s share line, which it never loads with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
-# own lines, loaded only when the first example scrolls near. 7 KB from
-# psi-site (2026-11-08): measured unminified with psiled.js, ~6.1 KB; the
-# minified /psiref.js served is ~2.8 KB gz.
-PSIREF_GZ_BUDGET = 7 * 1024
-# The site's other live Formulas, on the same psiled.js: the home page's
-# panels (ref/home.js) and the gallery's tiles on hover (ref/ftiles.js),
-# a line each with psiled.js, <= 4 KB (2026-10-30: ~3.1 KB gz each).
-LIVE_REF = {"home.js": "home", "ftiles.js": "gallery"}
-LIVE_REF_GZ_BUDGET = 4 * 1024
-SHARED_REF = "psiled.js"
-# The gallery's sorting and filtering (ref/ftsort.js, beside ftiles.js; no
-# Psi): a line of its own, <= 3 KB (2026-11-02, branch gallery-sort: ~2.3 KB gz).
-FTSORT = "ftsort.js"
-FTSORT_GZ_BUDGET = 3 * 1024
-# The home page's hero show (ref/hero.js, beside home.js, which imports it
-# after the page has loaded; on psiled.js, counted with home.js): the
-# panel's transitions (opendmd-core compositor.rs), a GIF decoder for the
-# site's own art and the little playlist. A line of its own, <= 5 KB
-# (2026-11-04, branch site-demo: ~4.6 KB gz, about half of it the
-# transitions and the GIF decoder; it loads after the page has).
-HERO = "hero.js"
-HERO_GZ_BUDGET = 5 * 1024
-# The web app's LEDs over the home page's screenshots whose panel plays
-# (ref/leds.js, imported by home.js as the first nears the screen): a line
-# of its own, <= 2 KB (2026-11-13, branch road-wording: ~1.2 KB gz).
-LEDS = "leds.js"
-LEDS_GZ_BUDGET = 2 * 1024
 
 
 # The signature trailer `fw-sign.py sign-www` appends (docs/www-pack.md).
 WWW_SIGNATURE_BYTES = 72
 
-
-def q_ref(p: Path, share: Path) -> bool:
-    """A file of the Psi reference's script (share/ref/), not /f/'s."""
-    return p.relative_to(share).parts[0] == "ref"
-
-
-def desk_lines(desk: Path, webmin: str | None, unminified: bool) -> bool:
-    """The desk scene's lines (DESK_LINES): every file of share/desk/ on one, measured minified
-    when `webmin` is given (as the site serves them), else printed only."""
-    import gzip
-    import shutil
-    import subprocess
-    import tempfile
-    files = sorted(p.relative_to(desk).as_posix() for p in desk.rglob("*") if p.is_file())
-    listed = {f for _, fs, _ in DESK_LINES.values() for f in fs}
-    ok = True
-    for f in files:
-        if f not in listed:
-            print(f"desk UNLISTED desk/{f}: every file of the desk scene is on a line (DESK_LINES in tools/web-size.py)")
-            ok = False
-    with tempfile.TemporaryDirectory() as tmp:
-        t = Path(tmp)
-        shutil.copytree(desk, t, dirs_exist_ok=True)
-        rel = [f for f in files if f.endswith((".js", ".css")) and f not in DESK_VENDORED]
-        if webmin and rel:
-            subprocess.run([webmin, str(t), str(t), *rel], check=True, stdout=subprocess.DEVNULL)
-        for name, (budget, fs, gz) in DESK_LINES.items():
-            raw = sum((t / f).stat().st_size for f in fs if (t / f).exists())
-            size = sum(len(gzip.compress((t / f).read_bytes(), 9, mtime=0)) if gz else (t / f).stat().st_size
-                       for f in fs if (t / f).exists())
-            missing = [f for f in fs if not (t / f).exists()]
-            enforce = bool(webmin) and not unminified or not gz
-            verdict = "MISSING" if missing else ("ok" if size <= budget else "OVER BUDGET") if enforce else "(as written: not enforced)"
-            print(f"{name:<12} raw {raw:>9,}         {'gz' if gz else '  '} {size:>9,} / {budget / 1024:g} KB {verdict}")
-            ok &= not missing and (not enforce or size <= budget)
-    return ok
 
 
 def main() -> int:
@@ -763,20 +516,12 @@ def main() -> int:
     ap.add_argument("--pack", help="the www pack built from it")
     ap.add_argument("--pack-limit", type=int, default=786_432, help="the www partition, bytes (firmware/partitions.csv)")
     ap.add_argument("--pack-spare", type=int, default=65_536, help="what the signed pack must leave of the partition, bytes")
-    ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
-    ap.add_argument("--webmin", help="opendmd-webmin, built: the desk scene's lines measured minified, as the site serves them")
     ap.add_argument("--unminified", action="store_true",
                     help="a WEB_MINIFY=0 build: print the lines, enforce none")
     args = ap.parse_args()
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
                    and not p.name.startswith("."))
-    desk_names = {Path(f).name for _, fs, _ in DESK_LINES.values() for f in fs} - {"index.html"}
-    leak = [p for p in files if p.relative_to(root).parts[0] == "desk" or p.name in desk_names]
-    if leak:
-        print(f"{root}: the demo's desk scene is the site's alone (opendmd-web/share/desk/): never in the web app or its pack: "
-              + ", ".join(p.relative_to(root).as_posix() for p in leak))
-        return 1
     stray = [p for p in files if p.relative_to(root).parts[0] == "art"]
     if stray:
         print(f"{root}/art/ is the art index, which the site publishes (opendmd-web/art-index/, "
@@ -797,8 +542,6 @@ def main() -> int:
             kind = "psi wasm"
         elif rel.startswith("pkg-psi-lang/"):
             kind = "psi lang"
-        elif rel.startswith("pkg-studio/"):
-            kind = "studio wasm"
         elif rel in FCOST:
             kind = "fcost"
         elif rel in FORMULAS:
@@ -881,133 +624,6 @@ def main() -> int:
         print(f"{str(p.relative_to(root)):<40} {raw:>9,} {gz:>9,}")
     print()
     ok = True
-    if args.share:
-        import gzip
-        share = Path(args.share)
-        sraw = sgz = 0
-        rraw = rgz = 0
-        live: dict[str, tuple[int, int]] = {}
-        shared = (0, 0)
-        ftsort = (0, 0)
-        hero = (0, 0)
-        leds = (0, 0)
-        craw = cgz = 0
-        sp_raw = sp_gz = 0
-        sp_seen: set[str] = set()
-        lazy = {name: [0, 0, []] for name in STUDIO_LAZY}
-        lazy_of = {f: name for name, (_, fs) in STUDIO_LAZY.items() for f in fs}
-        stray: list[str] = []
-        video = (0, 0)
-        for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
-            if p.relative_to(share).parts[0] == "desk":
-                continue
-            if q_ref(p, share):
-                b = p.read_bytes()
-                g = len(gzip.compress(b, 9, mtime=0))
-                print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
-                if p.name in LIVE_REF:
-                    live[LIVE_REF[p.name]] = (len(b), g)
-                    continue
-                if p.name == FTSORT:
-                    ftsort = (len(b), g)
-                    continue
-                if p.name == HERO:
-                    hero = (len(b), g)
-                    continue
-                if p.name == LEDS:
-                    leds = (len(b), g)
-                    continue
-                if p.name == SHARED_REF:
-                    shared = (len(b), g)
-                rraw += len(b)
-                rgz += g
-                continue
-            b = p.read_bytes()
-            g = len(gzip.compress(b, 9, mtime=0))
-            print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
-            if p.relative_to(share).parts[0] == "create" and p.suffix == ".png":
-                continue
-            if p.relative_to(share).parts[0] == "create" and p.name == VIDEO_JS:
-                video = (len(b), g)
-                continue
-            if p.relative_to(share).parts[0] == "studio":
-                sub = "/".join(p.relative_to(share).parts[1:])
-                if sub in STUDIO_FIRST:
-                    sp_raw += len(b)
-                    sp_gz += g
-                    sp_seen.add(sub)
-                elif sub in lazy_of:
-                    t = lazy[lazy_of[sub]]
-                    t[0] += len(b)
-                    t[1] += g
-                    t[2].append(sub)
-                else:
-                    stray.append(sub)
-                continue
-            if p.relative_to(share).parts[0] == "create":
-                craw += len(b)
-                cgz += g
-                continue
-            sraw += len(b)
-            sgz += g
-
-        def demo_gz(prefixes: tuple[str, ...]) -> int:
-            return sum((q.with_name(q.name + ".gz").stat().st_size if q.with_name(q.name + ".gz").exists() else q.stat().st_size)
-                       for q in files if any(q.relative_to(root).as_posix().startswith(u) for u in prefixes))
-        uses = demo_gz(SHARE_USES)
-        verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
-              f"(first visit with the demo's files: {sgz + uses:,} B gz)")
-        verdict = "ok" if cgz <= CREATE_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'create':<10} raw {craw:>9,}           gz {cgz:>9,} / {CREATE_GZ_BUDGET // 1024} KB {verdict:<10}"
-              f"(first visit with the demo's files: {cgz + demo_gz(CREATE_USES):,} B gz)")
-        ok &= cgz <= CREATE_GZ_BUDGET
-        open_gz = cgz + demo_gz(CREATE_USES) + lazy["import"][1]
-        verdict = "ok" if open_gz <= IMPORT_OPEN_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'import open':<12} raw {'':>9}         gz {open_gz:>9,} / {IMPORT_OPEN_GZ_BUDGET // 1024} KB {verdict:<10}(what the Studio's Import fetches when it first opens)")
-        ok &= open_gz <= IMPORT_OPEN_GZ_BUDGET
-        missing = [f for f in STUDIO_FIRST if f not in sp_seen]
-        verdict = "ok" if 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET and not missing else "OVER BUDGET" if not missing else "MISSING"
-        print(f"{'studio pg':<10} raw {sp_raw:>9,}           gz {sp_gz:>9,} / {STUDIO_PAGE_GZ_BUDGET // 1024} KB {verdict:<10}"
-              f"(first paint, {len(sp_seen)} files{'; missing ' + ', '.join(missing) if missing else ''}; with the GIF writer and out.js,"
-              f" at the first download: {sp_gz + lazy['out'][1] + demo_gz(STUDIO_PAGE_USES):,} B gz)")
-        ok &= 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET and not missing
-        all_gz = sp_gz
-        for name, (budget, fs) in STUDIO_LAZY.items():
-            raw_, gz_, got = lazy[name]
-            all_gz += gz_
-            verdict = "ok" if gz_ <= budget else "OVER BUDGET"
-            print(f"{'studio ' + name:<14} raw {raw_:>9,}       gz {gz_:>9,} / {budget // 1024} KB {verdict:<10}"
-                  f"({', '.join(got) if got else ', '.join(fs) + ': not written yet'})")
-            ok &= gz_ <= budget
-        verdict = "ok" if all_gz <= STUDIO_ALL_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'studio all':<10} raw {'':>9}           gz {all_gz:>9,} / {STUDIO_ALL_GZ_BUDGET // 1024} KB {verdict:<10}(first paint and every lazy line)")
-        ok &= all_gz <= STUDIO_ALL_GZ_BUDGET
-        for f in stray:
-            print(f"studio UNLISTED studio/{f}: every file in studio/ is first paint (STUDIO_FIRST) or on a lazy line (STUDIO_LAZY) in tools/web-size.py")
-        ok &= not stray
-        verdict = "ok" if 0 < video[1] <= VIDEO_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'video':<10} raw {video[0]:>9,}           gz {video[1]:>9,} / {VIDEO_GZ_BUDGET // 1024} KB {verdict}")
-        ok &= 0 < video[1] <= VIDEO_GZ_BUDGET
-        verdict = "ok" if rgz <= PSIREF_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'psiref':<10} raw {rraw:>9,}           gz {rgz:>9,} / {PSIREF_GZ_BUDGET // 1024} KB {verdict}")
-        for name, (raw, gz) in sorted(live.items()):
-            raw, gz = raw + shared[0], gz + shared[1]
-            verdict = "ok" if gz <= LIVE_REF_GZ_BUDGET else "OVER BUDGET"
-            print(f"{name:<10} raw {raw:>9,}           gz {gz:>9,} / {LIVE_REF_GZ_BUDGET // 1024} KB {verdict}")
-            ok &= gz <= LIVE_REF_GZ_BUDGET
-        verdict = "ok" if ftsort[1] <= FTSORT_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'ftsort':<10} raw {ftsort[0]:>9,}           gz {ftsort[1]:>9,} / {FTSORT_GZ_BUDGET // 1024} KB {verdict}")
-        ok &= ftsort[1] <= FTSORT_GZ_BUDGET
-        verdict = "ok" if hero[1] <= HERO_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'hero':<10} raw {hero[0]:>9,}           gz {hero[1]:>9,} / {HERO_GZ_BUDGET // 1024} KB {verdict}")
-        ok &= 0 < hero[1] <= HERO_GZ_BUDGET
-        verdict = "ok" if leds[1] <= LEDS_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'leds':<10} raw {leds[0]:>9,}           gz {leds[1]:>9,} / {LEDS_GZ_BUDGET // 1024} KB {verdict}")
-        ok &= 0 < leds[1] <= LEDS_GZ_BUDGET
-        ok &= desk_lines(share / "desk", args.webmin, args.unminified)
-        print()
-        ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("boot", BOOT_GZ_BUDGET),
@@ -1019,7 +635,7 @@ def main() -> int:
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("plbuild", PLBUILD_GZ_BUDGET), ("smart", SMART_GZ_BUDGET), ("tags", TAGS_GZ_BUDGET), ("refs", REFS_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
-                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("studio wasm", STUDIO_WASM_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
+                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

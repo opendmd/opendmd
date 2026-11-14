@@ -1,7 +1,7 @@
 //! The GIF writer: one global palette (so the prepared copy keeps exactly
 //! these colours and never re-quantises), every frame whole, no
 //! transparency. (The site's Studio has GIF writers of its own, past 256
-//! colours too: opendmd-studio-web.) Delays are in hundredths of a second in the file; the
+//! colours too: the site repo's opendmd-studio-web.) Delays are in hundredths of a second in the file; the
 //! pipeline's are multiples of 10 ms. A still loops forever; an animation
 //! from the timeline plays forever or a number of times ([`begin`]).
 

@@ -9,7 +9,7 @@ gone the coins come back and it starts again.
 
     uv run scene.py OUT.gif
 
-tools/site-art.py imports `scene()` for the site's "Using it" panel
+the site repo's tools/site-art.py imports `scene()` for the site's "Using it" panel
 ("kenney-run"). Everything is placed by hand, no randomness: the same
 pixels every time.
 """

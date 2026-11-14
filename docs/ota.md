@@ -390,7 +390,7 @@ browser doing the fetching: the player itself never goes to the internet.
   "firmware/opendmd-1.0.0-www.pack", "www_version": "v1.0.0"}`, the paths
   relative to the JSON's own address, `www_version` the pack header's
   version (what `GET /api/www` reports for it), `layout` the partition
-  table each bundle is for (`tools/site.py` reads it from the bundle's
+  table each bundle is for (the site's `tools/site.py` reads it from the bundle's
   magic). The page takes `variants.<the player's variant>.firmware`, and
   only when its `layout` is the player's (another one: the USB reinstall
   message above, nothing offered); `firmware` is the 4mb bundle too, for
