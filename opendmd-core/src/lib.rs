@@ -46,6 +46,8 @@ pub mod names_file;
 #[cfg(feature = "ota")]
 pub mod ota;
 pub mod overrides;
+#[cfg(feature = "panel-id")]
+pub mod panel_id;
 pub mod panel_test;
 pub mod panel_timing;
 pub mod player;

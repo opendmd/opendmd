@@ -536,6 +536,7 @@ fn main() -> Result<()> {
         state::features_json(),
         state::running_version()
     );
+    log::info!("panel id {}", state::panel_id());
 
     // Peripherals are taken exactly once and handed out from here; nothing
     // downstream calls `Peripherals::take()`.

@@ -92,6 +92,23 @@ fn start_mdns(hostname: &str, named: &mut String) -> Option<EspMdns> {
             let ok = name_mdns(&mut mdns, hostname);
             *named = if ok { hostname.to_string() } else { String::new() };
             let ok = ok && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
+            // OpenDMD's own service, for apps (docs/api.md "Network"): the
+            // same instance and port, TXT `v` (this record's schema), `fw`
+            // and `id` (`state::panel_id`), all constant while it runs.
+            let ok = ok
+                && mdns
+                    .add_service(
+                        None,
+                        "_opendmd",
+                        "_tcp",
+                        80,
+                        &[
+                            ("v", "1"),
+                            ("fw", crate::state::firmware_version()),
+                            ("id", crate::state::panel_id()),
+                        ],
+                    )
+                    .is_ok();
             if ok {
                 info!("[net] mDNS responding as {hostname}.local");
             } else {

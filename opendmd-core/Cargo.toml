@@ -43,6 +43,10 @@ tags = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
+# The panel's stable ID (src/panel_id.rs): a hash of the factory MAC, for
+# `/api/status` and the `_opendmd._tcp` TXT record. The firmware only (the
+# SHA-256 is the one `ota` links already).
+panel-id = ["dep:sha2"]
 # OpenDMD Connect's spike S0 (src/connect.rs): the host-testable half of
 # the firmware's `connect-probe` (WebSocket framing, backoff, the M10
 # stream, the M9 vector). Only that firmware feature and the tests use it.

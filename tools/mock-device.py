@@ -77,7 +77,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   and `-`, not starting or ending with `-` (`opendmd_core::hostname::valid`),
   else a 400; `""` leaves it as it was. A change is live at once, as on the
   device (no `reboot_required`). Status `mdns` (the name mDNS answers to) is
-  always the hostname here: no other display to clash with.
+  always the hostname here: no other display to clash with. Status `id`,
+  the stable panel ID, never changes with it: the firmware's scheme
+  (`opendmd_core::panel_id`, `panel_id` below) over a made-up MAC,
+  `--mac` (default `02:00:00:00:00:01`, a locally administered one:
+  `tsjrj1qchc6a`), so two mocks with different `--mac`s are two panels.
+  No mDNS here (`_http._tcp`, `_opendmd._tcp`: docs/api.md "Network").
 - **A name another display has is refused.** `--taken NAME=IP,...`
   (default `other-display=192.0.2.42`; `""` for none) are the names
   other devices answer to (`<name>.local`). `GET /api/name-check?name=`
@@ -3052,6 +3057,8 @@ class Context:
         # Firmware update: the running version, the updater's last line, the
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
         self.version = MOCK_VERSION
+        # Status `id` (--mac): the stable panel ID.
+        self.panel_id = panel_id(bytes(6))
         # --power-safe: the S3's brownout-loop guard left the panel off.
         self.power_safe = False
         self.fw_last = None
@@ -3662,6 +3669,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "wifi": "sta",
                     "hostname": ctx.settings["hostname"],
                     "mdns": ctx.settings["hostname"],
+                    "id": ctx.panel_id,
                     "now_playing": {
                         "ordinal": player.ordinal,
                         "path": cur if cur else "",
@@ -5537,9 +5545,24 @@ def parse_args():
                          "the firmware's power-safe note (src/s3board.rs NOTE), scan null")
     ap.add_argument("--flash-size", type=int, default=0,
                     help="GET /api/firmware's flash_size, bytes (default: the layout's)")
+    ap.add_argument("--mac", default="02:00:00:00:00:01",
+                    help="the made-up base MAC status `id` is hashed from (opendmd_core::panel_id); "
+                         "a different one is a different panel")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
                                       "(default: <repo>/firmware/keys/opendmd.pub)")
     return ap.parse_args()
+
+
+PANEL_ID_PREFIX = b"opendmd panel id v1\0"
+PANEL_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"  # Crockford's base32, lowercase
+
+
+def panel_id(mac: bytes) -> str:
+    """`opendmd_core::panel_id::from_mac`: the first 60 bits of SHA-256 over
+    the prefix and the MAC, as 12 characters (pinned there: 02:00:00:00:00:01
+    is tsjrj1qchc6a)."""
+    bits = int.from_bytes(hashlib.sha256(PANEL_ID_PREFIX + mac).digest()[:8], "big") >> 4
+    return "".join(PANEL_ID_ALPHABET[(bits >> (5 * (11 - i))) & 31] for i in range(12))
 
 
 def main():
@@ -5581,6 +5604,12 @@ def main():
             for p in args.taken.split(",") if p.strip()
         )
         ctx.name_query = args.name_query
+        try:
+            mac = bytes.fromhex(args.mac.replace(":", "").replace("-", ""))
+            assert len(mac) == 6
+        except (ValueError, AssertionError):
+            sys.exit(f"mock-device: --mac {args.mac!r}: six hex bytes, e.g. 02:00:00:00:00:01")
+        ctx.panel_id = panel_id(mac)
         ctx.variant = args.variant
         ctx.formulas = not args.no_formulas
         ctx.power_safe = args.power_safe
