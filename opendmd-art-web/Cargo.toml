@@ -17,16 +17,18 @@ crate-type = ["cdylib", "rlib"]
 # platform) and `gifslim::recode_gif`, the prepared copy (here rather than
 # in the main module, which is at its size budget), and `tween` — Smooth
 # motion's analyser and tweener, which only the browser and opendmd-pack
-# run. The pixel work below uses none of the core.
+# run. The pixel work is opendmd-art's (re-exported as `pipeline`, `anim`,
+# `encode`).
 # `tags`: the user's tags and stars, the search and smart playlists
 # (src/tags.rs), the main module having no room for them.
 opendmd-core = { path = "../opendmd-core", features = ["tween", "names", "tags"] }
+opendmd-art = { path = "../opendmd-art" }
 js-sys = "0.3"          # the prepared copy's {copy, stats} object
-gif = "0.13"            # the encoder: one global palette, every frame whole
 wasm-bindgen = "0.2"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+gif = "0.13"            # a GIF past 256 colours, for prepareGif's refusal
 
 [profile.release]
 opt-level = "s"

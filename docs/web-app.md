@@ -343,8 +343,9 @@ runs, titled with its name, to save as new.
    chosen category, prepared, and the Studio offers to add it to the
    playlist in play; in local mode it downloads.
 
-The pixel work and the GIF writer are Rust (`opendmd-art-web`), in a second
-wasm module loaded only when the Studio opens. The game name lists are
+The pixel work and the GIF writer are Rust (the `opendmd-art` crate, which
+has no browser types), wrapped by `opendmd-art-web` in a second wasm module
+loaded only when the Studio opens. The game name lists are
 published on the project site (`https://opendmd.dev/art-index/v1/<PLATFORM>.json`,
 one fetched per platform the first time it is searched, then kept for the
 session; the site's demo fetches its own copy), built by

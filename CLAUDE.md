@@ -95,7 +95,9 @@ make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1
   desktop simulator (no logic of its own: behaviour belongs in the core).
 - **`opendmd-web/`**: the web app the device serves: a wasm module plus
   hand-written HTML/CSS/ES modules in `www/`, no framework, no bundler.
-  **`opendmd-art-web/`**: the second wasm module (Create Art, Smooth motion).
+  **`opendmd-art/`**: Create Art's pipeline (picture or GIF in, 128x32 GIF
+  out; no browser types). **`opendmd-art-web/`**: the second wasm module
+  over it (Create Art, the prepared copy, Smooth motion, tags).
 - **`opendmd-psi/`, `opendmd-psi-web/`, `opendmd-psi-cli/`**: Psi, the
   Formula language: compiler, VM and ESP32 JIT, its wasm module, the `psi`
   command. **`opendmd-gallery/`**: the Formula gallery checker.

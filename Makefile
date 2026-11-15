@@ -6,6 +6,7 @@ RENDER := opendmd-render
 SIM    := opendmd-sim
 WEB    := opendmd-web
 ART    := opendmd-art-web
+ARTLIB := opendmd-art
 PACK   := opendmd-pack
 PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
@@ -213,6 +214,8 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(ARTLIB) (Create Art's pipeline)"
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
@@ -237,6 +240,7 @@ test:
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
@@ -292,6 +296,8 @@ check:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	@echo "==> Checking $(ARTLIB)"
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(PSI)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
@@ -308,7 +314,8 @@ check-wasm:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
-	@echo "==> Checking $(ART) for $(WASM_TARGET)"
+	@echo "==> Checking $(ARTLIB) and $(ART) for $(WASM_TARGET)"
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
@@ -498,6 +505,7 @@ fmt:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -516,6 +524,9 @@ clippy:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
+	@echo "==> Clippy $(ARTLIB)"
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
@@ -544,6 +555,7 @@ clean:
 	cd $(RENDER) && cargo clean
 	cd $(SIM) && cargo clean
 	cd $(WEB) && cargo clean
+	cd $(ARTLIB) && cargo clean
 	cd $(ART) && cargo clean
 	cd $(PACK) && cargo clean
 	cd $(PSI) && cargo clean
