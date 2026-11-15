@@ -94,6 +94,8 @@ SMOKE = [
     # The boot task's playlist (opened before the card was the player's,
     # through FatFs) opened again raw once it is.
     ("playlist read raw", re.compile(r"playlist: opened again after the handover in \d+ ms, read raw")),
+    # The stable ID (opendmd_core::panel_id), hashed from the eFuse base MAC.
+    ("panel id", re.compile(r"opendmd_firmware: panel id [0-9a-hjkmnp-tv-z]{12}\b")),
 ]
 # No card: the firmware boots, its panel runs, the settings are kept in NVS,
 # and a change made then survives a restart (src/nocard_test.rs).

@@ -10734,12 +10734,15 @@ def hostname_checks(page: Page, base: str) -> None:
     which loads; on a clash (status `mdns` <name>-2, faked) the link goes
     there."""
     before = get_json(base + "/api/config")["hostname"]
+    id0 = get_json(base + "/api/status").get("id")
     r = put_json(base + "/api/config", {"brightness": get_json(base + "/api/config")["brightness"]})
     check(r.get("reboot_required") is False, f"config: no reboot for a brightness write ({r.get('reboot_required')})")
     r = put_json(base + "/api/config", {"hostname": before + "-x"})
     check(r.get("reboot_required") is False, f"config: a hostname change is live, no reboot_required ({r.get('reboot_required')})")
     st = get_json(base + "/api/status")
     check(st["hostname"] == st["mdns"] == before + "-x", f"status: hostname and mdns are the new name at once ({st['hostname']}, {st['mdns']})")
+    check(bool(re.fullmatch(r"[0-9a-hjkmnp-tv-z]{12}", id0 or "")) and st.get("id") == id0,
+          f"status: the panel id is one and survives the rename ({id0} -> {st.get('id')})")
     ssid = get_json(base + "/api/config")["wifi_ssid"]
     r = put_json(base + "/api/config", {"wifi_ssid": ssid + "-x"})
     check(r.get("reboot_required") is True, f"config: a WiFi change still replies reboot_required true ({r.get('reboot_required')})")

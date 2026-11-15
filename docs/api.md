@@ -264,6 +264,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name. (`"off"` with `network` off: the display's own log and heartbeat say so; nothing answers HTTP then) |
 | `card_formulas` | the card's Formulas as the display prepares them in the background after it mounts the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory, queued}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled since the card was mounted, that do not compile, not compiled yet for want of memory, and not tried yet (the card was busy, or one compile a retry); the last two are tried again later, and at the next start; set after the first pass and again after each retry; `null` until the first pass ends, or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
+| `id` | the panel's stable ID: 12 characters of lowercase Crockford base32 (`0-9`, `a-z` without `i l o u`), the same through renames, updates, reboots and erases; `null` when the chip's MAC is unavailable. Hashed from the chip's factory MAC; a lookup key, never a credential (see "Network"). Also the `_opendmd._tcp` record's `id` |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
 | `paused` | bool |
 | `transfer` | a file is going to or from the card on the stream task, or an upload is in hand (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
@@ -932,6 +933,36 @@ USB clears the username).
 curl -s -X PUT $DMD/api/config --json '{"wifi_ssid":"eduroam","wifi_eap_user":"ab12@example.edu","wifi_eap_identity":"anonymous@example.edu","wifi_pass":"secret"}'
 curl -s -X POST $DMD/api/reboot
 ```
+
+On a network it joined (never the setup network), the display answers
+mDNS as `<hostname>.local` (status `mdns`: `<hostname>-2` if another
+device had the name) and advertises two services, both on port 80 and
+both with the instance name `OpenDMD (<hostname>)`:
+
+| service | TXT | for |
+|---|---|---|
+| `_http._tcp` | none | browsers and anything that lists web servers |
+| `_opendmd._tcp` | `v=1` (this record's version), `fw=<version>` (status `version`), `id=<id>` (status `id`) | apps that look for OpenDMD displays |
+
+The TXT values do not change while the display runs (a rename changes the
+host and instance names, not the record). An app browses
+`_opendmd._tcp`, keeps a panel by its `id` (a rename or a `-2` gives it a
+new name, never a new ID), and confirms with `GET /api/status`. Older
+firmware advertises `_http._tcp` alone and has no `id`: an instance named
+`OpenDMD (…)` whose `/api/status` has `now_playing` is a display too.
+
+`id` is the first 60 bits of SHA-256 over `opendmd panel id v1\0` and the
+six bytes of the chip's base MAC (from its eFuses), in base32. Without a
+MAC (the eFuses did not read, or read as zeros) there is no ID: status
+`id` is `null` and the record has `v` and `fw` only.
+
+**The ID is never a credential.** Connect and apps pair with a secret and
+use `id` only as a key to look a panel up by. It is a permanent hardware
+identifier: it survives renames, updates, erases and resale, and it
+leaves the LAN wherever apps, Connect and bug reports carry it. It does
+not show the MAC, but one maker's MACs are few enough to try them all
+against it, so it can be brute-forced back to the MAC (which is on every
+packet the display sends on the LAN anyway).
 
 ## Security
 

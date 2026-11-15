@@ -610,6 +610,8 @@ class Lane:
         st = api.status()
         for key in ("heap", "now_playing", "sd", "www"):
             self.expect(key in st, "status", f"no `{key}` in /api/status")
+        self.expect(re.fullmatch(r"[0-9a-hjkmnp-tv-z]{12}", st.get("id") or "") is not None, "status",
+                    f"/api/status id is {st.get('id')!r}, not a panel ID")
         self.expect(st["www"].get("ok") is True, "status", f"the web app in flash is not ok: {st['www']}")
         _, cfg = api.json("GET", "/api/config")
         self.dwell0 = int(cfg["dwell_max"])

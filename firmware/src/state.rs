@@ -75,6 +75,28 @@ pub fn firmware_version() -> &'static str {
     })
 }
 
+/// The panel's stable ID (`opendmd_core::panel_id`: 12 characters hashed
+/// from the eFuse base MAC, never the MAC itself), for `/api/status` `id`
+/// and the `_opendmd._tcp` TXT record. Survives renames, updates and
+/// erases. Read once; `None` when the MAC is unavailable (the eFuse read
+/// failed, a bad CRC, or it read as zeros): status `id` is `null` then and
+/// the TXT record has no `id`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn panel_id() -> Option<&'static str> {
+    static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let mut mac = [0u8; 6];
+        // SAFETY: writes six bytes into `mac`.
+        let r = unsafe { esp_idf_sys::esp_efuse_mac_get_default(mac.as_mut_ptr()) };
+        if r != esp_idf_sys::ESP_OK {
+            log::warn!("panel id: the eFuse base MAC did not read ({r})");
+            return None;
+        }
+        opendmd_core::panel_id::from_mac(&mac)
+    })
+    .as_deref()
+}
+
 /// `FW_VERSION` at build time (`build.rs`: `OPENDMD_FW_VERSION`, else the
 /// crate's version).
 pub const BUILD_VERSION: &str = env!("OPENDMD_FW_VERSION");
