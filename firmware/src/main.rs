@@ -536,7 +536,10 @@ fn main() -> Result<()> {
         state::features_json(),
         state::running_version()
     );
-    log::info!("panel id {}", state::panel_id());
+    match state::panel_id() {
+        Some(id) => log::info!("panel id {id}"),
+        None => log::warn!("panel id unavailable"),
+    }
 
     // Peripherals are taken exactly once and handed out from here; nothing
     // downstream calls `Peripherals::take()`.

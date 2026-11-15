@@ -286,6 +286,8 @@ pack:
 check:
 	@echo "==> Checking $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween,names,ota,tags
+	@echo "==> Checking $(CORE) with panel-id alone (the stable panel ID without ota)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --features panel-id
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"

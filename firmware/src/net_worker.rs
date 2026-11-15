@@ -84,36 +84,15 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
 }
 
 /// mDNS as `<hostname>.local`, station mode only. Kept alive by the
-/// caller: dropping it unregisters. `named` is set to the name the
-/// responder took, or cleared if naming it failed (the loop retries).
-fn start_mdns(hostname: &str, named: &mut String) -> Option<EspMdns> {
+/// caller: dropping it unregisters. `name` starts afresh: it names the
+/// responder and registers both services ([`MdnsName::sync`]); what fails
+/// is said and tried again by the loop.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn start_mdns(hostname: &str, name: &mut MdnsName) -> Option<EspMdns> {
     match EspMdns::take() {
         Ok(mut mdns) => {
-            let ok = name_mdns(&mut mdns, hostname);
-            *named = if ok { hostname.to_string() } else { String::new() };
-            let ok = ok && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
-            // OpenDMD's own service, for apps (docs/api.md "Network"): the
-            // same instance and port, TXT `v` (this record's schema), `fw`
-            // and `id` (`state::panel_id`), all constant while it runs.
-            let ok = ok
-                && mdns
-                    .add_service(
-                        None,
-                        "_opendmd",
-                        "_tcp",
-                        80,
-                        &[
-                            ("v", "1"),
-                            ("fw", crate::state::firmware_version()),
-                            ("id", crate::state::panel_id()),
-                        ],
-                    )
-                    .is_ok();
-            if ok {
-                info!("[net] mDNS responding as {hostname}.local");
-            } else {
-                warn!("[net] mDNS registration incomplete");
-            }
+            *name = MdnsName::default();
+            name.sync(&mut mdns, hostname);
             Some(mdns)
         }
         Err(e) => {
@@ -163,28 +142,71 @@ fn rename(status: &Arc<Mutex<Status>>, hostname: &str) {
 #[derive(Default)]
 struct MdnsName {
     named: String,
+    /// `_http._tcp` and `_opendmd._tcp` registered (they outlive a rename).
+    http: bool,
+    opendmd: bool,
     retry_at: Option<Instant>,
 }
 
 impl MdnsName {
-    /// Name the responder `hostname` if it is not (now, or when the retry
-    /// is due); the first failure of a run of them warns.
+    /// Name the responder `hostname` and register the services that are
+    /// not yet (now, or when the retry is due); the first failure of a run
+    /// of them warns, naming what failed.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sync(&mut self, mdns: &mut EspMdns, hostname: &str) {
-        if self.named == hostname || self.retry_at.is_some_and(|t| Instant::now() < t) {
+        let done = self.named == hostname && self.http && self.opendmd;
+        if done || self.retry_at.is_some_and(|t| Instant::now() < t) {
             return;
         }
-        if name_mdns(mdns, hostname) {
-            info!("[net] mDNS responding as {hostname}.local");
-            self.named = hostname.to_string();
-            self.retry_at = None;
-        } else {
-            if self.retry_at.is_none() {
-                warn!(
-                    "[net] mDNS could not take the name {hostname}; retrying every {} s",
-                    config::MDNS_RETRY.as_secs()
-                );
+        let first = self.retry_at.is_none();
+        let mut failed = None;
+        if self.named != hostname {
+            if name_mdns(mdns, hostname) {
+                info!("[net] mDNS responding as {hostname}.local");
+                self.named = hostname.to_string();
+            } else {
+                failed = Some(format!("could not take the name {hostname}"));
             }
-            self.retry_at = Some(Instant::now() + config::MDNS_RETRY);
+        }
+        if failed.is_none() && !self.http {
+            match mdns.add_service(None, "_http", "_tcp", 80, &[]) {
+                Ok(()) => self.http = true,
+                Err(e) => failed = Some(format!("could not register _http._tcp ({e})")),
+            }
+        }
+        if failed.is_none() && !self.opendmd {
+            // OpenDMD's own service, for apps (docs/api.md "Network"): the
+            // same instance and port, TXT `v` (this record's schema), `fw`
+            // and `id` (`state::panel_id`; left out when there is none),
+            // all constant while it runs.
+            let fw = ("fw", crate::state::firmware_version());
+            let with_id;
+            let txt: &[(&str, &str)] = match crate::state::panel_id() {
+                Some(id) => {
+                    with_id = [("v", "1"), fw, ("id", id)];
+                    &with_id
+                }
+                None => &[("v", "1"), fw],
+            };
+            let r = mdns.add_service(None, "_opendmd", "_tcp", 80, txt);
+            match r {
+                Ok(()) => self.opendmd = true,
+                Err(e) => failed = Some(format!("could not register _opendmd._tcp ({e})")),
+            }
+        }
+        match failed {
+            None => {
+                if !first {
+                    info!("[net] mDNS: named and both services registered on a retry");
+                }
+                self.retry_at = None;
+            }
+            Some(why) => {
+                if first {
+                    warn!("[net] mDNS {why}; retrying every {} s", config::MDNS_RETRY.as_secs());
+                }
+                self.retry_at = Some(Instant::now() + config::MDNS_RETRY);
+            }
         }
     }
 }
@@ -799,7 +821,7 @@ fn start(
     // Kept alive for the life of the worker: dropping it unregisters.
     let mut mdns_name = MdnsName::default();
     let mdns = if wifi.state() == WifiState::Connected {
-        start_mdns(&hostname, &mut mdns_name.named)
+        start_mdns(&hostname, &mut mdns_name)
     } else {
         None
     };
@@ -905,7 +927,7 @@ impl Net {
                 let ip = self.wifi.ip_address();
                 publish(&self.status, WifiState::Connected, ip.clone());
                 if self.mdns.is_none() {
-                    self.mdns = start_mdns(&self.hostname, &mut self.mdns_name.named);
+                    self.mdns = start_mdns(&self.hostname, &mut self.mdns_name);
                 }
                 if self._sntp.is_none() {
                     self._sntp = crate::clock::start_sntp();
@@ -968,7 +990,7 @@ impl Net {
                     publish(&self.status, WifiState::Connected, ip);
                     self.boot_failures = None;
                     if self.mdns.is_none() {
-                        self.mdns = start_mdns(&self.hostname, &mut self.mdns_name.named);
+                        self.mdns = start_mdns(&self.hostname, &mut self.mdns_name);
                     }
                     if self._sntp.is_none() {
                         self._sntp = crate::clock::start_sntp();

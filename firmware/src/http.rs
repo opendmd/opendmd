@@ -2900,7 +2900,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let t = s.epoch.elapsed();
     let _ = write!(
         out,
-        r#"{{"version":{},"variant":{},"layout":{},"features":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"id":"{}","#,
+        r#"{{"version":{},"variant":{},"layout":{},"features":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"id":{},"#,
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
         crate::state::flash_layout(),
@@ -2912,7 +2912,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         json_string(s.wifi),
         json_string(&s.hostname),
         json_string(&s.mdns),
-        crate::state::panel_id(),
+        opt_json(crate::state::panel_id()),
     );
     // The card's Formulas prepared when it was mounted (`card_formulas`).
     #[cfg(feature = "psi")]

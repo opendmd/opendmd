@@ -3057,8 +3057,9 @@ class Context:
         # Firmware update: the running version, the updater's last line, the
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
         self.version = MOCK_VERSION
-        # Status `id` (--mac): the stable panel ID.
-        self.panel_id = panel_id(bytes(6))
+        # Status `id` (--mac): the stable panel ID, of --mac's default
+        # until main() reads the flag.
+        self.panel_id = panel_id(parse_mac(MOCK_MAC))
         # --power-safe: the S3's brownout-loop guard left the panel off.
         self.power_safe = False
         self.fw_last = None
@@ -5545,7 +5546,7 @@ def parse_args():
                          "the firmware's power-safe note (src/s3board.rs NOTE), scan null")
     ap.add_argument("--flash-size", type=int, default=0,
                     help="GET /api/firmware's flash_size, bytes (default: the layout's)")
-    ap.add_argument("--mac", default="02:00:00:00:00:01",
+    ap.add_argument("--mac", default=MOCK_MAC,
                     help="the made-up base MAC status `id` is hashed from (opendmd_core::panel_id); "
                          "a different one is a different panel")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
@@ -5553,8 +5554,22 @@ def parse_args():
     return ap.parse_args()
 
 
+# --mac's default: a locally administered MAC (status `id` tsjrj1qchc6a).
+MOCK_MAC = "02:00:00:00:00:01"
 PANEL_ID_PREFIX = b"opendmd panel id v1\0"
 PANEL_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"  # Crockford's base32, lowercase
+
+
+def parse_mac(s: str) -> bytes | None:
+    """Six hex bytes (`:` or `-` between them, or none), not all zero (the
+    firmware has no ID for a zero MAC); else None."""
+    try:
+        mac = bytes.fromhex(s.replace(":", "").replace("-", ""))
+    except ValueError:
+        return None
+    if len(mac) != 6 or mac == bytes(6):
+        return None
+    return mac
 
 
 def panel_id(mac: bytes) -> str:
@@ -5604,11 +5619,9 @@ def main():
             for p in args.taken.split(",") if p.strip()
         )
         ctx.name_query = args.name_query
-        try:
-            mac = bytes.fromhex(args.mac.replace(":", "").replace("-", ""))
-            assert len(mac) == 6
-        except (ValueError, AssertionError):
-            sys.exit(f"mock-device: --mac {args.mac!r}: six hex bytes, e.g. 02:00:00:00:00:01")
+        mac = parse_mac(args.mac)
+        if mac is None:
+            sys.exit(f"mock-device: --mac {args.mac!r}: six hex bytes, not all zero, e.g. {MOCK_MAC}")
         ctx.panel_id = panel_id(mac)
         ctx.variant = args.variant
         ctx.formulas = not args.no_formulas

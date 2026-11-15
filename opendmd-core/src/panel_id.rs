@@ -7,13 +7,15 @@
 //! bits of SHA-256 over [`PREFIX`] and the six MAC bytes, written as 12
 //! characters of lowercase Crockford base32 (`0-9a-z` without `i l o u`:
 //! safe in a URL, a file name and a TXT value, and unambiguous read aloud).
+//! No MAC (the eFuses did not read, or read as zeros): no ID.
 //!
-//! What it hides: the MAC is not in the ID, so the ID can be shown, logged
-//! or reported without handing out the MAC. What it does not: the MAC
-//! space of one maker is small (a few vendor prefixes, 24 bits each), so
-//! someone with the ID and time could find the MAC by trying them all.
-//! The MAC is no secret on the LAN in any case (every packet carries it):
-//! the ID is for telling panels apart, not an identity to trust.
+//! **The ID is never a credential.** It is a permanent hardware identifier:
+//! it survives renames, updates, erases and a change of owner, and it
+//! leaves the LAN wherever apps, Connect or bug reports carry it. It does
+//! not show the MAC, but it does not hide it either: one maker's MACs are
+//! few enough (a few vendor prefixes, 24 bits each) to try them all
+//! against an ID. Connect and apps pair with a secret of their own and use
+//! the ID only as a key to look a panel up by.
 
 use sha2::{Digest, Sha256};
 
@@ -26,16 +28,23 @@ pub const LEN: usize = 12;
 /// Crockford's base32 alphabet, lowercase.
 const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
-/// The ID of the panel whose base MAC is `mac`.
-pub fn from_mac(mac: &[u8; 6]) -> String {
+/// The ID of the panel whose base MAC is `mac`; `None` for an all-zero
+/// MAC (eFuses that read as nothing: every such panel would share one ID).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn from_mac(mac: &[u8; 6]) -> Option<String> {
+    if *mac == [0; 6] {
+        return None;
+    }
     let mut h = Sha256::new();
     h.update(PREFIX);
     h.update(mac);
     let d = h.finalize();
     let bits = u64::from_be_bytes(d[..8].try_into().unwrap()) >> 4;
-    (0..LEN)
-        .map(|i| ALPHABET[(bits >> (5 * (LEN - 1 - i)) & 31) as usize] as char)
-        .collect()
+    Some(
+        (0..LEN)
+            .map(|i| ALPHABET[(bits >> (5 * (LEN - 1 - i)) & 31) as usize] as char)
+            .collect(),
+    )
 }
 
 /// Is `s` an ID's shape: [`LEN`] characters of the alphabet.
@@ -52,8 +61,15 @@ mod tests {
     /// panels).
     #[test]
     fn known_ids() {
-        assert_eq!(from_mac(&[0; 6]), "360bjw0vfam7");
-        assert_eq!(from_mac(&[0x02, 0, 0, 0, 0, 0x01]), "tsjrj1qchc6a");
+        let id = |m: [u8; 6]| from_mac(&m).unwrap();
+        assert_eq!(id([0x02, 0, 0, 0, 0, 0x01]), "tsjrj1qchc6a");
+        assert_eq!(id([0x24, 0x0a, 0xc4, 0x12, 0x34, 0x56]), "5wkafxp3cmkf");
+    }
+
+    #[test]
+    fn no_mac_no_id() {
+        assert_eq!(from_mac(&[0; 6]), None);
+        assert!(from_mac(&[0, 0, 0, 0, 0, 1]).is_some());
     }
 
     #[test]
@@ -61,13 +77,15 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for n in 0..1000u32 {
             let b = n.to_be_bytes();
-            let id = from_mac(&[0x24, 0x0a, 0xc4, b[1], b[2], b[3]]);
+            let id = from_mac(&[0x24, 0x0a, 0xc4, b[1], b[2], b[3]]).unwrap();
             assert!(valid(&id), "{id}");
             assert!(seen.insert(id));
         }
         // The MAC's bytes are not in it, in any spelling.
-        let id = from_mac(&[0x24, 0x0a, 0xc4, 0x12, 0x34, 0x56]);
+        let id = from_mac(&[0x24, 0x0a, 0xc4, 0x12, 0x34, 0x56]).unwrap();
         assert!(!id.contains("240ac4") && !id.contains("123456"));
-        assert!(!valid("") && !valid("360bjw0vfam") && !valid("360bjw0vfaM7") && !valid("360bjw0vfai7"));
+        for bad in ["", "tsjrj1qchc6", "tsjrj1qchc6A", "tsjrj1qchci6"] {
+            assert!(!valid(bad), "{bad:?}");
+        }
     }
 }
