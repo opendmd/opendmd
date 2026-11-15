@@ -40,7 +40,8 @@ every view like a person would:
             per request against the whole copies), copies not GIFs, a
             fling fetching only where it stops, a reload fetching nothing
             (IndexedDB), a hover's clip (kept too), the switch off; a dark-start
-            GIF over 32 KB sent whole: a lit still, from one read
+            GIF over 32 KB sent whole and paced: a lit still, from one read
+            (counted as asked: a read cut short ends as requestfailed)
   Editor    + Add GIFs in a new playlist: three ticked in Arcade (added in
             that order, ✓ in the tree), a folder's tick (Pixel_Art), 'mario'
             + SNES and Add all N shown (again: none added), thumbnails on
@@ -2194,9 +2195,15 @@ def thumbs_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
-    """A dark-start GIF (its first frame black) over 32 KB, sent whole at
-    once (no pacing): its thumbnail is a later, lit frame, from that one
-    read, no bytes read again (js/thumbs.js: what came already holds it)."""
+    """A dark-start GIF (its first frame black) over 32 KB: its thumbnail is
+    a later, lit frame, from that one read, no bytes read again (js/thumbs.js:
+    what came already holds it). Twice: sent whole at once (no pacing), and
+    paced at 400 KB/s (the read goes on to the clip's 32 KB and is cut there).
+
+    The read is counted as the page asks it (`request`), not as it ends: the
+    page cancels the body once it has the clip (`rd.cancel()`), and when that
+    beats the body's last bytes the request ends as requestfailed
+    (net::ERR_ABORTED), never requestfinished. Paced, it always does."""
     import io as _io
     import random
     from PIL import Image
@@ -2214,26 +2221,35 @@ def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
     gif = buf.getvalue()
     path = "/gifs/SmokeDark/SNES_Smoke_Dark_Start_01.gif"
     put_bytes(base + "/api/files" + path, gif)
-    page = new_page(browser, "laptop", errors)
-    reads: list = []
-    page.on("requestfinished", lambda r: reads.append((r.url, r.sizes()["responseBodySize"])) if "/gifs/SmokeDark/" in r.url else None)
-    page.goto(base + "/#now")
-    pick_cat(page, "SmokeDark")
-    sel = f"#lib-list .vrow[data-path={json.dumps(path)}] canvas.th[data-done]"
-    page.wait_for_selector(sel, timeout=20000)
-    # requestfinished reaches us a beat after the canvas is drawn (a loaded runner: after
-    # 500 ms, "read once ([] B)"): wait for the read to be counted, then for any second.
-    for _ in range(50):
-        if reads:
-            break
-        page.wait_for_timeout(100)
-    page.wait_for_timeout(500)
-    lit = page.eval_on_selector(sel, """c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
-        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
-    check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and reads[0][1] <= len(gif),
-          f"thumbnails: a dark start of {len(gif):,} B sent whole: a lit still ({lit} px), read once ({[n for _, n in reads]} B)")
-    page.context.close()
-    urllib.request.urlopen(urllib.request.Request(base + "/api/files" + path, method="DELETE"), timeout=30)
+    try:
+        for kbps in (0, 400):
+            page = new_page(browser, "laptop", errors)
+            io = card_requests(page)
+            ends: list = []
+            page.on("requestfinished", lambda r: ends.append("finished") if "/gifs/SmokeDark/" in r.url else None)
+            page.on("requestfailed", lambda r: ends.append(f"cut ({r.failure})") if "/gifs/SmokeDark/" in r.url else None)
+            get_json(base + f"/mock/io?reset=1&kbps={kbps}")
+            page.goto(base + "/#now")
+            pick_cat(page, "SmokeDark")
+            sel = f"#lib-list .vrow[data-path={json.dumps(path)}] canvas.th[data-done]"
+            page.wait_for_selector(sel, timeout=20000)
+            # The read has ended (finished or cut: the events reach us a beat after
+            # the canvas is drawn), then a moment for any second read to start.
+            for _ in range(50):
+                if ends:
+                    break
+                page.wait_for_timeout(100)
+            page.wait_for_timeout(500)
+            lit = page.eval_on_selector(sel, """c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+                for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
+            reads = [u for u in io["urls"] if u == path]
+            how = "sent whole" if not kbps else f"paced at {kbps} KB/s"
+            check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and len(ends) == 1,
+                  f"thumbnails: a dark start of {len(gif):,} B {how}: a lit still ({lit} px), read once ({len(reads)} requests, {ends})")
+            page.context.close()
+    finally:
+        get_json(base + "/mock/io?kbps=0")
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files" + path, method="DELETE"), timeout=30)
 
 
 def thumbs_redrawn_checks(browser, base: str, errors: list[str]) -> None:
