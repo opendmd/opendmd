@@ -720,6 +720,18 @@ pub fn check_key_id(signed_by: u8, trailer: Option<u8>) -> Result<(), OtaError> 
     Ok(())
 }
 
+/// The release keys the firmware trusts, by id (docs/ota.md "Keys"): what
+/// `firmware/src/ota.rs`'s `KEYS` is. Key 0 (`firmware/keys/opendmd.pub`)
+/// signs releases; key 1 (`firmware/keys/opendmd-1.pub`, trusted from
+/// 1.1.0-beta.3) is the backup, its private half held offline, so a lost
+/// or leaked key 0 can be rotated out over WiFi. A bundle's key trailer and
+/// a www pack's trailer name one of these; key 0 is tried first, so a
+/// bundle signed by it costs one check as before.
+pub const RELEASE_KEYS: &[(u8, &[u8; PUBLIC_KEY_LEN])] = &[
+    (0, include_bytes!("../../firmware/keys/opendmd.pub")),
+    (1, include_bytes!("../../firmware/keys/opendmd-1.pub")),
+];
+
 /// Check `header` against each `(id, key)` this firmware trusts, in turn:
 /// the id of the first that verifies, with the trusted [`Meta`].
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
@@ -1563,6 +1575,105 @@ mod tests {
             verify_header_any(&header, &[(1, &other)]).unwrap_err(),
             OtaError::BadSignature
         );
+    }
+
+    /// The committed keys are the trusted set: ids 0 and 1, each the file
+    /// it should be, each a key, not the same key.
+    #[test]
+    fn the_release_keys() {
+        assert_eq!(RELEASE_KEYS.iter().map(|&(id, _)| id).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(RELEASE_KEYS[0].1, include_bytes!("../../firmware/keys/opendmd.pub"));
+        assert_eq!(
+            RELEASE_KEYS[1].1.to_vec(),
+            unhex("041f2b014d8f307d4c5948dd398d52a8d1b434d80465ecb744dd9cbb4ab8bd08")
+        );
+        assert_ne!(RELEASE_KEYS[0].1, RELEASE_KEYS[1].1);
+        for &(id, key) in RELEASE_KEYS {
+            assert!(VerifyingKey::from_bytes(key).is_ok(), "key {id}");
+        }
+    }
+
+    /// A throwaway seed standing in for release key `id`'s private half.
+    fn stand_in_seed(id: u8) -> [u8; 32] {
+        [0x40 + id; 32]
+    }
+
+    /// [`RELEASE_KEYS`]' ids, each with its stand-in's public half: the
+    /// firmware's trust list with keys these tests can sign with.
+    fn stand_in_keys() -> Vec<(u8, [u8; 32])> {
+        RELEASE_KEYS
+            .iter()
+            .map(|&(id, _)| (id, ed25519_dalek::SigningKey::from_bytes(&stand_in_seed(id)).verifying_key().to_bytes()))
+            .collect()
+    }
+
+    /// The KAT image with a key trailer naming `named`, its header signed
+    /// with the stand-in for key `signer`.
+    fn bundle_by(signer: u8, named: u8) -> (Header, Vec<u8>) {
+        use ed25519_dalek::Signer;
+        let image = keyed_image(named);
+        let unsigned = Header::new("4mb", "0.4.0-test", image.len() as u32, sha256(&image), [0; 64]).unwrap();
+        let sig = ed25519_dalek::SigningKey::from_bytes(&stand_in_seed(signer)).sign(&unsigned.signed_bytes());
+        let header = Header::new("4mb", "0.4.0-test", image.len() as u32, sha256(&image), sig.to_bytes()).unwrap();
+        (header, image)
+    }
+
+    /// What the firmware does with a bundle (`firmware/src/ota.rs`): the
+    /// header against every trusted key, then the trailer's id against the
+    /// key that verified.
+    fn firmware_takes(header: &Header, image: &[u8], keys: &[(u8, &[u8; 32])]) -> Result<u8, OtaError> {
+        let (meta, id) = verify_header_any(header, keys)?;
+        let h = hashed(image);
+        let (len, first) = (h.len(), h.first());
+        meta.check_image(len, first, &h.finish())?;
+        let mut tail = KeyTail::default();
+        tail.update(image);
+        check_key_id(id, tail.key_id())?;
+        Ok(id)
+    }
+
+    #[test]
+    fn the_backup_key_signs_bundles_and_packs() {
+        let owned = stand_in_keys();
+        let keys: Vec<(u8, &[u8; 32])> = owned.iter().map(|(id, k)| (*id, k)).collect();
+        // Key 1's bundle and pack: taken, as key 1's.
+        let (h, img) = bundle_by(1, 1);
+        assert_eq!(firmware_takes(&h, &img, &keys), Ok(1));
+        let pack = sign_www(&a_pack(), stand_in_seed(1), 1);
+        assert_eq!(www::verify_bytes(&pack, &keys), Ok(1));
+        // Key 0's, as before (a trailer naming it, or none).
+        let (h, img) = bundle_by(0, 0);
+        assert_eq!(firmware_takes(&h, &img, &keys), Ok(0));
+        assert_eq!(www::verify_bytes(&sign_www(&a_pack(), stand_in_seed(0), 0), &keys), Ok(0));
+        // One key's signature under the other's id: refused, both ways.
+        for (signer, named) in [(1, 0), (0, 1)] {
+            let (h, img) = bundle_by(signer, named);
+            assert_eq!(
+                firmware_takes(&h, &img, &keys),
+                Err(OtaError::WrongKeyId { named, signed_by: signer }),
+                "bundle signed by {signer}, naming {named}"
+            );
+            let pack = sign_www(&a_pack(), stand_in_seed(signer), named);
+            assert_eq!(
+                www::verify_bytes(&pack, &keys),
+                Err(OtaError::BadSignature),
+                "pack signed by {signer}, naming {named}"
+            );
+        }
+        // A key nobody trusts, under either id; an id past the list.
+        let (h, img) = bundle_by(9, 1);
+        assert_eq!(firmware_takes(&h, &img, &keys), Err(OtaError::BadSignature));
+        let pack = sign_www(&a_pack(), stand_in_seed(9), 1);
+        assert_eq!(www::verify_bytes(&pack, &keys), Err(OtaError::BadSignature));
+        let pack = sign_www(&a_pack(), stand_in_seed(2), 2);
+        assert_eq!(www::verify_bytes(&pack, &keys), Err(OtaError::UnknownKey(2)));
+        // A firmware trusting key 0 alone (1.1.0-beta.2 and earlier)
+        // refuses key 1's bundle and pack.
+        let only0 = &keys[..1];
+        let (h, img) = bundle_by(1, 1);
+        assert_eq!(firmware_takes(&h, &img, only0), Err(OtaError::BadSignature));
+        let pack = sign_www(&a_pack(), stand_in_seed(1), 1);
+        assert_eq!(www::verify_bytes(&pack, only0), Err(OtaError::UnknownKey(1)));
     }
 
     #[test]

@@ -7,7 +7,7 @@ hardware.
 
     uv run tools/mock-device.py --root <card copy> [--overlay DIR] \
         [--www opendmd-web/www-dist] [--host 127.0.0.1] [--port 8080] [--dwell SECS] \
-        [--strict] [--quiet] [--ota-pub firmware/keys/opendmd.pub]
+        [--strict] [--quiet] [--ota-pub [ID=]firmware/keys/opendmd.pub ...]
 
     uv run tools/mock-device.py --proxy http://192.0.2.69 [--www ...] [--port 8080]
 
@@ -364,7 +364,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
   `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
   and verifies it as the firmware does against `--ota-pub`
-  (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
+  (repeatable, `ID=P` for key ID; default the keys the firmware trusts,
+  `firmware/keys/opendmd.pub` as key 0 and `opendmd-1.pub` as key 1): 411 without a length, 413 over
   140 B + the layout's factory partition (2,883,584 B),
   422 `{"error":"<reason>"}` for any failure, a bundle for another flash
   layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v3 or v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
@@ -1744,7 +1745,7 @@ def gif_delays(b: bytes) -> list[int]:
     return delays
 
 
-def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
+def ota_check(data: bytes, pubs: dict, variant: str = "4mb") -> str:
     """The bundle's version, or ValueError(reason): opendmd_core::ota's
     checks in the firmware's order (the header, its flash layout against
     this player's `variant`, its signature as it arrives, then whether it
@@ -1775,12 +1776,20 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if table < have:
         raise ValueError(f"this update is for the older flash layout v{table} and this {OTA_BOARDS[variant]} has layout "
                          f"v{have}: use a release made for layout v{have} (opendmd.dev/install has the latest)")
-    if pub is None:
+    if not pubs:
         raise ValueError("the firmware's public key is invalid")
-    try:
-        pub.verify(data[:OTA_SIGNED_LEN], data[OTA_SIGNED_LEN:OTA_HEADER_LEN])
-    except BadSignatureError:
-        raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
+    # opendmd_core::ota::verify_header_any: each trusted key in id order,
+    # the first that verifies is the signer.
+    signed_by = None
+    for kid in sorted(pubs):
+        try:
+            pubs[kid].verify(data[:OTA_SIGNED_LEN], data[OTA_SIGNED_LEN:OTA_HEADER_LEN])
+        except BadSignatureError:
+            continue
+        signed_by = kid
+        break
+    if signed_by is None:
+        raise ValueError("bad signature: not signed by this firmware's key, or the header was changed")
     length = int.from_bytes(data[40:44], "little")
     if length > OTA_FACTORY_BYTES[variant]:
         raise ValueError(f"the image is {length} B, the firmware partition is {OTA_FACTORY_BYTES[variant]} B")
@@ -1798,32 +1807,34 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if desc is None or not desc.endswith(" " + bundle) or len(desc) <= len(bundle) + 1:
         raise ValueError(f"the image inside is not an OpenDMD {bundle} build "
                          f"(its app descriptor says '{desc if desc is not None else 'nothing: no app descriptor'}')")
-    # opendmd_core::ota::check_key_id: the key trailer (none: key 0) names key 0.
+    # opendmd_core::ota::check_key_id: the key trailer (none: key 0) names
+    # the key that verified.
     tail = image[-16:]
     named = tail[8] if len(tail) == 16 and tail[:8] == b"ODFWKEY1" and tail[9:] == b"\0" * 7 else 0
-    if named != 0:
-        raise ValueError(f"the image names signing key {named}, but key 0 signed it")
+    if named != signed_by:
+        raise ValueError(f"the image names signing key {named}, but key {signed_by} signed it")
     return version
 
 
-def www_signature_check(data: bytes, pub) -> None:
+def www_signature_check(data: bytes, pubs: dict) -> None:
     """opendmd_core::ota::www (docs/www-pack.md "Signature"): ValueError(reason)
-    unless the pack is signed by `pub` (key 0)."""
+    unless the pack is signed by the key in `pubs` (id -> VerifyKey) its
+    trailer names."""
     from nacl.exceptions import BadSignatureError
     if not data[19] & 1:
         raise ValueError("not signed: this display takes only a release's web app pack (signed)")
     t = data[-72:]
     if len(data) < 64 + 72 or t[:4] != b"ODWS" or t[5:8] != b"\0\0\0":
         raise ValueError("not signed: this display takes only a release's web app pack (signed)")
-    if t[4] != 0:
+    if not pubs:
+        raise ValueError("the firmware's public key is invalid")
+    if t[4] not in pubs:
         raise ValueError(f"signed with key {t[4]}, which this display does not know")
     body = bytearray(data[:-72])
     body[12:16] = b"\0" * 4
     msg = b"ODWPSIG1" + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
-    if pub is None:
-        raise ValueError("the firmware's public key is invalid")
     try:
-        pub.verify(msg, t[8:])
+        pubs[t[4]].verify(msg, t[8:])
     except BadSignatureError:
         raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
 
@@ -3057,7 +3068,7 @@ class Context:
         self.fw_last = None
         self.fw_log = None
         self.down_until = 0.0
-        self.ota_pub = None
+        self.ota_pub = {}
         # --variant / --flash-size: the flash layout this player runs, and its chip.
         self.variant = "4mb"
         self.flash_size = 4 << 20
@@ -5537,8 +5548,10 @@ def parse_args():
                          "the firmware's power-safe note (src/s3board.rs NOTE), scan null")
     ap.add_argument("--flash-size", type=int, default=0,
                     help="GET /api/firmware's flash_size, bytes (default: the layout's)")
-    ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
-                                      "(default: <repo>/firmware/keys/opendmd.pub)")
+    ap.add_argument("--ota-pub", action="append",
+                    help="an Ed25519 public key (32 B) PUT /api/firmware and /api/www verify against, ID=P for key ID "
+                         "(repeatable; default: the keys the firmware trusts, <repo>/firmware/keys/opendmd.pub as "
+                         "key 0 and opendmd-1.pub as key 1)")
     return ap.parse_args()
 
 
@@ -5587,12 +5600,16 @@ def main():
         if args.no_formulas:
             ctx.player.rebuild_playlist()
         ctx.flash_size = args.flash_size or 4 << 20
-        pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
-        try:
-            from nacl.signing import VerifyKey
-            ctx.ota_pub = VerifyKey(pub.read_bytes())
-        except Exception as e:  # noqa: BLE001 - the mock runs on without updates
-            print(f"mock-device: no firmware key ({pub}: {e}); every update is refused", file=sys.stderr)
+        keys_dir = Path(__file__).resolve().parent.parent / "firmware" / "keys"
+        specs = args.ota_pub or [f"0={keys_dir / 'opendmd.pub'}", f"1={keys_dir / 'opendmd-1.pub'}"]
+        for spec in specs:
+            sid, eq, path = spec.partition("=")
+            kid, pub = (int(sid), Path(path)) if eq and sid.isdigit() else (0, Path(spec))
+            try:
+                from nacl.signing import VerifyKey
+                ctx.ota_pub[kid] = VerifyKey(pub.read_bytes())
+            except Exception as e:  # noqa: BLE001 - the mock runs on without updates
+                print(f"mock-device: no firmware key {kid} ({pub}: {e}); updates it signed are refused", file=sys.stderr)
         handler_cls = make_handler(ctx, args.quiet)
         ticker = threading.Thread(target=ticker_loop, args=(ctx, stop), daemon=True)
         ticker.start()

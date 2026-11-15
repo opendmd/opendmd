@@ -219,7 +219,8 @@ bytes to the app image before it hashes and signs it:
 
 ```
 magic     "ODFWKEY1"                                  8 B
-key id    u8: 0 is the first release key (opendmd.pub)
+key id    u8: 0 is the release key (opendmd.pub), 1 the backup
+          (opendmd-1.pub, trusted from 1.1.0-beta.3; "Keys" below)
 reserved  7 zero bytes
 ```
 
@@ -239,14 +240,54 @@ unchanged since beta.14), and `make ota-compat` ran the beta.14 tag's own
 
 ## Keys
 
-The firmware trusts the keys in `ota::KEYS` (id, public key); today only
-key 0. **Rotating** later: make a new key, add it as id 1 to `KEYS` in a
-release signed with key 0 (every player takes it), then sign later
-releases with key 1 (`KEY_ID` in `tools/fw-sign.py`); retire key 0 from
-`KEYS` once no player needs it. A leak of key 0 before that means a USB
-reinstall for every player that never got the release with key 1.
+The firmware trusts the keys in `ota::KEYS`, which is
+`opendmd_core::ota::RELEASE_KEYS` (id, public key):
 
-**Where the key is.** The private key exists in two places: the
+| id | public key | private half | trusted from |
+|----|------------|--------------|--------------|
+| 0 | `firmware/keys/opendmd.pub` | signs every release (below) | the first OTA release (key ids: 1.0.0-beta.15) |
+| 1 | `firmware/keys/opendmd-1.pub` | offline, the maintainer's only | 1.1.0-beta.3 |
+
+A bundle is taken if the key its trailer names (no trailer: key 0)
+signed its header; a www pack, if the key its trailer names signed it.
+The firmware tries key 0 first and then key 1 on a bundle's header (it
+arrives before the trailer), and refuses the bundle at the end unless
+the key that verified is the one the trailer names; a pack's trailer
+is read before its signature is checked (and its id is part of the
+signed message), so a pack is checked with its named key alone. Either
+way, key 1's signature under id 0, or key 0's under id 1, is refused
+(`opendmd_core::ota`'s test `the_backup_key_signs_bundles_and_packs`).
+Releases are signed with key 0, as before; nothing in the release path
+uses key 1.
+
+**Key 1, the backup.** It exists so that a lost or leaked key 0 is
+rotated over WiFi rather than by a USB reinstall of every player. Its
+private half was made offline and is held by the maintainer alone: not
+in CI (no Actions secret), not on the build machine beyond the moment of
+use, never in the repo. Every player on 1.1.0-beta.3 or later trusts it;
+a player older than that knows key 0 alone, and needs a release signed
+with key 0 (1.1.0-beta.3 or later) to learn key 1.
+
+**Rotating** (key 0 lost or leaked):
+
+1. Make key 2 (`tools/fw-sign.py keygen --key ... --pub
+   firmware/keys/opendmd-2.pub`), offline, and add it to `RELEASE_KEYS`
+   as id 2; if key 0 leaked, take key 0 out of `RELEASE_KEYS` in the same
+   change. Key 1 becomes the release key and key 2 the new backup.
+2. Build that release and sign it with key 1, once, on a trusted machine:
+   `tools/fw-sign.py sign ... --key <key 1> --key-id 1` and `sign-www
+   ... --key <key 1> --key-id 1` (for `make fw-release FW_SIGN_KEY=<key
+   1>`, set `KEY_ID = 1` in the tool first), checked with `verify --pub
+   1=firmware/keys/opendmd-1.pub`. Every player from 1.1.0-beta.3 on
+   takes it over WiFi, and from then on refuses key 0 if it was taken out.
+3. Move key 1's private half into the release signing (the
+   `OTA_SIGNING_KEY` secret, `FW_SIGN_KEY`, the release checks'
+   `--pub`), and wipe key 1 from the machine that held it for step 2 if
+   that is not its home. Key 2's private half goes offline as key 1's was.
+
+Players that never got 1.1.0-beta.3 or later know key 0 alone: if key 0 leaked, a USB reinstall is their way to the new keys.
+
+**Where key 0 is.** Its private half exists in two places: the
 maintainer's machine (`~/.config/opendmd/opendmd.key`, read by
 `tools/fw-sign.py`, pinned `pynacl==1.5.0`, never copied into a build
 directory or the repo) and the repository's `OTA_SIGNING_KEY` Actions
