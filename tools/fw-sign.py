@@ -156,7 +156,7 @@ def load_pubs(specs: list[str] | None) -> dict[int, VerifyKey]:
     out: dict[int, VerifyKey] = {}
     for spec in specs:
         sid, eq, path = spec.partition("=")
-        if eq and sid.isdigit():
+        if eq and sid.isascii() and sid.isdigit():
             kid = int(sid)
         else:
             kid, path = 0, spec
@@ -317,7 +317,8 @@ def check(data: bytes, pubs: dict[int, VerifyKey]) -> dict:
     if hashlib.sha256(image).digest() != h["sha256"]:
         raise ValueError("SHA-256 mismatch")
     kid = key_id_of(image)
-    h["verified_by"] = which_key(h["signed"], h["sig"], pubs, kid or 0, "image's key trailer", "header")
+    h["verified_by"] = which_key(h["signed"], h["sig"], pubs, kid or 0,
+                                 "image's key trailer" if kid is not None else "image (no key trailer)", "header")
     check_desc(image, h["variant"])
     h["key_id"] = kid
     return h
@@ -479,6 +480,7 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
     print("key 1 (backup)   -> ok (key 1)")
     for name, b in (("key 1 as id 0", build_header("9.9.9-selftest", image, sk1) + image),
                     ("key 0 as id 1", build_header("9.9.9-selftest", other, sk) + other),
+                    ("key 1, no trailer", build_header("9.9.9-selftest", legacy, sk1) + legacy),
                     ("key 1, 0 alone", b1)):
         try:
             check(b, both if name != "key 1, 0 alone" else trust)

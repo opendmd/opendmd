@@ -23,13 +23,14 @@ pack=${2:?usage: tools/www-push.sh <host> <www.pack>}
 [ "$(head -c 4 "$pack")" = "ODWP" ] || { echo "$pack is not a www pack" >&2; exit 2; }
 # A player takes only a signed pack (docs/www-pack.md "Signature"): a local
 # build (`make web`'s, unsigned) is signed here with FW_SIGN_KEY (default
-# ~/.config/opendmd/opendmd.key) into a temporary copy.
+# ~/.config/opendmd/opendmd.key) as key FW_SIGN_KEY_ID (default 0) into a
+# temporary copy.
 if [ $(( $(od -An -tu1 -j19 -N1 "$pack" | tr -d ' ') & 1 )) -eq 0 ]; then
     key=${FW_SIGN_KEY:-$HOME/.config/opendmd/opendmd.key}
     [ -f "$key" ] || { echo "$pack is not signed and there is no key at $key to sign it (FW_SIGN_KEY=...)" >&2; exit 2; }
     signed=$(mktemp --suffix=.pack)
     trap 'rm -f "$signed"' EXIT
-    uv run --quiet "$(dirname "$0")/fw-sign.py" sign-www "$pack" --out "$signed" --key "$key"
+    uv run --quiet "$(dirname "$0")/fw-sign.py" sign-www "$pack" --out "$signed" --key "$key" --key-id "${FW_SIGN_KEY_ID:-0}"
     pack=$signed
 fi
 auth=()

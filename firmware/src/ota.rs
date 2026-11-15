@@ -404,6 +404,9 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(500, "500 Internal Server Error", &format!("{e:#}"));
     }
 
+    // The key that verified the header (`key_id`, from `verify_signature`)
+    // must be the one the trailer names. `opendmd_core::ota`'s test helper
+    // `firmware_takes` does these checks in this order; keep the two in step.
     let (got, first, prefix) = (hasher.len(), hasher.first(), *hasher.prefix());
     if let Err(e) = meta
         .check_image(got, first, &hasher.finish())

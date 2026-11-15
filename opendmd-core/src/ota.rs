@@ -1610,17 +1610,22 @@ mod tests {
     /// The KAT image with a key trailer naming `named`, its header signed
     /// with the stand-in for key `signer`.
     fn bundle_by(signer: u8, named: u8) -> (Header, Vec<u8>) {
+        signed_by(signer, keyed_image(named))
+    }
+
+    /// `image`'s header signed with the stand-in for key `signer`.
+    fn signed_by(signer: u8, image: Vec<u8>) -> (Header, Vec<u8>) {
         use ed25519_dalek::Signer;
-        let image = keyed_image(named);
         let unsigned = Header::new("4mb", "0.4.0-test", image.len() as u32, sha256(&image), [0; 64]).unwrap();
         let sig = ed25519_dalek::SigningKey::from_bytes(&stand_in_seed(signer)).sign(&unsigned.signed_bytes());
         let header = Header::new("4mb", "0.4.0-test", image.len() as u32, sha256(&image), sig.to_bytes()).unwrap();
         (header, image)
     }
 
-    /// What the firmware does with a bundle (`firmware/src/ota.rs`): the
-    /// header against every trusted key, then the trailer's id against the
-    /// key that verified.
+    /// What the firmware does with a bundle (`firmware/src/ota.rs`'s
+    /// `verify_signature` and the end of `receive`; keep the two in step):
+    /// the header against every trusted key, then the trailer's id against
+    /// the key that verified.
     fn firmware_takes(header: &Header, image: &[u8], keys: &[(u8, &[u8; 32])]) -> Result<u8, OtaError> {
         let (meta, id) = verify_header_any(header, keys)?;
         let h = hashed(image);
@@ -1660,6 +1665,13 @@ mod tests {
                 "pack signed by {signer}, naming {named}"
             );
         }
+        // Key 1's header over an image with no trailer (which counts as
+        // key 0's): refused.
+        let (h, img) = signed_by(1, kat_image());
+        assert_eq!(
+            firmware_takes(&h, &img, &keys),
+            Err(OtaError::WrongKeyId { named: 0, signed_by: 1 })
+        );
         // A key nobody trusts, under either id; an id past the list.
         let (h, img) = bundle_by(9, 1);
         assert_eq!(firmware_takes(&h, &img, &keys), Err(OtaError::BadSignature));

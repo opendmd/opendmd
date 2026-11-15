@@ -264,28 +264,41 @@ uses key 1.
 rotated over WiFi rather than by a USB reinstall of every player. Its
 private half was made offline and is held by the maintainer alone: not
 in CI (no Actions secret), not on the build machine beyond the moment of
-use, never in the repo. Every player on 1.1.0-beta.3 or later trusts it;
-a player older than that knows key 0 alone, and needs a release signed
-with key 0 (1.1.0-beta.3 or later) to learn key 1.
+use, never in the repo. The maintainer checked the offline copy against
+the committed `firmware/keys/opendmd-1.pub` on 2026-11-15. Every player
+on 1.1.0-beta.3 or later trusts it; a player older than that knows key 0
+alone, and needs a release signed with key 0 (1.1.0-beta.3 or later) to
+learn key 1.
 
 **Rotating** (key 0 lost or leaked):
 
 1. Make key 2 (`tools/fw-sign.py keygen --key ... --pub
-   firmware/keys/opendmd-2.pub`), offline, and add it to `RELEASE_KEYS`
-   as id 2; if key 0 leaked, take key 0 out of `RELEASE_KEYS` in the same
-   change. Key 1 becomes the release key and key 2 the new backup.
+   firmware/keys/opendmd-2.pub`), offline, add it to `RELEASE_KEYS` as
+   id 2, and take key 0 out of `RELEASE_KEYS` in the same change. Lost
+   is treated as leaked: no one can say who holds a lost key, and as
+   long as players trust it, whoever does can sign firmware they take.
+   Key 1 becomes the release key and key 2 the new backup.
 2. Build that release and sign it with key 1, once, on a trusted machine:
-   `tools/fw-sign.py sign ... --key <key 1> --key-id 1` and `sign-www
-   ... --key <key 1> --key-id 1` (for `make fw-release FW_SIGN_KEY=<key
-   1>`, set `KEY_ID = 1` in the tool first), checked with `verify --pub
-   1=firmware/keys/opendmd-1.pub`. Every player from 1.1.0-beta.3 on
-   takes it over WiFi, and from then on refuses key 0 if it was taken out.
-3. Move key 1's private half into the release signing (the
-   `OTA_SIGNING_KEY` secret, `FW_SIGN_KEY`, the release checks'
-   `--pub`), and wipe key 1 from the machine that held it for step 2 if
-   that is not its home. Key 2's private half goes offline as key 1's was.
+   `make fw-release FW_SIGN_KEY=<key 1> FW_SIGN_KEY_ID=1
+   FW_SIGN_PUB=1=firmware/keys/opendmd-1.pub` (the bundle's and the
+   pack's trailers name key 1, and both are checked against
+   `opendmd-1.pub` as key 1). Every player from 1.1.0-beta.3 on takes it
+   over WiFi, and from then on refuses key 0.
+3. Move key 1's private half into the release signing and point the
+   release checks at it: the `OTA_SIGNING_KEY` Actions secret,
+   `FW_SIGN_KEY_ID=1` for the builds in `.github/workflows/release.yml`
+   and `tools/release.sh`, the default `pub` in `release.yml` (the line
+   `pub="${FW_SIGN_PUB:-firmware/keys/opendmd.pub}"`, to
+   `1=firmware/keys/opendmd-1.pub`), and every `--pub
+   firmware/keys/opendmd.pub` in `tools/release.sh` (the dist bundle and
+   pack checks, the final-release checks and the published-assets
+   checks), with their messages. Then make 1 the default for
+   `FW_SIGN_KEY_ID` (Makefile) and `KEY_ID` (`tools/fw-sign.py`), and wipe
+   key 1 from the machine that held it for step 2 if that is not its home.
+   Key 2's private half goes offline as key 1's was.
 
-Players that never got 1.1.0-beta.3 or later know key 0 alone: if key 0 leaked, a USB reinstall is their way to the new keys.
+Players that never got 1.1.0-beta.3 or later know key 0 alone: if key 0
+leaked, a USB reinstall is their way to the new keys.
 
 **Where key 0 is.** Its private half exists in two places: the
 maintainer's machine (`~/.config/opendmd/opendmd.key`, read by

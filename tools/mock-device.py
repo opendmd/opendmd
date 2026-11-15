@@ -5604,7 +5604,9 @@ def main():
         specs = args.ota_pub or [f"0={keys_dir / 'opendmd.pub'}", f"1={keys_dir / 'opendmd-1.pub'}"]
         for spec in specs:
             sid, eq, path = spec.partition("=")
-            kid, pub = (int(sid), Path(path)) if eq and sid.isdigit() else (0, Path(spec))
+            kid, pub = (int(sid), Path(path)) if eq and sid.isascii() and sid.isdigit() else (0, Path(spec))
+            if not 0 <= kid <= 255:
+                sys.exit(f"mock-device: --ota-pub {spec}: a key id is 0..255")
             try:
                 from nacl.signing import VerifyKey
                 ctx.ota_pub[kid] = VerifyKey(pub.read_bytes())
