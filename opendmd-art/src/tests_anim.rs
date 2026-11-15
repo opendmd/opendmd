@@ -332,7 +332,16 @@ fn a_smaller_budget_reduces_further() {
     assert_eq!((a.reduce, a.w, a.h, a.len()), (3, 233, 233, 50));
     assert!(a.len() * a.w * a.h * 3 <= budget);
     assert_eq!(open_all(bytes).reduce, 2, "the default budget: halved");
-    let v = Anim::video_with_budget(&vec![0; 1024 * 1024 * 3], 1024, 1024, 1024, 1024, 50, 24 << 20).unwrap();
+    let v = Anim::video_with_budget(
+        &vec![0; 1024 * 1024 * 3],
+        1024,
+        1024,
+        1024,
+        1024,
+        50,
+        24 << 20,
+    )
+    .unwrap();
     assert_eq!(v.in_file, 8);
 }
 
@@ -654,4 +663,46 @@ const PINNED: [(usize, u64); 5] = [
     (16413, 0x37ed_84a7_4da1_7435),
     (10959, 0xe1ab_aeb3_6229_a226),
     (23241, 0x73e8_a677_91da_9d18),
+];
+
+/// More saved bytes, pinned: a video's frames saved smooth, and a still of
+/// more than 256 colours through the quantiser.
+#[test]
+fn saved_video_and_quantised_still_are_pinned() {
+    let fp = |b: Vec<u8>| (b.len(), fnv64(&b));
+    let (w, h) = (160, 90);
+    let frame = |k: usize| -> Vec<u8> {
+        (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = (i % w, i / w);
+                [
+                    ((x * 3 + k * 7) % 256) as u8,
+                    ((y * 5 + k) % 256) as u8,
+                    ((x ^ y) * 2 % 256) as u8,
+                ]
+            })
+            .collect()
+    };
+    let mut a = Anim::video(&frame(0), w, h, 1280, 720, 40).unwrap();
+    for k in 1..12 {
+        a.push_delay(&frame(k), 40 + 10 * (k as u32 % 3));
+    }
+    a.end(false);
+    a.configure(Fit::Smooth, false, 10, 0, false, 110, Colours::Auto);
+    let seq = a.sequence(&edit(a.len()));
+    a.save_begin(seq, 0);
+    while !a.save_step(5) {}
+    let video = fp(a.saved());
+    let mut img = Image::new(W, H);
+    for (i, p) in img.px.iter_mut().enumerate() {
+        let (x, y) = ((i % W) as u8, (i / W) as u8);
+        *p = [x * 2, y * 8, x.wrapping_mul(7) ^ y, 255];
+    }
+    let still = fp(crate::encode::encode(&render(&img, &Plan::default())));
+    assert_eq!([video, still], PINNED_MORE, "{:#x?}", [video, still]);
+}
+
+const PINNED_MORE: [(usize, u64); 2] = [
+    (17460, 0x3743_1a8d_694b_00ef),
+    (3778, 0xaf81_be62_8f62_8d13),
 ];

@@ -11,10 +11,18 @@
 //! upscale found on the first frame ([`pipeline::native_scale`]) is undone
 //! on the way in, losing nothing. If the frames would still take more than
 //! the budget ([`BUDGET`], the web app's, unless the caller passes its own
-//! to [`Anim::open_with_budget`] or [`Anim::video_with_budget`]), each side is divided by the smallest whole number that fits
-//! (area-averaged, [`pipeline::resize_area`]) and [`Anim::reduce`] says by
-//! what. At most [`MAX_FRAMES`] frames are kept. A rendered frame is its
-//! own palette (≤ 256) and 4 KB of indices.
+//! to [`Anim::open_with_budget`] or [`Anim::video_with_budget`]), each
+//! side is divided by the smallest whole number that fits (area-averaged,
+//! [`pipeline::resize_area`]) and [`Anim::reduce`] says by what. At most
+//! [`MAX_FRAMES`] frames are kept. A rendered frame is its own palette
+//! (≤ 256) and 4 KB of indices.
+//!
+//! The budget bounds the frames kept, nothing else. Decoding a GIF takes
+//! up to about 12 bytes per pixel of its logical screen on top (the
+//! decoder's index, screen and saved buffers, and the frame being taken
+//! in as RGBA), and the screen is at most 2048x2048 (the core's
+//! `player::MAX_LOGICAL_PIXELS`): up to ~50 MB more at the very largest,
+//! besides the file's own bytes, which [`Anim::open`] holds.
 
 use crate::encode;
 use crate::pipeline::{self, Colours, Edit, Fit, Image, Mapper, Overlay, Scale, H, W};
@@ -170,6 +178,9 @@ impl Anim {
     }
 
     /// [`open`](Self::open), the frames kept within `budget` bytes (RGB).
+    /// Only the frames: decoding takes up to ~12 bytes per pixel of the
+    /// GIF's logical screen (at most 2048x2048) more, and the file's bytes
+    /// (see the module's "Memory").
     pub fn open_with_budget(bytes: Vec<u8>, budget: usize) -> io::Result<Anim> {
         let in_file = scan_frames(&bytes);
         let mut src = GifSource::new(Cursor::new(bytes))?;
@@ -251,7 +262,9 @@ impl Anim {
         Anim::video_with_budget(first, w, h, ow, oh, delay_ms, BUDGET)
     }
 
-    /// [`video`](Self::video), as many frames kept as fit `budget` bytes.
+    /// [`video`](Self::video), as many frames kept as fit `budget` bytes
+    /// (the frames only: each pushed frame is converted through one
+    /// `w` x `h` RGBA picture, 4 bytes a pixel, beside them).
     pub fn video_with_budget(
         first: &[u8],
         w: usize,
@@ -336,13 +349,18 @@ impl Anim {
     }
 
     fn keep(&mut self, img: &Image, delay_ms: u32) {
-        let mut img = if self.scale.k > 1 {
-            pipeline::native(img, self.scale)
-        } else {
-            img.clone()
-        };
+        // Borrowed unless a step makes a new picture: no copy of a frame
+        // that is kept as it came (up to 16 MB at 2048x2048).
+        let native;
+        let mut img = img;
+        if self.scale.k > 1 {
+            native = pipeline::native(img, self.scale);
+            img = &native;
+        }
+        let reduced;
         if self.reduce > 1 {
-            img = pipeline::resize_area(&img, self.w, self.h);
+            reduced = pipeline::resize_area(img, self.w, self.h);
+            img = &reduced;
         }
         self.frames
             .push(img.px.iter().flat_map(|p| [p[0], p[1], p[2]]).collect());

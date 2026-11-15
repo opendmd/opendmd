@@ -4,7 +4,8 @@
 //! the Studio opens (`www/pkg-art/`), so the app everyone loads does not
 //! grow. The pixel work is the `opendmd-art` crate's ([`pipeline`],
 //! [`anim`], [`encode`], re-exported here; no browser types, tested
-//! natively and under node); this file only converts. Parsing the saved name is the main module's `parsePath`.
+//! natively and under node); this file only converts. Parsing the saved
+//! name is the main module's `parsePath`.
 //!
 //! It also carries [`prepare_gif`] (`prepareGif`), the prepared copy of any
 //! GIF — the core's recoder, byte-identical to `opendmd-pack` and the
