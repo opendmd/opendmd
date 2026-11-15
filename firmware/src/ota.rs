@@ -12,7 +12,7 @@
 //! v4 player refuses a v3 or v2 bundle; a v3 player, 1.0.0 to 1.0.1, takes
 //! the v4 magic for another layout's), that the image fits the factory
 //! partition, the ESP image magic 0xE9, the SHA-256, the Ed25519 signature
-//! against [`PUBLIC_KEY`], and that the image's app descriptor is a build
+//! against [`KEYS`], and that the image's app descriptor is a build
 //! for the same layout). The layout and the signature are checked as soon
 //! as the header is in, before anything is written to the card. Any failure is
 //! a 422 and the card is as it was. Success renames the file to
@@ -55,14 +55,12 @@ use crate::files;
 use crate::http::NetCommand;
 use crate::httpd::{json_string, BodyError, Respond, Upload};
 
-/// The Ed25519 public key bundles must be signed with
-/// (`tools/fw-sign.py keygen`; the private half never enters the repo).
-pub const PUBLIC_KEY: &[u8; 32] = include_bytes!("../keys/opendmd.pub");
-
-/// Every key this firmware trusts, by id (docs/ota.md "Keys"): a bundle's
-/// key trailer and a www pack's trailer name one. A rotated key is added
-/// here with the next id, in a release signed with the old one.
-pub const KEYS: &[(u8, &[u8; 32])] = &[(0, PUBLIC_KEY)];
+/// Every Ed25519 key this firmware trusts, by id (docs/ota.md "Keys";
+/// `opendmd_core::ota::RELEASE_KEYS`): key 0, `keys/opendmd.pub`, which
+/// signs releases, and key 1, `keys/opendmd-1.pub`, the offline backup. A
+/// bundle's key trailer and a www pack's trailer name one. A rotated key is
+/// added with the next id, in a release signed with a key already trusted.
+pub const KEYS: &[(u8, &[u8; 32])] = opendmd_core::ota::RELEASE_KEYS;
 
 /// The rollback floor (docs/ota.md): built with `OPENDMD_OTA_FLOOR=<version>`
 /// (in the environment of the firmware build; no Makefile variable sets it), a bundle older than it is refused.
@@ -198,7 +196,7 @@ pub fn verify_www_on_worker(
     got.ok_or(None)?.map(|_| ()).map_err(Some)
 }
 
-/// Parse a bundle header and check its signature against [`PUBLIC_KEY`].
+/// Parse a bundle header and check its signature against each of [`KEYS`].
 /// **On the network worker** (`NetCommand::VerifyBundle`): Ed25519's
 /// variable-base multiplication keeps ~7-8.5 KB of frames on the stack
 /// (curve25519-dalek's NAF lookup table, 2.1 KB, and its caller, 2.6 KB,
@@ -406,6 +404,9 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(500, "500 Internal Server Error", &format!("{e:#}"));
     }
 
+    // The key that verified the header (`key_id`, from `verify_signature`)
+    // must be the one the trailer names. `opendmd_core::ota`'s test helper
+    // `firmware_takes` does these checks in this order; keep the two in step.
     let (got, first, prefix) = (hasher.len(), hasher.first(), *hasher.prefix());
     if let Err(e) = meta
         .check_image(got, first, &hasher.finish())

@@ -1001,7 +1001,7 @@ else
 endif
 	@# The www pack, signed with the same key (docs/www-pack.md "Signature"):
 	@# from 1.0.0-beta.15 on a player takes only a signed one over PUT /api/www.
-	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY) --key-id $(FW_SIGN_KEY_ID)
 	uv run --quiet tools/fw-sign.py verify-www $(FW_WWW_IMAGE) --pub $(FW_SIGN_PUB)
 	cp $(FW_RELEASE_BOOTLOADER) $(FW_DIST_BOOTLOADER)
 ifeq ($(FW_NO_UPDATER),)
@@ -1103,14 +1103,21 @@ endif
 # (the bundle's magic names the layout, and fw-sign.py refuses an image
 # whose app descriptor is for the other one).
 FW_SIGN_KEY ?= $(HOME)/.config/opendmd/opendmd.key
-# The public key the bundle is checked against. Only a dry run (CI, a
-# throwaway key) points it elsewhere: a device trusts the committed one alone.
+# The key id the bundle's and the pack's trailers name: 0, the release key,
+# unless a rotation signs with another (docs/ota.md "Keys": 1 is the backup).
+FW_SIGN_KEY_ID ?= 0
+# The public key the bundle is checked against, `P` (key 0's) or `ID=P`
+# (fw-sign.py --pub): with FW_SIGN_KEY_ID=1, FW_SIGN_PUB=1=$(FW)/keys/opendmd-1.pub.
+# Only a dry run (CI, a throwaway key) points it at another file: a device
+# trusts the committed keys alone.
 FW_SIGN_PUB ?= $(FW)/keys/opendmd.pub
+# FW_SIGN_PUB's file, without an `ID=` (tools/ota-compat.sh takes a path).
+FW_SIGN_PUB_FILE = $(shell printf '%s' '$(FW_SIGN_PUB)' | sed -E 's/^[0-9]+=//')
 FW_BUNDLE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT).odfw
 fw-sign:
 	@test -f $(FW_APP_IMAGE) || { echo "no $(FW_APP_IMAGE): run make fw-release first"; exit 2; }
 	@test -f $(FW_SIGN_KEY) || { echo "no signing key at $(FW_SIGN_KEY): uv run tools/fw-sign.py keygen (once), or FW_SIGN_KEY=..."; exit 2; }
-	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --variant $(FW_VARIANT) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --variant $(FW_VARIANT) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY) --key-id $(FW_SIGN_KEY_ID)
 	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW_SIGN_PUB)
 
 # First install on a board over USB, from the release build: the same parts
@@ -1133,7 +1140,7 @@ OTA_COMPAT_TAG ?= v1.0.1
 # DIST's 4mb release bundle and pack too, when it has them (signed with the
 # release key: checked against FW_SIGN_PUB).
 OTA_COMPAT_DIST_BUNDLE = $(DIST)/opendmd-$(FW_VERSION)-4mb.odfw
-OTA_COMPAT_FILES ?= $(if $(wildcard $(OTA_COMPAT_DIST_BUNDLE)),$(OTA_COMPAT_DIST_BUNDLE) $(FW_SIGN_PUB) $(FW_WWW_IMAGE))
+OTA_COMPAT_FILES ?= $(if $(wildcard $(OTA_COMPAT_DIST_BUNDLE)),$(OTA_COMPAT_DIST_BUNDLE) $(FW_SIGN_PUB_FILE) $(FW_WWW_IMAGE))
 ota-compat:
 	tools/ota-compat.sh $(OTA_COMPAT_TAG) $(OTA_COMPAT_FILES)
 
@@ -1141,7 +1148,7 @@ ota-compat:
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
 www-push:
 	@test -n "$(HOST)" || { echo "usage: make www-push HOST=<ip-or-name> [WWW_PACK=$(WWW_PACK)]"; exit 2; }
-	FW_SIGN_KEY=$(FW_SIGN_KEY) tools/www-push.sh $(HOST) $(WWW_PACK)
+	FW_SIGN_KEY=$(FW_SIGN_KEY) FW_SIGN_KEY_ID=$(FW_SIGN_KEY_ID) tools/www-push.sh $(HOST) $(WWW_PACK)
 
 # The updater (ota/updater, docs/ota.md): a small C ESP-IDF app for the
 # ota_0 partition that copies a staged firmware image from the card into
@@ -1349,7 +1356,7 @@ emu-old-updater:
 	@echo "old updater ($(OLD_UPDATER_TAG)): $(EMU_OLD_UPDATER)"
 emu-api: emu-build emu-card emu-api-psb emu-old-updater
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
-	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY) --key-id $(FW_SIGN_KEY_ID)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
 	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --look $(EMU_API_LOOK) --look-psb $(EMU_API_LOOK_PSB) --heavy-psb $(EMU_API_HEAVY_PSB) --light-psb $(EMU_API_LIGHT_PSB) --formula $(EMU_API_FORMULA) --old-updater $(EMU_OLD_UPDATER) $(EMU_ARGS)

@@ -29,6 +29,9 @@ Sprites from your own pictures.
   16 colours, with what each costs the Formula said as you go.
 - A sprite's picture editor can replace it from a picture, keeping the key
   characters you gave its colours. The picture never leaves your browser.
+- Updates over WiFi now also accept a second, backup signing key, kept
+  offline, so if the main key is ever lost, your display can still be
+  updated over WiFi instead of reinstalled over USB.
 
 ## 1.1.0-beta.2 · 2026-11-11
 

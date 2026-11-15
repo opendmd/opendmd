@@ -123,7 +123,7 @@ total length by 72 bytes and appends the trailer:
 ```
 offset  size  field
      0     4  "ODWS"
-     4     1  key id (0: the first release key)
+     4     1  key id (0: the release key, 1: the backup; docs/ota.md "Keys")
      5     3  zero
      8    64  Ed25519 signature over "ODWPSIG1" | key id | SHA-256 of the
               pack's bytes before the trailer, with the CRC field (bytes

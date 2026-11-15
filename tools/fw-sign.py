@@ -5,11 +5,11 @@
 """Sign, verify and inspect OpenDMD firmware bundles (docs/ota.md).
 
     uv run tools/fw-sign.py keygen [--key K] [--pub P]
-    uv run tools/fw-sign.py sign <app.bin> --version <v> [--variant 4mb] [--layout N] --out <bundle.odfw> [--key K]
-    uv run tools/fw-sign.py verify <bundle.odfw> [--pub P]
+    uv run tools/fw-sign.py sign <app.bin> --version <v> [--variant 4mb] [--layout N] --out <bundle.odfw> [--key K] [--key-id N]
+    uv run tools/fw-sign.py verify <bundle.odfw> [--pub [ID=]P ...]
     uv run tools/fw-sign.py inspect <bundle.odfw>
-    uv run tools/fw-sign.py sign-www <www.pack> --out <signed.pack> [--key K]
-    uv run tools/fw-sign.py verify-www <www.pack> [--pub P]
+    uv run tools/fw-sign.py sign-www <www.pack> --out <signed.pack> [--key K] [--key-id N]
+    uv run tools/fw-sign.py verify-www <www.pack> [--pub [ID=]P ...]
     uv run tools/fw-sign.py selftest          # sign, verify, tamper each field -> refused
 
 A bundle is a 140-byte header and then the app image (what `espflash
@@ -52,9 +52,17 @@ string at 0x30, "<version> <variant>") is not a build for the bundle's
 variant: `sign` and `verify` check the same.
 
 The private key is the raw 32-byte Ed25519 seed, by default
-~/.config/opendmd/opendmd.key (mode 0600, never in the repo); the public key
-is the raw 32 bytes, by default firmware/keys/opendmd.pub (committed: the
-firmware compiles it in). `keygen` refuses to overwrite either. The
+~/.config/opendmd/opendmd.key (mode 0600, never in the repo); `sign` and
+`sign-www` write key id 0 into the trailer unless `--key-id` names another
+(a rotation, docs/ota.md "Keys"). A public key is the raw 32 bytes. The
+firmware trusts the committed ones (it compiles them in,
+opendmd_core::ota::RELEASE_KEYS): key 0, firmware/keys/opendmd.pub, and
+key 1, firmware/keys/opendmd-1.pub, the offline backup. `verify` and
+`verify-www` check against those by default, with the key the trailer
+names, and say which id verified; `--pub P` (repeatable, `ID=P` for an id
+other than 0) checks against the keys given instead, as `make fw-release`
+and the release checks do with key 0 alone. `keygen` refuses to overwrite
+either file. The
 firmware's verifier is `opendmd_core::ota`, whose tests hold a vector made
 by this script.
 """
@@ -92,8 +100,10 @@ APP_DESC_MAGIC = 0xABCD5432
 # The key trailer at the end of a bundle's image (opendmd_core::ota::KEY_TRAILER_*).
 KEY_TRAILER_MAGIC = b"ODFWKEY1"
 KEY_TRAILER_LEN = 16
-# The key ids this tool signs with: 0 is the first release key, the one in
-# firmware/keys/opendmd.pub. A rotated key gets the next id (docs/ota.md).
+# The key id this tool signs with unless --key-id says otherwise: 0 is the
+# first release key, the one in firmware/keys/opendmd.pub. Key 1 is the
+# backup (firmware/keys/opendmd-1.pub, private half offline). A rotated key
+# gets the next id (docs/ota.md "Keys").
 KEY_ID = 0
 # The www pack's signature (opendmd_core::ota::www, docs/www-pack.md).
 WWW_FLAG_SIGNED = 1
@@ -104,6 +114,8 @@ WWW_DOMAIN = b"ODWPSIG1"
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_KEY = Path.home() / ".config" / "opendmd" / "opendmd.key"
 DEFAULT_PUB = REPO / "firmware" / "keys" / "opendmd.pub"
+# The keys the firmware trusts, by id (opendmd_core::ota::RELEASE_KEYS).
+DEFAULT_PUBS = {0: DEFAULT_PUB, 1: REPO / "firmware" / "keys" / "opendmd-1.pub"}
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -135,6 +147,45 @@ def load_pub(path: Path) -> VerifyKey:
     if len(raw) != 32:
         die(f"{path} is {len(raw)} B, a public key is 32 B")
     return VerifyKey(raw)
+
+
+def load_pubs(specs: list[str] | None) -> dict[int, VerifyKey]:
+    """`--pub` arguments (`P` is key 0's, `ID=P` key ID's), or the committed set."""
+    if not specs:
+        return {i: load_pub(p) for i, p in DEFAULT_PUBS.items()}
+    out: dict[int, VerifyKey] = {}
+    for spec in specs:
+        sid, eq, path = spec.partition("=")
+        if eq and sid.isascii() and sid.isdigit():
+            kid = int(sid)
+        else:
+            kid, path = 0, spec
+        if not 0 <= kid <= 255:
+            die(f"--pub {spec}: a key id is 0..255")
+        if kid in out:
+            die(f"--pub {spec}: key {kid} given twice")
+        out[kid] = load_pub(Path(path))
+    return out
+
+
+def which_key(msg: bytes, sig: bytes, pubs: dict[int, VerifyKey], named: int, what: str, changed: str) -> int:
+    """Check `sig` with the key `named` (the trailer's id), as the firmware
+    does; the id that verified. A refusal says whether another key signed it."""
+    def ok(k: VerifyKey) -> bool:
+        try:
+            k.verify(msg, sig)
+            return True
+        except BadSignatureError:
+            return False
+    if named in pubs and ok(pubs[named]):
+        return named
+    other = next((i for i, k in pubs.items() if i != named and ok(k)), None)
+    if other is not None:
+        raise ValueError(f"signed by key {other}, but the {what} names key {named}")
+    if named not in pubs:
+        raise ValueError(f"the {what} names key {named}, not one of the keys checked against "
+                         f"({', '.join(map(str, sorted(pubs)))})")
+    raise ValueError(f"bad signature (wrong key, or the {changed} was changed)")
 
 
 def app_desc_version(image: bytes) -> str | None:
@@ -243,16 +294,18 @@ def cmd_sign(a: argparse.Namespace) -> None:
         die(f"{a.image}: {e}; refusing to sign it as {a.variant}")
     if key_id_of(image) is not None:
         die(f"{a.image} already ends with a key trailer: sign the app image itself")
-    image += key_trailer()
+    if not 0 <= a.key_id <= 255:
+        die(f"--key-id {a.key_id}: a key id is 0..255")
+    image += key_trailer(a.key_id)
     if len(image) > factory:
         die(f"{a.image} with its key trailer is {len(image)} B, the {a.variant} v{table} factory partition is {factory} B")
     header = build_header(a.version, image, load_key(Path(a.key).expanduser()), a.variant, table)
     Path(a.out).write_bytes(header + image)
-    print(f"{a.out}: {a.variant} layout v{table}, version {a.version!r}, key {KEY_ID}, image {len(image)} B "
+    print(f"{a.out}: {a.variant} layout v{table}, version {a.version!r}, key {a.key_id}, image {len(image)} B "
           f"(the app and a {KEY_TRAILER_LEN} B key trailer), sha256 {hashlib.sha256(image).hexdigest()}")
 
 
-def check(data: bytes, pub: VerifyKey) -> dict:
+def check(data: bytes, pubs: dict[int, VerifyKey]) -> dict:
     h = parse_header(data)
     image = data[HEADER_LEN:]
     if h["length"] != len(image):
@@ -263,14 +316,10 @@ def check(data: bytes, pub: VerifyKey) -> dict:
         raise ValueError("the image does not start with the ESP image magic 0xE9")
     if hashlib.sha256(image).digest() != h["sha256"]:
         raise ValueError("SHA-256 mismatch")
-    try:
-        pub.verify(h["signed"], h["sig"])
-    except BadSignatureError:
-        raise ValueError("bad signature (wrong key, or the header was changed)") from None
-    check_desc(image, h["variant"])
     kid = key_id_of(image)
-    if (kid or 0) != KEY_ID:
-        raise ValueError(f"the image names key {kid}, this tool's public key is key {KEY_ID}")
+    h["verified_by"] = which_key(h["signed"], h["sig"], pubs, kid or 0,
+                                 "image's key trailer" if kid is not None else "image (no key trailer)", "header")
+    check_desc(image, h["variant"])
     h["key_id"] = kid
     return h
 
@@ -278,12 +327,12 @@ def check(data: bytes, pub: VerifyKey) -> dict:
 def cmd_verify(a: argparse.Namespace) -> None:
     data = Path(a.bundle).read_bytes()
     try:
-        h = check(data, load_pub(Path(a.pub)))
+        h = check(data, load_pubs(a.pub))
     except ValueError as e:
         die(f"{a.bundle}: {e}")
-    kid = "none (a bundle from before key ids: key 0)" if h["key_id"] is None else h["key_id"]
+    kid = " (no key trailer: a bundle from before key ids)" if h["key_id"] is None else ""
     print(f"{a.bundle}: ok, {h['variant']} layout v{h['table']}{'' if CURRENT[h['variant']] == h['table'] else ' (an older table)'}, "
-          f"version {h['version']!r}, image {h['length']} B, key {kid}")
+          f"version {h['version']!r}, image {h['length']} B, verified by key {h['verified_by']}{kid}")
 
 
 def cmd_inspect(a: argparse.Namespace) -> None:
@@ -325,7 +374,7 @@ def www_sign(pack: bytes, key: SigningKey, key_id: int = KEY_ID) -> bytes:
     return bytes(data)
 
 
-def www_check(pack: bytes, pub: VerifyKey) -> dict:
+def www_check(pack: bytes, pubs: dict[int, VerifyKey]) -> dict:
     """As the firmware checks a PUT /api/www: the header, the CRC, the signature."""
     if len(pack) < 64 or pack[:4] != b"ODWP":
         raise ValueError("not a www pack")
@@ -339,34 +388,32 @@ def www_check(pack: bytes, pub: VerifyKey) -> dict:
     t = pack[-WWW_TRAILER_LEN:]
     if t[:4] != WWW_TRAILER_MAGIC or t[5:8] != b"\0\0\0":
         raise ValueError("not signed (no signature trailer)")
-    if t[4] != KEY_ID:
-        raise ValueError(f"signed with key {t[4]}, this tool's public key is key {KEY_ID}")
     body = bytearray(pack[:-WWW_TRAILER_LEN])
     body[12:16] = b"\0" * 4
+    # The id is signed too: key 1's signature under id 0 is no signature.
     msg = WWW_DOMAIN + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
-    try:
-        pub.verify(msg, t[8:])
-    except BadSignatureError:
-        raise ValueError("bad signature (wrong key, or the pack was changed)") from None
-    return {"version": pack[20:20 + pack[18]].decode("utf-8", "replace"), "key_id": t[4], "bytes": len(pack)}
+    kid = which_key(msg, t[8:], pubs, t[4], "pack", "pack")
+    return {"version": pack[20:20 + pack[18]].decode("utf-8", "replace"), "key_id": kid, "bytes": len(pack)}
 
 
 def cmd_sign_www(a: argparse.Namespace) -> None:
     pack = Path(a.pack).read_bytes()
     try:
-        out = www_sign(pack, load_key(Path(a.key).expanduser()))
+        if not 0 <= a.key_id <= 255:
+            raise ValueError(f"--key-id {a.key_id}: a key id is 0..255")
+        out = www_sign(pack, load_key(Path(a.key).expanduser()), a.key_id)
     except ValueError as e:
         die(f"{a.pack}: {e}")
     Path(a.out).write_bytes(out)
-    print(f"{a.out}: www pack '{out[20:20 + out[18]].decode()}', signed with key {KEY_ID}, {len(out)} B")
+    print(f"{a.out}: www pack '{out[20:20 + out[18]].decode()}', signed with key {a.key_id}, {len(out)} B")
 
 
 def cmd_verify_www(a: argparse.Namespace) -> None:
     try:
-        h = www_check(Path(a.pack).read_bytes(), load_pub(Path(a.pub)))
+        h = www_check(Path(a.pack).read_bytes(), load_pubs(a.pub))
     except ValueError as e:
         die(f"{a.pack}: {e}")
-    print(f"{a.pack}: ok, www pack '{h['version']}', key {h['key_id']}, {h['bytes']} B")
+    print(f"{a.pack}: ok, www pack '{h['version']}', verified by key {h['key_id']}, {h['bytes']} B")
 
 
 def fake_image(variant: str) -> bytes:
@@ -380,9 +427,10 @@ def fake_image(variant: str) -> bytes:
 
 def cmd_selftest(_a: argparse.Namespace) -> None:
     sk = SigningKey.generate()
+    trust = {0: sk.verify_key}
     image = fake_image("4mb") + key_trailer()
     bundle = build_header("9.9.9-selftest", image, sk) + image
-    check(bundle, sk.verify_key)
+    check(bundle, trust)
     cases = {
         "magic": 0, "version": 8, "length": 40, "sha256": 50, "sig": 100, "image": HEADER_LEN + 10,
     }
@@ -390,40 +438,61 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
         b = bytearray(bundle)
         b[at] ^= 0x01
         try:
-            check(bytes(b), sk.verify_key)
+            check(bytes(b), trust)
         except ValueError as e:
             print(f"tampered {name:8} -> refused: {e}")
         else:
             die(f"a bundle with its {name} tampered verified")
     try:
-        check(bundle, SigningKey.generate().verify_key)
+        check(bundle, {0: SigningKey.generate().verify_key})
     except ValueError as e:
         print(f"wrong key        -> refused: {e}")
     else:
         die("a bundle verified under the wrong key")
     try:
-        check(bundle[:-1], sk.verify_key)
+        check(bundle[:-1], trust)
     except ValueError as e:
         print(f"cut short        -> refused: {e}")
     else:
         die("a cut-short bundle verified")
     # A bundle from before key ids (no trailer) is key 0's.
     legacy = fake_image("4mb")
-    if check(build_header("9.9.9-selftest", legacy, sk) + legacy, sk.verify_key)["key_id"] is not None:
+    if check(build_header("9.9.9-selftest", legacy, sk) + legacy, trust)["key_id"] is not None:
         die("a bundle with no key trailer read a key id")
     print("no key trailer   -> ok (key 0)")
     other = fake_image("4mb") + key_trailer(1)
     try:
-        check(build_header("9.9.9-selftest", other, sk) + other, sk.verify_key)
+        check(build_header("9.9.9-selftest", other, sk) + other, trust)
     except ValueError as e:
         print(f"key id 1         -> refused: {e}")
     else:
         die("a bundle naming key 1 verified as key 0's")
-    if (h := check(bundle, sk.verify_key))["table"] != CURRENT["4mb"] or bundle[:8] != b"ODFW44mb":
+    # The backup key (key 1): with both trusted, its bundle and pack verify
+    # as key 1's, key 0's still as key 0's; one key's signature under the
+    # other's id is refused both ways; with key 0 alone, key 1's is refused.
+    sk1 = SigningKey.generate()
+    both = {0: sk.verify_key, 1: sk1.verify_key}
+    if check(bundle, both)["verified_by"] != 0:
+        die("a key 0 bundle did not verify as key 0's with both keys trusted")
+    b1 = build_header("9.9.9-selftest", other, sk1) + other
+    if check(b1, both)["verified_by"] != 1:
+        die("a key 1 bundle did not verify as key 1's")
+    print("key 1 (backup)   -> ok (key 1)")
+    for name, b in (("key 1 as id 0", build_header("9.9.9-selftest", image, sk1) + image),
+                    ("key 0 as id 1", build_header("9.9.9-selftest", other, sk) + other),
+                    ("key 1, no trailer", build_header("9.9.9-selftest", legacy, sk1) + legacy),
+                    ("key 1, 0 alone", b1)):
+        try:
+            check(b, both if name != "key 1, 0 alone" else trust)
+        except ValueError as e:
+            print(f"{name:16} -> refused: {e}")
+        else:
+            die(f"a bundle {name} verified")
+    if (h := check(bundle, trust))["table"] != CURRENT["4mb"] or bundle[:8] != b"ODFW44mb":
         die(f"a 4mb bundle is not for the current table: {h['table']}, {bundle[:8]!r}")
     for t, m in ((3, b"ODFW34mb"), (2, b"ODFW1\0\0\0")):
         old = build_header("9.9.9-selftest", image, sk, "4mb", t) + image
-        if (h := check(old, sk.verify_key))["table"] != t or old[:8] != m:
+        if (h := check(old, trust))["table"] != t or old[:8] != m:
             die(f"a 4mb v{t} bundle did not read back as v{t}")
     print("4mb v4, v3, v2   -> ok")
     # The layout is signed: a v4 bundle relabelled v3 or v2 fails; one
@@ -433,7 +502,7 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
     for name, b in (("4mb v4 as v3", m43 + bundle[8:]), ("4mb v4 as v2", m42 + bundle[8:]),
                     ("4mb as ODFW18mb", b"ODFW18mb" + bundle[8:])):
         try:
-            check(b, sk.verify_key)
+            check(b, trust)
         except ValueError as e:
             print(f"{name:16} -> refused: {e}")
         else:
@@ -442,7 +511,7 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
     image8 = fake_image("8mb")
     mixed = build_header("9.9.9-selftest", image8, sk) + image8
     try:
-        check(mixed, sk.verify_key)
+        check(mixed, trust)
     except ValueError as e:
         print(f"8mb image, 4mb   -> refused: {e}")
     else:
@@ -456,22 +525,34 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
     pack[20:24] = b"v9.9"
     struct.pack_into("<I", pack, 12, zlib.crc32(b""))
     signed = www_sign(bytes(pack), sk)
-    www_check(signed, sk.verify_key)
+    www_check(signed, trust)
     if www_sign(signed, sk) != signed:
         die("signing a signed pack again changed it")
     print("www round trip   -> ok")
+    if www_check(www_sign(bytes(pack), sk1, 1), both)["key_id"] != 1 or www_check(signed, both)["key_id"] != 0:
+        die("a www pack did not verify as the key that signed it")
+    print("www key 1        -> ok (key 1)")
+    for name, w, keys in (("www key 1 as 0", www_sign(bytes(pack), sk1, 0), both),
+                          ("www key 0 as 1", www_sign(bytes(pack), sk, 1), both),
+                          ("www key 1, 0 only", www_sign(bytes(pack), sk1, 1), trust)):
+        try:
+            www_check(w, keys)
+        except ValueError as e:
+            print(f"{name:16} -> refused: {e}")
+        else:
+            die(f"a www pack {name} verified")
     for name, at in {"version": 20, "flag": 19, "trailer": len(signed) - 70, "sig": len(signed) - 1}.items():
         b = bytearray(signed)
         b[at] ^= 0x01
         struct.pack_into("<I", b, 12, zlib.crc32(bytes(b[64:])))  # a CRC that matches: only the signature can tell
         try:
-            www_check(bytes(b), sk.verify_key)
+            www_check(bytes(b), trust)
         except ValueError as e:
             print(f"www {name:12} -> refused: {e}")
         else:
             die(f"a www pack with its {name} tampered verified")
     try:
-        www_check(bytes(pack), sk.verify_key)
+        www_check(bytes(pack), trust)
     except ValueError as e:
         print(f"www unsigned     -> refused: {e}")
     else:
@@ -494,18 +575,23 @@ def main() -> None:
                    help="the variant's partition table version (default: the current one; an older one for test bundles)")
     s.add_argument("--out", required=True)
     s.add_argument("--key", default=str(DEFAULT_KEY))
+    s.add_argument("--key-id", type=int, default=KEY_ID,
+                   help=f"the id the key trailer names (default {KEY_ID}; another only for a rotation, docs/ota.md)")
+    pub_help = "a public key to check against, ID=P for key ID (repeatable; default: the committed keys 0 and 1)"
     v = sub.add_parser("verify", help="check a bundle as the device does")
     v.add_argument("bundle")
-    v.add_argument("--pub", default=str(DEFAULT_PUB))
+    v.add_argument("--pub", action="append", help=pub_help)
     i = sub.add_parser("inspect", help="print a bundle's header")
     i.add_argument("bundle")
     sw = sub.add_parser("sign-www", help="www pack -> signed www pack")
     sw.add_argument("pack")
     sw.add_argument("--out", required=True)
     sw.add_argument("--key", default=str(DEFAULT_KEY))
+    sw.add_argument("--key-id", type=int, default=KEY_ID,
+                    help=f"the id the trailer names (default {KEY_ID}; another only for a rotation, docs/ota.md)")
     vw = sub.add_parser("verify-www", help="check a www pack as the device does")
     vw.add_argument("pack")
-    vw.add_argument("--pub", default=str(DEFAULT_PUB))
+    vw.add_argument("--pub", action="append", help=pub_help)
     sub.add_parser("selftest", help="round trip and tamper checks with a throwaway key")
     a = p.parse_args()
     {"keygen": cmd_keygen, "sign": cmd_sign, "verify": cmd_verify, "inspect": cmd_inspect,
