@@ -740,7 +740,7 @@ drag-and-drop source, which is how it should appear in the Studio.
 ## 6. Animated GIFs in the Studio (2026-09-30)
 
 The problem: uploading a GIF in Make art showed a still frame, and an
-animated GIF should be editable. What landed (`opendmd-art-web/src/anim.rs`,
+animated GIF should be editable. What landed (`opendmd-art/src/anim.rs`,
 `pipeline.rs`'s `stage_frame` / `Overlay` / `sequence`, `www/js/studio.js`):
 
 - **Import.** Any GIF with two or more image descriptors (`gifFrames`: a
@@ -752,7 +752,8 @@ animated GIF should be editable. What landed (`opendmd-art-web/src/anim.rs`,
   picture. Decoding runs in ~12 ms slices with a progress line.
 - **Memory.** A nearest-neighbour upscale found on frame 0 is undone as the
   frames come in (lossless). Frames are kept as RGB; if they would take
-  more than 64 MB, each side is divided by the smallest whole number that
+  more than 64 MB (the web app's budget; a native caller passes its own to
+  `Anim::open_with_budget`), each side is divided by the smallest whole number that
   fits, area-averaged, and the Studio says "working at W × H (1/f size) to
   fit in memory". At most 5,000 frames are kept. A 300-frame 256x224 GIF
   is 51.6 MB and kept whole; a 700x700 × 50 one is worked at 350x350.

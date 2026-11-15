@@ -84,7 +84,8 @@ layout, recovery and the update flow in detail.
 | `opendmd-render` | The LED-panel renderer used by the simulator and the web app |
 | `opendmd-sim` | The desktop simulator |
 | `opendmd-web` | The web app: wasm module plus hand-written HTML, CSS and JS in `www/` |
-| `opendmd-art-web` | Create Art's image processing and GIF writer, loaded on demand |
+| `opendmd-art` | Create Art's pipeline: any picture or GIF in, a 128x32 GIF out. No browser types |
+| `opendmd-art-web` | The wasm module over `opendmd-art` (and the prepared copy, Smooth motion, tags) that the web app loads on demand |
 | `opendmd-pack` | Prepares a card's GIFs for playback, offline |
 | `opendmd-psi` | Psi, the Formula language: its compiler and VM (`no_std`), shared by the firmware, the simulator and the browser |
 | `opendmd-psi-cli` | `psi`, Formulas from the command line: `psi check` and `psi fmt` (`make psi` installs it) |

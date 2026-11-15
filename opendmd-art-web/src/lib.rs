@@ -2,9 +2,9 @@
 //!
 //! A second wasm module, separate from `opendmd-web` and loaded only when
 //! the Studio opens (`www/pkg-art/`), so the app everyone loads does not
-//! grow. The split is the web crate's: [`pipeline`] and [`encode`] hold no
-//! browser types and are tested natively and under node; this file only
-//! converts. Parsing the saved name is the main module's `parsePath`.
+//! grow. The pixel work is the `opendmd-art` crate's ([`pipeline`],
+//! [`anim`], [`encode`], re-exported here; no browser types, tested
+//! natively and under node); this file only converts. Parsing the saved name is the main module's `parsePath`.
 //!
 //! It also carries [`prepare_gif`] (`prepareGif`), the prepared copy of any
 //! GIF — the core's recoder, byte-identical to `opendmd-pack` and the
@@ -17,15 +17,11 @@
 //! And the user's tags and stars, the search and smart playlists' lists
 //! ([`tags`]).
 
-pub mod anim;
-pub mod encode;
-pub mod pipeline;
+pub use opendmd_art::{anim, encode, pipeline};
 pub mod tags;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_anim;
 
 use anim::Anim;
 use pipeline::{Colours, Edit, Fit, Image, Motion, Overlay, Plan, Scale};

@@ -10,7 +10,8 @@
 //! Memory: the frames are kept as RGB, 3 bytes a pixel. A nearest-neighbour
 //! upscale found on the first frame ([`pipeline::native_scale`]) is undone
 //! on the way in, losing nothing. If the frames would still take more than
-//! [`BUDGET`], each side is divided by the smallest whole number that fits
+//! the budget ([`BUDGET`], the web app's, unless the caller passes its own
+//! to [`Anim::open_with_budget`] or [`Anim::video_with_budget`]), each side is divided by the smallest whole number that fits
 //! (area-averaged, [`pipeline::resize_area`]) and [`Anim::reduce`] says by
 //! what. At most [`MAX_FRAMES`] frames are kept. A rendered frame is its
 //! own palette (≤ 256) and 4 KB of indices.
@@ -22,7 +23,9 @@ use opendmd_core::player::GifSource;
 use std::collections::HashMap;
 use std::io::{self, Cursor};
 
-/// The most the source frames may take, in bytes (RGB).
+/// The most the source frames may take, in bytes (RGB), by default: the web
+/// app's. A caller with less memory (an iPhone share extension) passes its
+/// own to [`Anim::open_with_budget`] / [`Anim::video_with_budget`].
 pub const BUDGET: usize = 64 << 20;
 /// Frames past this are not kept.
 pub const MAX_FRAMES: usize = 5_000;
@@ -131,7 +134,7 @@ pub struct Anim {
     pub in_file: usize,
     /// The upscale undone on import (k = 1: none).
     pub scale: Scale,
-    /// The further reduction to fit [`BUDGET`] (1: none).
+    /// The further reduction to fit the budget (1: none).
     pub reduce: usize,
     /// The working size of every frame.
     pub w: usize,
@@ -161,8 +164,13 @@ pub struct Anim {
 
 impl Anim {
     /// Read the header and the first frame; the rest come from
-    /// [`decode`](Self::decode).
+    /// [`decode`](Self::decode). The frames are kept within [`BUDGET`].
     pub fn open(bytes: Vec<u8>) -> io::Result<Anim> {
+        Anim::open_with_budget(bytes, BUDGET)
+    }
+
+    /// [`open`](Self::open), the frames kept within `budget` bytes (RGB).
+    pub fn open_with_budget(bytes: Vec<u8>, budget: usize) -> io::Result<Anim> {
         let in_file = scan_frames(&bytes);
         let mut src = GifSource::new(Cursor::new(bytes))?;
         let mut canvas = Canvas::new();
@@ -180,7 +188,7 @@ impl Anim {
         let mut reduce = 1;
         // u64: on wasm32 5,000 frames of 2048x2048 overflow a usize.
         let bytes = |f: usize| keep as u64 * (nw / f).max(1) as u64 * (nh / f).max(1) as u64 * 3;
-        while reduce < nw.max(nh) && bytes(reduce) > BUDGET as u64 {
+        while reduce < nw.max(nh) && bytes(reduce) > budget as u64 {
             reduce += 1;
         }
         let (w, h) = ((nw / reduce).max(1), (nh / reduce).max(1));
@@ -240,7 +248,20 @@ impl Anim {
     /// a video of `ow` x `oh`, each with its own delay; `first` now, the
     /// rest by [`push_delay`](Self::push_delay), then [`end`](Self::end).
     pub fn video(first: &[u8], w: usize, h: usize, ow: usize, oh: usize, delay_ms: u32) -> Option<Anim> {
-        let most = (BUDGET / (w * h * 3).max(1)).min(MAX_FRAMES);
+        Anim::video_with_budget(first, w, h, ow, oh, delay_ms, BUDGET)
+    }
+
+    /// [`video`](Self::video), as many frames kept as fit `budget` bytes.
+    pub fn video_with_budget(
+        first: &[u8],
+        w: usize,
+        h: usize,
+        ow: usize,
+        oh: usize,
+        delay_ms: u32,
+        budget: usize,
+    ) -> Option<Anim> {
+        let most = (budget / (w * h * 3).max(1)).min(MAX_FRAMES);
         if w == 0 || h == 0 || first.len() != w * h * 3 || most == 0 {
             return None;
         }

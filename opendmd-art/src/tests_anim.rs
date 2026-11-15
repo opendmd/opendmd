@@ -313,6 +313,29 @@ fn import_undoes_an_upscale_and_fits_the_memory_budget() {
     assert!(a.len() * a.w * a.h * 3 <= BUDGET);
 }
 
+/// A caller's own budget (an iPhone share extension's is smaller): the same
+/// GIF reduced further, and a video holding fewer frames.
+#[test]
+fn a_smaller_budget_reduces_further() {
+    let (w, h) = (700u16, 700u16);
+    let mut frames = vec![full(w, h, 2, 4)];
+    frames.extend((1..50).map(|i| F {
+        rect: (i, i, 1, 1),
+        px: vec![4],
+        delay: 4,
+        dispose: DisposalMethod::Keep,
+    }));
+    let bytes = gif(w, h, &frames, None);
+    let budget = 8 << 20;
+    let mut a = Anim::open_with_budget(bytes.clone(), budget).unwrap();
+    while !a.decode(7) {}
+    assert_eq!((a.reduce, a.w, a.h, a.len()), (3, 233, 233, 50));
+    assert!(a.len() * a.w * a.h * 3 <= budget);
+    assert_eq!(open_all(bytes).reduce, 2, "the default budget: halved");
+    let v = Anim::video_with_budget(&vec![0; 1024 * 1024 * 3], 1024, 1024, 1024, 1024, 50, 24 << 20).unwrap();
+    assert_eq!(v.in_file, 8);
+}
+
 /// Four black frames at the panel's size.
 fn black4() -> Anim {
     let fr = |d| full(W as u16, H as u16, 0, d);
@@ -523,3 +546,112 @@ fn video_frames_keep_their_size_and_delays() {
     let big = Anim::video(&vec![0; 1024 * 1024 * 3], 1024, 1024, 1024, 1024, 50).unwrap();
     assert_eq!(big.in_file, BUDGET / (1024 * 1024 * 3));
 }
+
+// --- Saved bytes, pinned ----------------------------------------------------
+
+/// FNV-1a 64: a fingerprint of bytes, the same on every platform.
+fn fnv64(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| {
+        (h ^ x as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// Saved GIFs from a few sources, pinned by length and fingerprint: an
+/// upscaled GIF (undone), one past the memory budget (reduced, smooth fit,
+/// keyed, a gain, a colour cap, text), a Formula's panel frames, and a
+/// still's scroll through `encode`. Natively and under node; a change here
+/// is a change in what Create Art saves.
+#[test]
+fn saved_gifs_are_pinned() {
+    let mut got = Vec::new();
+    let print = |b: Vec<u8>| (b.len(), fnv64(&b));
+    let save = |a: &mut Anim, e: Option<Edit>, plays: u32| {
+        let seq = a.sequence(&e.unwrap_or_else(|| edit(a.len())));
+        a.save_begin(seq, plays);
+        while !a.save_step(7) {}
+        print(a.saved())
+    };
+    // A 2x upscale of 64x32 art, pingponged at 150 %.
+    let small: Vec<u8> = (0..64 * 32u32)
+        .map(|i| ((i % 64 / 3 + i / 64 / 5 + (i % 64) * (i / 64) % 7) % 6) as u8)
+        .collect();
+    let big: Vec<u8> = (0..64 * 128)
+        .map(|i| small[(i / 128 / 2) * 64 + (i % 128) / 2])
+        .collect();
+    let frames: Vec<F> = (0..4u16)
+        .map(|k| F {
+            rect: (0, 0, 128, 64),
+            px: big.iter().map(|&p| (p + k as u8) % 6).collect(),
+            delay: 3 + k,
+            dispose: DisposalMethod::Keep,
+        })
+        .collect();
+    let mut a = open_all(gif(128, 64, &frames, Some(Repeat::Finite(2))));
+    a.configure(Fit::Pixels, false, 0, 0, false, 100, Colours::Auto);
+    got.push(save(&mut a, None, 0));
+    a.configure(Fit::Half, true, 3, 1, false, 100, Colours::Auto);
+    let mut e = edit(a.len());
+    e.speed = 150;
+    e.pingpong = true;
+    got.push(save(&mut a, Some(e), 2));
+    // 700x700 x 50: past the budget, halved.
+    let (w, h) = (700u16, 700u16);
+    let noise: Vec<u8> = (0..w as usize * h as usize)
+        .map(|i| ((i as u32).wrapping_mul(2_654_435_761) >> 7) as u8 % 6)
+        .collect();
+    let mut frames = vec![F {
+        rect: (0, 0, w, h),
+        px: noise,
+        delay: 4,
+        dispose: DisposalMethod::Keep,
+    }];
+    frames.extend((1..50).map(|i| F {
+        rect: (i * 7, i * 5, 40, 30),
+        px: vec![(i % 5) as u8 + 1; 1200],
+        delay: 4,
+        dispose: DisposalMethod::Keep,
+    }));
+    let mut a = open_all(gif(w, h, &frames, None));
+    assert_eq!(a.reduce, 2);
+    a.configure(Fit::Smooth, false, 40, 0, true, 130, Colours::Max(16));
+    a.set_text(Some(Overlay {
+        msg: "HI 42".into(),
+        small: true,
+        colour: 0xffb000,
+        anchor: 4,
+        dx: 1,
+        dy: -2,
+        from: 5,
+        to: 30,
+    }));
+    got.push(save(&mut a, None, 3));
+    // A Formula's frames.
+    let mut a = panel_all();
+    a.configure(Fit::Pixels, false, 0, 0, false, 100, Colours::Auto);
+    got.push(save(&mut a, None, 0));
+    // A still: a stage scrolled and encoded.
+    let mut art = Image::new(200, 48);
+    for (i, p) in art.px.iter_mut().enumerate() {
+        let (x, y) = (i % 200, i / 200);
+        let c = PALETTE[(x / 5 + y / 3 + x * y % 11) % 6];
+        *p = [c[0], c[1], c[2], 255];
+    }
+    let st = flatten_pad(&art);
+    let anim = render(
+        &st,
+        &Plan {
+            motion: Motion::Scroll,
+            ..Plan::default()
+        },
+    );
+    got.push(print(crate::encode::encode(&anim)));
+    assert_eq!(got, PINNED, "{got:#x?}");
+}
+
+const PINNED: [(usize, u64); 5] = [
+    (3416, 0xc3ba_8826_86a7_c061),
+    (1807, 0x6f58_84f4_67ca_5fd8),
+    (16413, 0x37ed_84a7_4da1_7435),
+    (10959, 0xe1ab_aeb3_6229_a226),
+    (23241, 0x73e8_a677_91da_9d18),
+];

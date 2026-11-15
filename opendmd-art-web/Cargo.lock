@@ -168,11 +168,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "opendmd-art"
+version = "1.1.0-beta.2"
+dependencies = [
+ "gif",
+ "opendmd-core",
+]
+
+[[package]]
 name = "opendmd-art-web"
 version = "1.1.0-beta.2"
 dependencies = [
  "gif",
  "js-sys",
+ "opendmd-art",
  "opendmd-core",
  "wasm-bindgen",
  "wasm-bindgen-test",
