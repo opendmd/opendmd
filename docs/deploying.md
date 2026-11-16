@@ -491,6 +491,14 @@ Releases are `X.Y.Z` (final) or `X.Y.Z-beta.N` (a beta of the next
 `semver_key` and `release.sh`'s `semver_cmp` agree, and are tested on
 that order).
 
+A beta's firmware also carries features still on trial: `make
+fw-release` adds the Makefile's `FW_BETA_FEATURES` (now `connect`,
+Remote control, its setting off until the user switches it on:
+`docs/guide/remote.md`) to every build of a `-beta.N` version, the
+release workflow's and CI's included, and checks the app image for it; a
+final's build has none of them (`FW_BETA_FEATURES=` builds a beta
+without). The release workflow checks the published app both ways too.
+
 The site publishes two feeds of the same shape (`docs/ota.md` "Check for
 updates"):
 
