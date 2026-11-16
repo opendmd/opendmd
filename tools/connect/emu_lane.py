@@ -437,7 +437,9 @@ class Lane:
             self.expect(code == 200 and not any(x.get("k") == b.k.hex() for x in info.get("controllers", [])), "DELETE /api/connect/controllers/<B>", f"{code}")
             await self.panel_says("keys after the LAN removal", "keys", mark)
             closed = await b.closed(timeout=30)
-            self.expect(closed == odc.CLOSE_REFUSED, "the server closed B's socket (4403)", f"{closed}")
+            # (The mock closes it 4403; a client that was not reading may
+            # see the end as 1006. What matters: the server dropped B.)
+            self.expect(closed is not None and b.k not in self.rec().ctls.values(), "the server closed B's socket", f"close code {closed}")
             got = await self.injected_ack("B's frame after its removal", odc.sign_command(b.sk, odc.command_body(dev, a.sess, 99, "pause")), b.k)
             self.expect(got.get("err") == "unknown-key", "red: a removed key: unknown-key", json.dumps(got))
             code, _ = await self.http("DELETE", f"/api/connect/controllers/{b.k.hex()}")
