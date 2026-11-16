@@ -1315,9 +1315,13 @@ def connect_summary(cx: dict) -> dict:
     if p and (now >= p["until"]):
         cx["pairing"] = p = None
     on = cx["enabled"]
-    return {"enabled": on, "registered": cx["registered"], "state": "open" if on else "off", "since_s": int(now - cx["since"]),
+    # `/mock/connect?state=…&waiting=…` stands in for the panel's own
+    # (`waiting` only with "waiting for memory", as the firmware says it).
+    state = (cx.get("state") or "open") if on else "off"
+    waiting = cx.get("waiting") if state == "waiting for memory" else None
+    return {"enabled": on, "registered": cx["registered"], "state": state, "since_s": int(now - cx["since"]),
             "opened": cx["opened"], "reconnects": 0, "resumed": 0, "handshake_ms": 900 if cx["opened"] else None,
-            "refused": False, "too_old": False, "watched": False, "last_error": None, "last_error_s": 0, "waiting": None}
+            "refused": False, "too_old": False, "watched": False, "last_error": None, "last_error_s": 0, "waiting": waiting}
 
 
 def connect_json(cx: dict) -> dict:
@@ -3643,7 +3647,9 @@ def make_handler(ctx: Context, quiet: bool):
             """--connect's test hooks: `online=0|1` (the panel connected to
             the server), `dark=0|1` (night mode), `slow_get=<ms>` (GET
             /api/connect answers that late), `link=1` (a device pairs: the
-            window used, a controller added)."""
+            window used, a controller added), `state=<s>` and
+            `waiting=<text>` (the panel's state while on; `state=` alone:
+            open again)."""
             q = self.path.partition("?")[2]
             with ctx.lock:
                 cx = ctx.connect
@@ -3654,10 +3660,14 @@ def make_handler(ctx: Context, quiet: bool):
                     v = query_param(q, key)
                     if v is not None:
                         cx[key] = int(v)
+                for key in ("state", "waiting"):
+                    v = query_param(q, key)
+                    if v is not None:
+                        cx[key] = v or None
                 if query_param(q, "link") == "1":
                     cx["pairing"] = None
                     cx["controllers"].append({"k": "%016x" % random.getrandbits(64), "label": "New phone", "f": 1, "added": int(time.time()), "added_by": None, "last_s": None})
-                self.send_json(200, {k: cx.get(k) for k in ("online", "dark", "slow_get", "in_flight")})
+                self.send_json(200, {k: cx.get(k) for k in ("online", "dark", "slow_get", "in_flight", "state", "waiting")})
 
         def h_mock_io(self, path):
             _, _, query = self.path.partition("?")
