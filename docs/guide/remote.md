@@ -3,13 +3,16 @@
 Remote control lets you use your display from a phone or computer that
 isn't on your home WiFi: on mobile data, at work, anywhere. You can see
 what's playing, skip, go back, pause, change the brightness, pick a
-playlist or a Formula, and send a GIF you made in the
-[Studio](https://opendmd.dev/studio/) or
-[Create Art](https://opendmd.dev/create/). You don't need an account.
+playlist or a Formula, and, on a board that supports it, send a GIF you
+made in the [Studio](https://opendmd.dev/studio/) or
+[Create Art](https://opendmd.dev/create/). (On the standard board, sending
+GIFs is off for now: see [Send a GIF](#send-a-gif).) You don't need an
+account.
 
 Remote control is new, and it's in the beta versions only for now (see
 [Beta updates](updating.md#beta-updates)). It is **off** until you switch it
-on. While it's off, nothing about your display leaves your home network.
+on. While it's off, the display doesn't contact the Remote control relay at
+all.
 
 ## How it works
 
@@ -123,7 +126,8 @@ Remote control picks up again by itself when the display is back.
 
 ## Send a GIF
 
-In the [Studio](https://opendmd.dev/studio/) or
+Only on a board that supports it: on the standard board, sending GIFs is
+off for now (see below). On a board that supports it, in the [Studio](https://opendmd.dev/studio/) or
 [Create Art](https://opendmd.dev/create/), on a linked device:
 
 <!-- site:steps -->
@@ -136,8 +140,11 @@ In the [Studio](https://opendmd.dev/studio/) or
 
 The GIF goes into the **Sent** folder on the display's SD card. It isn't
 added to a playlist, so add it to one from the web app at home if you want
-to keep it in rotation. A GIF can be up to 512 KB, and a display takes up
-to 8 MB of sent GIFs a day. The display needs its SD card in. If someone at
+to keep it in rotation. A GIF can be up to 512 KB. A display takes about
+8 MB of sent GIFs a day, counting the prepared copy that goes with each one
+(each send counts as at least 64 KB; the count starts again if the display
+restarts), and no more than 60 sends a day. The display needs its SD card
+in. If someone at
 home is uploading to the display at that moment, the send waits for them.
 
 **On the standard board, sending GIFs is off for now.** Every DMDoS
@@ -176,12 +183,16 @@ devices for when you switch it back on.
 - **GIFs are relayed, never stored.** A GIF you send passes through the
   relay on its way and goes only to your display's SD card.
 - **What the relay keeps**: your display's identity (a random code and a
-  check of its password, never the password itself), the keys and names of
-  the devices you linked, the name you gave the display, and how much it
-  received today, for the daily limit. Nothing else.
-- **What it sees on the way**, and doesn't keep: the address your display
-  connects from, its firmware version, and the messages it passes, such as
-  the title of what's playing and your playlists' names.
+  check of its password, never the password itself) and when it first
+  registered; the public keys of the devices you linked (their names stay
+  on the display, and the relay only passes them on); the name you gave the
+  display; and, for today's limit, how much it received and a fingerprint
+  of each GIF sent, cleared the next day.
+- **What it sees on the way**, and doesn't keep: the addresses your display
+  and your phone connect from (part of each address is used for a moment
+  to limit how often anyone can connect), the display's firmware version,
+  and the messages it passes, such as the title of what's playing, your
+  playlists' names and your devices' names.
 - **What it never gets**: your WiFi details, your API key, your RePlayOS
   code, your location, or any other file on your card.
 - Nothing is logged and there are no analytics. The relay runs on

@@ -21,7 +21,6 @@
 //!   any it does not need.
 //! - [`civil_to_unix`]: an X.509 time against the build date (the clock
 //!   floor before SNTP, CONNECT.md 9.4).
-//! - [`ed25519_vector`] (with `ota`): M9's fixed signature check.
 //!
 //! Nothing here allocates per frame beyond what a caller hands it.
 
@@ -742,45 +741,6 @@ pub fn civil_to_unix(year: i64, mon: u32, day: u32, hour: u32, min: u32, sec: u3
     days * 86_400 + i64::from(hour) * 3600 + i64::from(min) * 60 + i64::from(sec)
 }
 
-// --- M9 ----------------------------------------------------------------------
-
-/// M9's message: 300 bytes of [`Payload`] from this seed (a command's size,
-/// CONNECT.md 4.3).
-pub const ED25519_MSG_SEED: u32 = 0x5EED_0009;
-pub const ED25519_MSG_LEN: usize = 300;
-/// The vector's public key and signature (made on the host from a fixed
-/// test seed: `tests::make_ed25519_vector`).
-pub const ED25519_PUBLIC: [u8; 32] = [
-    0x21, 0x52, 0xf8, 0xd1, 0x9b, 0x79, 0x1d, 0x24, 0x45, 0x32, 0x42, 0xe1, 0x5f, 0x2e, 0xab, 0x6c,
-    0xb7, 0xcf, 0xfa, 0x7b, 0x6a, 0x5e, 0xd3, 0x00, 0x97, 0x96, 0x0e, 0x06, 0x98, 0x81, 0xdb, 0x12,
-];
-pub const ED25519_SIG: [u8; 64] = [
-    0x38, 0xdb, 0x3d, 0xe6, 0x70, 0x18, 0x2f, 0x19, 0x79, 0xd3, 0x3c, 0xf6, 0x1b, 0x52, 0x91, 0x56,
-    0xbe, 0xad, 0xb4, 0x51, 0x3a, 0xf9, 0x6b, 0x61, 0xed, 0x0c, 0x96, 0xe3, 0x7a, 0x93, 0xb0, 0x8a,
-    0x93, 0x68, 0x4c, 0xae, 0x1b, 0x35, 0xa7, 0x83, 0xc8, 0x06, 0x89, 0x74, 0x47, 0x9f, 0x9d, 0xcf,
-    0xc1, 0x5a, 0x6a, 0x88, 0x85, 0xec, 0x23, 0xe1, 0x62, 0xef, 0xee, 0xa0, 0x83, 0x0a, 0x88, 0x0e,
-];
-
-/// M9's message.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn ed25519_msg() -> [u8; ED25519_MSG_LEN] {
-    let mut p = Payload::new(ED25519_MSG_SEED);
-    std::array::from_fn(|_| p.next_byte())
-}
-
-/// Verify M9's fixed vector the way an update bundle is checked
-/// (`verify_strict`). `msg` from [`ed25519_msg`] (made once, outside the
-/// timing).
-#[cfg(feature = "ota")]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn ed25519_vector(msg: &[u8]) -> bool {
-    use ed25519_dalek::{Signature, VerifyingKey};
-    let Ok(key) = VerifyingKey::from_bytes(&ED25519_PUBLIC) else {
-        return false;
-    };
-    key.verify_strict(msg, &Signature::from_bytes(&ED25519_SIG)).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1143,29 +1103,5 @@ mod tests {
             n += 1;
         }
         assert!(n >= 3, "{n} roots in {}", dir.display());
-    }
-
-    #[cfg(feature = "ota")]
-    #[test]
-    fn ed25519_vector_verifies_and_rejects() {
-        let msg = ed25519_msg();
-        assert!(ed25519_vector(&msg));
-        let mut bad = msg;
-        bad[0] ^= 1;
-        assert!(!ed25519_vector(&bad));
-    }
-
-    /// How [`ED25519_PUBLIC`] and [`ED25519_SIG`] were made (a fixed test
-    /// seed, not a secret): `cargo test --features ota,connect make_ed25519 -- --ignored --nocapture`.
-    #[cfg(feature = "ota")]
-    #[test]
-    #[ignore]
-    fn make_ed25519_vector() {
-        use ed25519_dalek::{Signer, SigningKey};
-        let key = SigningKey::from_bytes(&[0x42; 32]);
-        let sig = key.sign(&ed25519_msg());
-        let hex = |b: &[u8]| b.iter().map(|x| format!("0x{x:02x}, ")).collect::<String>();
-        println!("public: {}", hex(&key.verifying_key().to_bytes()));
-        println!("sig: {}", hex(&sig.to_bytes()));
     }
 }

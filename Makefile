@@ -865,7 +865,8 @@ fw-clean:
 # The version comes from firmware/Cargo.toml and is also written into the app
 # descriptor as "<version> <var>" (checked below at offset 0x30 of the image).
 # See docs/deploying.md.
-FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+FW_CARGO_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+FW_VERSION := $(FW_CARGO_VERSION)
 # Beta builds ship Remote control (OpenDMD Connect, the `connect` feature;
 # opendmd-notes P1-PLAN 9, F5): every fw-release build of a "-" version
 # (1.1.0-beta.N), the release workflow's and CI's included, adds
@@ -875,11 +876,15 @@ FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | h
 # (then it moves into the release set for good). A beta's files and app
 # descriptor keep the plain version and it builds into dist/ like any
 # release. `FW_BETA_FEATURES=` on the command line builds a beta without
-# it (a measurement's baseline). The release recipe checks the image both
-# ways: a beta's names the Connect server, a final's (with no connect
-# feature asked) does not.
-FW_BETA := $(findstring -,$(FW_VERSION))
+# it (a measurement's baseline); anything else in it but `connect` is
+# refused unless DIST is given (never into dist/). The release recipe checks
+# the image both ways: a beta's names the Connect server, a final's (with
+# no connect feature asked) does not; and no image without connect-measure
+# asked carries the measuring half. Beta or not is Cargo.toml's version,
+# never a FW_VERSION given on the command line (the paint probe's).
+FW_BETA := $(findstring -,$(FW_CARGO_VERSION))
 FW_BETA_FEATURES ?= connect
+FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_BETA_FEATURES=$(FW_BETA_FEATURES): a beta release build takes connect or nothing; anything else wants a DIST of its own (not dist/)"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
 # A Connect measurement build's files and app descriptor say so
@@ -993,6 +998,7 @@ fw-release: web
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
 fw-release-variant:
 	@$(FW_CONNECT_RELEASE_GUARD)
+	@$(FW_BETA_GUARD)
 	@# OPENDMD_CONNECT_* point a build at another server, root or key: the
 	@# emulator lane's image (connect-test) only, never a release.
 	@if env | grep -q '^OPENDMD_CONNECT_' && ! echo ",$(FW_RELEASE_FEATURES)," | grep -q ',connect-test,'; then \
@@ -1045,6 +1051,12 @@ fw-release-variant:
 	   echo "remote control: in the image ($(FW_CONNECT))"; \
 	 else test "$$n" -eq 0 || { echo "$(FW_APP_IMAGE): no connect feature asked, but it names connect.opendmd.dev"; exit 1; }; \
 	   echo "remote control: not in the image"; fi
+	@# The measuring half (its telemetry's tls_hs_peak) only when asked.
+	@n=$$(grep -ac 'tls_hs_peak' $(FW_APP_IMAGE) || true); \
+	 if [ -n "$(filter connect-measure,$(FW_CONNECT))" ]; then test "$$n" -gt 0 || { echo "$(FW_APP_IMAGE): built with connect-measure but has no measuring half"; exit 1; }; \
+	   echo "measuring half: in the image (connect-measure)"; \
+	 else test "$$n" -eq 0 || { echo "$(FW_APP_IMAGE): connect-measure not asked, but the measuring half is in it"; exit 1; }; \
+	   echo "measuring half: not in the image"; fi
 	@size=$$(stat -c %s $(FW_APP_IMAGE)); \
 	 spare=$$(( $(FW_APP_BYTES) - size )); \
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \

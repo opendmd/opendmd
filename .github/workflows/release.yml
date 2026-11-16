@@ -281,17 +281,10 @@ jobs:
             desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
             echo "$v app descriptor: '$desc'"
             test "$desc" = "$VERSION $v" || { echo "::error::$app's descriptor is '$desc', want '$VERSION $v'"; exit 1; }
-            # Remote control (OpenDMD Connect) ships in betas only, its
-            # setting off (the Makefile's FW_BETA_FEATURES): a "-" version's
-            # app names the Connect server, a final's does not.
-            n="$(grep -ac 'connect\.opendmd\.dev' "$app" || true)"
-            if [[ "$VERSION" == *-* ]]; then
-              test "$n" -gt 0 || { echo "::error::$app is a beta without Remote control (the connect feature)"; exit 1; }
-              echo "$v: Remote control in the beta"
-            else
-              test "$n" -eq 0 || { echo "::error::$app is a final with Remote control in it"; exit 1; }
-              echo "$v: no Remote control (a final)"
-            fi
+            # Remote control (OpenDMD Connect) in betas only, its setting
+            # off, and never its measuring half (the Makefile's
+            # FW_BETA_FEATURES; tools/release.sh runs the same check).
+            tools/release-connect-check.sh "$app" "$VERSION"
             manifest="$(jq -r .version "dist/manifest-$v.json")"
             test "$manifest" = "$VERSION" || { echo "::error::dist/manifest-$v.json says $manifest, want $VERSION"; exit 1; }
             # The offline install (docs/deploying.md "Offline installs"): the six

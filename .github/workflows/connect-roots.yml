@@ -12,6 +12,10 @@ name: Connect roots
 #
 # Read-only: one TLS handshake and one GET /v1/health. No secrets, no
 # write permission, nothing published.
+#
+# GitHub disables a scheduled workflow after 60 days without activity in the
+# repository: if the repo goes quiet, re-enable it (Actions > Connect roots >
+# Enable workflow), or run `make connect-roots-check` by hand.
 
 on:
   schedule:
