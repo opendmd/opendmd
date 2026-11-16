@@ -172,6 +172,9 @@ fn function(x: usize, y: usize) -> bool {
         || (x.abs_diff(ALIGN) <= 2 && y.abs_diff(ALIGN) <= 2)
 }
 
+// The eight mask conditions as ISO/IEC 18004 writes them (`% n == 0`), so
+// they read against the standard line for line.
+#[allow(clippy::manual_is_multiple_of)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn masked(mask: u8, x: usize, y: usize) -> bool {
     match mask {
