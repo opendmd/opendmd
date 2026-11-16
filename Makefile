@@ -1567,8 +1567,8 @@ emu-s3-probe: emu-build
 #
 #   carrier     a normal device (the release feature set: web app, card,
 #               Formulas) on the bench WiFi, with all-psram's switches and
-#               Remote control as a beta ships it (`connect`, off until
-#               Settings switches it on); the card at
+#               Remote control with the measuring half (connect-measure),
+#               off until switched on (cx_on); the card at
 #               20 MHz (card_speed safe only on the S3), the panel clock the
 #               panel timing's i2s_speed exactly (8 MHz by default; 16, 20);
 #               the beam raced off GDMA's OUT_DSCR (NVS `scan_reg` dscr,
@@ -1578,6 +1578,12 @@ emu-s3-probe: emu-build
 #               bench: the current register ~97%, one a descriptor early
 #               ~95%, one late ~80%; meaningless in the emulator, which has
 #               no pin loopback), and the brownout-loop guard (src/s3board.rs)
+#   carrier-connect  carrier with the shipping Connect client (`connect`,
+#               GIF sends on as on every S3) in place of the probe: no
+#               measuring half, nothing test-only (no connect-test, no
+#               OPENDMD_CONNECT_*), sdkconfig.connect layered on as for any
+#               connect build; Remote control off until switched on over the
+#               LAN (`cx_on`, POST /api/connect)
 #
 # `make fw-s3-image S3_IMAGE=<name>` (or `fw-s3-images`, all of them) builds;
 # `make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=<name>` writes one to a board
@@ -1591,7 +1597,7 @@ emu-s3-probe: emu-build
 # The images carry bench WiFi credentials: never published, never in dist/.
 S3_P1_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p1,$(CURDIR)/target/s3-p1)
 S3_P2_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p2,$(CURDIR)/target/s3-p2)
-S3_P2_IMAGES := carrier
+S3_P2_IMAGES := carrier carrier-connect
 S3_IMAGES := base tls-psram wifi-psram cold-psram iram-trim all-psram jit $(S3_P2_IMAGES)
 S3_IMAGE ?= base
 S3_DIR = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),$(S3_P2_DIR),$(S3_P1_DIR))/$(S3_IMAGE)
@@ -1618,8 +1624,10 @@ S3_FEATURES_jit := psi-probe
 # Not psram-cold: PSRAM buffers make the SD driver copy one sector per
 # command through a DMA bounce buffer (sdmmc_cmd.c), which would slow card
 # I/O on what should be a normal device.
-S3_FEATURES_carrier := dev-credentials,bench,connect,psram-tls
+S3_FEATURES_carrier := $(S3_COMMON),psram-tls
 S3_SDK_carrier := $(S3_SDK_all-psram)
+S3_FEATURES_carrier-connect := dev-credentials,bench,psram-tls,connect
+S3_SDK_carrier-connect := $(S3_SDK_carrier)
 # The app spare each image must leave: the release's 64 KB for phase 2's,
 # 32 KB for the measurement images.
 S3_SPARE = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),65536,32768)
@@ -1634,6 +1642,7 @@ S3_FLASH_CMD_app = espflash flash --chip esp32s3 --port $(PORT) --baud $(S3_FLAS
 S3_FLASH_CMD = $(S3_FLASH_CMD_$(S3_FLASH))
 
 fw-s3-image:
+	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
 	@$(if $(S3_ON_WIFI),test -f "$(S3_CREDENTIALS)" || { echo "no $(S3_CREDENTIALS): S3_CREDENTIALS=<a file like firmware/.env.example>"; exit 2; },true)
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
@@ -1663,7 +1672,7 @@ fw-s3-image:
 	   echo "espflash write-bin --chip esp32s3 --port /dev/ttyXXX --baud $(S3_FLASH_BAUD) 0x0 $$full"; } > $(S3_DIR)/flash.txt; \
 	 echo "==> $(S3_IMAGE): $$full ($$(stat -c %s $(S3_DIR)/opendmd-*-s3-app.bin) B app)"; cat $(S3_DIR)/sections.txt
 	@! grep -q '^CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=y' $(S3_DIR)/sdkconfig || { echo "memory protection is on: no executable heap for the JIT"; exit 1; }
-	@$(if $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),grep -qx 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=y' $(S3_DIR)/sdkconfig && echo "sdkconfig: Remote control's mbedTLS settings in force" || { echo "$(S3_DIR)/sdkconfig: Remote control's mbedTLS settings are missing"; exit 1; },true)
+	@$(if $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),grep -qx 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=y' $(S3_DIR)/sdkconfig && echo "sdkconfig: Connect's mbedTLS settings in force" || { echo "$(S3_DIR)/sdkconfig: Connect's mbedTLS settings are missing"; exit 1; },true)
 
 fw-s3-images:
 	@for i in $(S3_IMAGES); do $(MAKE) --no-print-directory fw-s3-image S3_IMAGE=$$i || exit 1; done

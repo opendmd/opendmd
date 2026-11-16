@@ -4,9 +4,9 @@
 //!
 //! | Topic | Rule |
 //! |---|---|
-//! | Full handshake | only with 48 KB free and a 16 KB block ([`Cfg`]), and 10 s without a LAN upload, stream or heavy request (`super::lan_busy`). Otherwise wait: "waiting for memory", "waiting for quiet" |
+//! | Full handshake | only with 48 KB free and a 16 KB block ([`Cfg`], `opendmd_core::connect::gate`), and 10 s without a LAN upload, stream or heavy request (`super::lan_busy`). Otherwise wait: "waiting for memory" (`waiting` names the unmet condition), "waiting for quiet" |
 //! | Resumed handshake (a TLS ticket held) | 44 KB until it is measured (D3); the same quiet |
-//! | S3 | 100 KB: open in practice |
+//! | S3 | 100 KB: open in practice. With mbedTLS in PSRAM (`psram-tls`): the classic's internal gates, and a 64 KB PSRAM block |
 //! | After a server close | 0-30 s spread, then 5 s doubling to 15 min, with jitter (`Backoff`) |
 //! | Refused (4403, or HTTP 403 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |
 //! | The id unknown (HTTP 404 at the upgrade) | with no controllers (the server drops a registration that never said `hello` within 10 min): register again, at most 3 a day, on the usual backoff. With controllers: refused, as 403, nothing erased (Forget on the LAN starts again) |
@@ -46,6 +46,7 @@ use super::measure::{cfg, cfg_gen, Cfg};
 use super::tls::{self, now_us, rand_u32, random, Conn, Phase, Purpose, Ticket, BIN_KEEP, BLOCK_MAX, DNS, DNS_WAIT, ERR_PEER_CLOSE_NOTIFY, ERR_WANT_READ, ERR_WANT_WRITE, ROOTS, ROOT_USED, SLICE, TLS_PEAK};
 use super::{error, lite, set_state, shared, tele, Cause, End, Store};
 use crate::state::{free_heap, largest_free_block};
+use opendmd_core::connect::gate;
 #[cfg(any(feature = "connect-measure", feature = "connect-test"))]
 use esp_idf_sys as sys;
 use opendmd_core::connect::keys::{KeyId, KeyList};
@@ -86,6 +87,8 @@ pub(super) const fn parse_u64(v: &str) -> u64 {
 const BUILD_UNIX: &str = env!("OPENDMD_BUILD_UNIX");
 /// How long a looked-up address is used.
 const DNS_KEEP: Duration = Duration::from_secs(3600);
+/// The state a handshake waits in for the LAN to be quiet.
+const WAITING_FOR_QUIET: &str = "waiting for quiet";
 /// While a lookup runs, the worker's pace (not the busy 5 ms).
 const DNS_POLL: Duration = Duration::from_millis(200);
 const UPGRADE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -623,11 +626,16 @@ impl Client {
             }
             Job::None => {
                 if now < self.not_before {
-                    let (refused, too_old) = lite(|l| (l.refused, l.too_old));
+                    let (refused, too_old, state) = lite(|l| (l.refused, l.too_old, l.state));
+                    // The gates' own 2 s retries keep their state (and
+                    // `waiting`): a turn between two is not a backoff.
+                    let retry = state == super::WAITING_FOR_MEMORY || state == WAITING_FOR_QUIET;
                     set_state(if refused {
                         "refused: set Remote control up again"
                     } else if too_old {
                         "update needed"
+                    } else if retry {
+                        state
                     } else {
                         "backoff"
                     });
@@ -640,17 +648,19 @@ impl Client {
         // until it has been quiet a while (S0's M6: one under load took the
         // heap to 5 KB).
         if self.quiet_since.elapsed() < Duration::from_secs(u64::from(c.quiet_s)) {
-            set_state("waiting for quiet");
+            set_state(WAITING_FOR_QUIET);
             tele(|t| t.quiet_waits += 1);
             self.not_before = now + Duration::from_secs(2);
             return;
         }
         let Some(addr) = self.address(c) else { return };
         let resumed = tickets && self.ticket.is_some();
-        let gate = if resumed { c.gate_resumed } else { c.gate_full };
-        let (free, largest) = (free_heap(), largest_free_block() as u32);
-        if free < gate || largest < c.gate_largest {
-            set_state("waiting for memory");
+        let gates = gate::Gates { full: c.gate_full, resumed: c.gate_resumed, largest: c.gate_largest, psram_largest: c.gate_psram_largest };
+        let free = free_heap();
+        let heap = gate::Heap { free, largest: largest_free_block() as u32, psram_largest: psram_largest(gates.psram_largest) };
+        if let Err(unmet) = gate::check(&gates, &heap, resumed) {
+            set_state(super::WAITING_FOR_MEMORY);
+            super::set_waiting(unmet);
             tele(|t| t.gate_waits += 1);
             self.not_before = now + Duration::from_secs(2);
             #[cfg(feature = "connect-measure")]
@@ -1570,4 +1580,19 @@ fn decode(conn: &mut Conn, extra: Option<&[u8]>, n: usize) -> Result<Acts, End> 
     });
     r.map_err(|e| End::new(Cause::Ws, e.as_str()))?;
     Ok(acts)
+}
+
+/// PSRAM's largest free block, read only when the gate asks about it
+/// (`need` > 0: a `psram-tls` S3); 0 on the classic.
+#[optimize(size)]
+#[inline(never)]
+fn psram_largest(need: u32) -> u32 {
+    if need == 0 {
+        return 0;
+    }
+    #[cfg(esp32s3)]
+    // SAFETY: a read-only query with a capability mask argument.
+    return unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_SPIRAM) as u32 };
+    #[cfg(not(esp32s3))]
+    0
 }

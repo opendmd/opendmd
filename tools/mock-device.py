@@ -1317,7 +1317,7 @@ def connect_summary(cx: dict) -> dict:
     on = cx["enabled"]
     return {"enabled": on, "registered": cx["registered"], "state": "open" if on else "off", "since_s": int(now - cx["since"]),
             "opened": cx["opened"], "reconnects": 0, "resumed": 0, "handshake_ms": 900 if cx["opened"] else None,
-            "refused": False, "too_old": False, "watched": False, "last_error": None, "last_error_s": 0}
+            "refused": False, "too_old": False, "watched": False, "last_error": None, "last_error_s": 0, "waiting": None}
 
 
 def connect_json(cx: dict) -> dict:
