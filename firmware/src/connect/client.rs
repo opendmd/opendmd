@@ -160,14 +160,6 @@ enum Job {
     Handshakes { n: u32, done: u32, failed: u32, interval: Duration, resume: bool, next: Instant },
 }
 
-/// M9 in progress (beside anything else).
-#[cfg(feature = "connect-measure")]
-struct M9Run {
-    n: u32,
-    done: u32,
-    msg: Box<[u8; cx::ED25519_MSG_LEN]>,
-}
-
 /// What the server's frames asked, acted on after the decoder.
 #[derive(Default)]
 struct Acts {
@@ -186,8 +178,6 @@ pub struct Client {
     not_before: Instant,
     ticket: Option<Box<Ticket>>,
     job: Job,
-    #[cfg(feature = "connect-measure")]
-    m9: Option<M9Run>,
     online_since: Option<Instant>,
     cfg_gen: u32,
     floor: Option<i64>,
@@ -300,8 +290,6 @@ impl Client {
             not_before: Instant::now(),
             ticket: None,
             job: Job::None,
-            #[cfg(feature = "connect-measure")]
-            m9: None,
             online_since: None,
             cfg_gen: cfg_gen(),
             floor: None,
@@ -349,10 +337,6 @@ impl Client {
     #[inline(never)]
     pub fn wait(&self) -> Duration {
         let busy = Duration::from_millis(5);
-        #[cfg(feature = "connect-measure")]
-        if self.m9.is_some() {
-            return busy;
-        }
         let at = match self.conn.as_deref() {
             Some(c) if c.phase != Phase::Open => return busy,
             Some(c) => Some(c.ping.next),
@@ -416,7 +400,6 @@ impl Client {
             if self.take_ask() {
                 return;
             }
-            self.run_m9(started);
         }
         let c = cfg();
         let gen = cfg_gen();
@@ -591,7 +574,7 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn take_ask(&mut self) -> bool {
-        use super::measure::{Ask, M9};
+        use super::measure::Ask;
         let Some((seq, a)) = super::measure::take_ask() else { return false };
         log::info!("connect: asked {}", a.name());
         let mut closed = false;
@@ -610,15 +593,8 @@ impl Client {
                     t.job_failed = 0;
                 });
             }
-            Ask::Ed25519 { n } => {
-                let mut msg = Box::new([0u8; cx::ED25519_MSG_LEN]);
-                *msg = cx::ed25519_msg();
-                self.m9 = Some(M9Run { n, done: 0, msg });
-                tele(|t| t.m9 = Some(M9 { seq, of: n, min_us: u32::MAX, ..M9::default() }));
-            }
             Ask::Stop => {
                 self.job = Job::None;
-                self.m9 = None;
                 tele(|t| t.job = "none");
             }
             Ask::Reconnect => {
@@ -630,46 +606,8 @@ impl Client {
                 self.not_before = Instant::now();
             }
             Ask::Reset => super::measure::reset(),
-            Ask::Crash => panic!("connect: crash on purpose (POST /api/debug/connect/crash)"),
         }
         closed
-    }
-
-    #[cfg(feature = "connect-measure")]
-    #[optimize(size)]
-    #[inline(never)]
-    fn run_m9(&mut self, started: Instant) {
-        let Some(run) = self.m9.as_mut() else { return };
-        while run.done < run.n && started.elapsed() < SLICE {
-            let t = now_us();
-            let ok = cx::ed25519_vector(&run.msg[..]);
-            let us = (now_us() - t) as u32;
-            run.done += 1;
-            tele(|t| {
-                if let Some(m) = t.m9.as_mut() {
-                    m.n += 1;
-                    m.min_us = m.min_us.min(us);
-                    m.max_us = m.max_us.max(us);
-                    m.sum_us += u64::from(us);
-                    if !ok {
-                        m.failed += 1;
-                    }
-                }
-            });
-        }
-        if run.done >= run.n {
-            self.m9 = None;
-            // SAFETY: the calling task's own high-water mark.
-            let unused = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
-            tele(|t| {
-                t.stack_unused = t.stack_unused.min(unused);
-                if let Some(m) = t.m9.as_mut() {
-                    m.done = true;
-                    m.stack_unused = t.stack_unused;
-                    log::info!("connect: M9 {} verifies, {}-{} us, {} failed", m.n, m.min_us, m.max_us, m.failed);
-                }
-            });
-        }
     }
 
     /// Start an attempt if it is time, the LAN is quiet and the heap allows.
@@ -745,7 +683,7 @@ impl Client {
             self.reg_secret = Some(random::<32>());
         }
         let ticket = if tickets { self.ticket.as_deref() } else { None };
-        match tls::connect(&c.host, addr, purpose, tickets, ticket, self.floor, free) {
+        match tls::connect(c.host, addr, purpose, tickets, ticket, self.floor, free) {
             Ok(conn) => {
                 set_state("handshake");
                 self.conn = Some(conn);
@@ -895,7 +833,7 @@ impl Client {
                 let Some(secret) = self.reg_secret else {
                     return Err(End::new(Cause::Register, "no secret"));
                 };
-                let req = cx::post_request(&c.host, super::REGISTER_PATH, &proto::register_body(&secret));
+                let req = cx::post_request(c.host, super::REGISTER_PATH, &proto::register_body(&secret));
                 conn.write_all(req.as_bytes())?;
                 conn.phase = Phase::Request;
                 set_state("registering");
@@ -1010,7 +948,7 @@ impl Client {
         if conn.key.is_empty() {
             conn.key = cx::base64(&random::<16>());
             let protocols = format!("{}, {}", proto::subprotocol(proto::VERSION), dev.subprotocol());
-            let req = cx::upgrade_request(&c.host, super::PANEL_PATH, &conn.key, &protocols);
+            let req = cx::upgrade_request(c.host, super::PANEL_PATH, &conn.key, &protocols);
             conn.write_all(req.as_bytes())?;
             conn.hs_t0 = Instant::now();
         }

@@ -7,27 +7,27 @@ half-hours as M2. Gates (CONNECT.md 10): heap floor >= 40 KB; late frames
 and wake_late not above M2's; refresh_us the same; the session open
 throughout; no restart.
 
-    uv run tools/connect-s0/m3.py 192.0.2.178 --baseline connect-s0-results/m2-.../summary.json \\
+    uv run tools/connect-device/m3.py 192.0.2.178 --baseline connect-device-results/m2-.../summary.json \\
         --play formula=@formula:<the same one>
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import s0lib  # noqa: E402
+import devlib  # noqa: E402
 
-ap = s0lib.parser(__doc__)
-s0lib.add_phases(ap)
-s0lib.add_baseline(ap)
+ap = devlib.parser(__doc__)
+devlib.add_phases(ap)
+devlib.add_baseline(ap)
 ap.add_argument("--floor-kb", type=float, default=40)
 args = ap.parse_args()
-base = s0lib.load_baseline(args.baseline)
-run = s0lib.Run("m3", args)
-s0lib.need_probe(run.sample("start"))
-s0lib.reset_probe(run)
-run.gate("the session opened", s0lib.wait_open(run), "open", "open within 180 s")
+base = devlib.load_baseline(args.baseline)
+run = devlib.Run("m3", args)
+devlib.need_probe(run.sample("start"))
+devlib.reset_probe(run)
+run.gate("the session opened", devlib.wait_open(run), "open", "open within 180 s")
 for phase in args.phases.split(","):
-    s0lib.start_phase(run, phase, args, probe=True)
+    devlib.start_phase(run, phase, args, probe=True)
     st = run.sample_for(args.minutes * 60, phase)
     run.phases[phase] = stats = run.phase_stats(phase)
     rows = [r for r in run.rows if r["phase"] == phase]

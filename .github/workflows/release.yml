@@ -9,7 +9,9 @@ name: Release
 #      merged image, the ESP Web Tools manifest and the .odfw bundle signed
 #      with OTA_SIGNING_KEY, the updater and the web app's pack; checks the
 #      version in each, and that the bundle and the pack verify against the
-#      committed firmware/keys/opendmd.pub;
+#      committed firmware/keys/opendmd.pub; a beta ("-" version) is built
+#      with Remote control (`connect`, its setting off; the Makefile's
+#      FW_BETA_FEATURES), a final without, and the app is checked for it;
 #   2. publishes the GitHub release (tools/release-publish.sh: a draft until
 #      every asset is up, then a pre-release for a "-" version, else marked
 #      latest).
@@ -279,6 +281,10 @@ jobs:
             desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
             echo "$v app descriptor: '$desc'"
             test "$desc" = "$VERSION $v" || { echo "::error::$app's descriptor is '$desc', want '$VERSION $v'"; exit 1; }
+            # Remote control (OpenDMD Connect) in betas only, its setting
+            # off, and never its measuring half (the Makefile's
+            # FW_BETA_FEATURES; tools/release.sh runs the same check).
+            tools/release-connect-check.sh "$app" "$VERSION"
             manifest="$(jq -r .version "dist/manifest-$v.json")"
             test "$manifest" = "$VERSION" || { echo "::error::dist/manifest-$v.json says $manifest, want $VERSION"; exit 1; }
             # The offline install (docs/deploying.md "Offline installs"): the six

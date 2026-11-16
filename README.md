@@ -110,6 +110,8 @@ The documentation is also at **[opendmd.dev](https://opendmd.dev/)**.
   [Updating](docs/guide/updating.md)
 - [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md)
   and [Formulas](docs/guide/formulas.md)
+- [Remote control](docs/guide/remote.md): the display from your phone, away
+  from home (beta)
 - [The SD card](docs/guide/card.md): where GIFs go and how their names are read
 - [Troubleshooting](docs/guide/troubleshooting.md)
 - [For developers](docs/developers.md): building from source, the crates, the

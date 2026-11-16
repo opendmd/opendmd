@@ -444,6 +444,10 @@ else
     desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
     [ "$desc" = "$VERSION $v" ] || die "$app's descriptor is '$desc', want '$VERSION $v'"
     pass "$v app descriptor: '$desc'"
+    # Remote control in a beta only, never its measuring half (release.yml
+    # runs the same check on what it publishes).
+    tools/release-connect-check.sh "$app" "$VERSION" || die "$app: Remote control is not as the channel says (tools/release-connect-check.sh)"
+    pass "$v: Remote control as the channel says ($( [[ "$VERSION" == *-* ]] && echo 'a beta: in it' || echo 'a final: not in it'))"
     manifest="$(jq -r .version "$DIST/manifest-$v.json")"
     [ "$manifest" = "$VERSION" ] || die "manifest-$v.json says $manifest, want $VERSION"
     pass "manifest-$v.json version $manifest"

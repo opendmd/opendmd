@@ -181,7 +181,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack connect-mock \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack connect-mock connect-roots-check \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
@@ -210,6 +210,8 @@ test:
 	uv run --quiet tools/connect/vectors_check.py
 	@echo "==> Checking the pairing QR code (tools/connect/qr_check.py): the core's matrices against qrcodegen's, the panel's QR screen decoded by ZXing"
 	uv run --quiet tools/connect/qr_check.py
+	@echo "==> Checking Remote control's pinned TLS roots (tools/connect/roots_check.py --pins-only: tls.rs ROOTS against firmware/connect-roots/, each parses, none near expiry; no network)"
+	uv run --quiet tools/connect/roots_check.py --pins-only
 	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features player,ota --lib a_player_without_formulas
 	@echo "==> Testing $(RENDER)"
@@ -246,6 +248,14 @@ test:
 connect-mock:
 	uv run --quiet tools/connect/vectors_check.py
 	uv run --quiet tools/connect/roundtrip.py
+
+# Do the firmware's pinned TLS roots (firmware/src/connect/tls.rs ROOTS)
+# still trust the Connect server's live chain, with the panel's one suite,
+# and is none near its expiry? One TLS handshake and one GET /v1/health to
+# CONNECT_HOST; .github/workflows/connect-roots.yml runs it weekly.
+CONNECT_HOST ?= connect.opendmd.dev
+connect-roots-check:
+	uv run --quiet tools/connect/roots_check.py --host $(CONNECT_HOST)
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
@@ -666,17 +676,20 @@ FW_L2_COPY ?= 0
 # keeps sdkconfig.defaults' TLS section as it is.
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
-FW_CONNECT_FEATURES := connect connect-probe connect-core connect-measure connect-no-send connect-send-classic
-FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
+FW_CONNECT_FEATURES := connect connect-measure connect-no-send connect-send-classic connect-test
+# (FW_CHANNEL_FEATURES: a beta release build's `connect`, below.)
+FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES) $(FW_CHANNEL_FEATURES)))
 # The feature and its sdkconfig must go together: a bench build takes it in
 # FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
 # would layer the sdkconfig on a build without the code, and is refused.
 FW_CONNECT_IN_BENCH = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_FEATURES)))
 FW_CONNECT_IN_RELEASE = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)))
 FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE) is for release builds (make fw-release); a bench build takes FW_FEATURES=$(FW_CONNECT_IN_RELEASE)"; exit 2; },true)
-# A Connect release build is a measurement build: never into the release's
-# own dist/ or target dir (give both: DIST=... FW_RELEASE_TARGET_DIR=...),
-# and its version says so (FW_VERSION gets -connect, below).
+# A release build given a connect feature in FW_RELEASE_FEATURES is a
+# measurement build: never into the release's own dist/ or target dir (give
+# both: DIST=... FW_RELEASE_TARGET_DIR=...), and its version says so
+# (FW_VERSION gets -connect, below). A beta's own `connect`
+# (FW_BETA_FEATURES) is the release's and none of this applies to it.
 FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=$(FW_CONNECT_IN_BENCH) is for bench builds; a release build takes FW_RELEASE_FEATURES=$(FW_CONNECT_IN_BENCH)"; exit 2; },true) \
 	$(if $(FW_CONNECT_IN_RELEASE),$(if $(filter command line environment,$(origin DIST)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a DIST of its own (not dist/)"; exit 2; }) \
 	$(if $(filter command line environment,$(origin FW_RELEASE_TARGET_DIR)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a FW_RELEASE_TARGET_DIR of its own"; exit 2; }) \
@@ -788,7 +801,7 @@ fw-clippy: fw-sdkconfig-flavour
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets -- -D warnings'
 	@echo "==> Clippy firmware, no features (FW_DISABLE=formulas: without Formulas or the JIT)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets --no-default-features -- -D warnings'
-	@$(MAKE) --no-print-directory fw-clippy-connect FW_FEATURES=connect-probe
+	@$(MAKE) --no-print-directory fw-clippy-connect FW_FEATURES=connect-measure
 
 # The connect feature sets (src/connect/) with their sdkconfig,
 # in a target dir of its own (FW_CLIPPY_CONNECT), so fw-clippy's other
@@ -802,9 +815,9 @@ fw-clippy-connect:
 	   rm -f $(FW_CLIPPY_CONNECT)/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW_CLIPPY_CONNECT)/sdkconfig.stamp; \
 	 fi
-	@echo "==> Clippy firmware, connect-probe (Remote control with S0's measuring half, with sdkconfig.connect)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
-	@echo "==> Clippy firmware, connect (Remote control as it ships, with sdkconfig.connect)"
+	@echo "==> Clippy firmware, connect-measure (Remote control with the device tests' measuring half, with sdkconfig.connect)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-measure -- -D warnings'
+	@echo "==> Clippy firmware, connect (Remote control as a beta ships it, with sdkconfig.connect)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect -- -D warnings'
 	@echo "==> Clippy firmware, connect-test (the emulator lane's image: its test hooks, nothing set)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-test -- -D warnings'
@@ -852,7 +865,28 @@ fw-clean:
 # The version comes from firmware/Cargo.toml and is also written into the app
 # descriptor as "<version> <var>" (checked below at offset 0x30 of the image).
 # See docs/deploying.md.
-FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+FW_CARGO_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+FW_VERSION := $(FW_CARGO_VERSION)
+# Beta builds ship Remote control (OpenDMD Connect, the `connect` feature;
+# opendmd-notes P1-PLAN 9, F5): every fw-release build of a "-" version
+# (1.1.0-beta.N), the release workflow's and CI's included, adds
+# FW_BETA_FEATURES to its features, with the setting (`cx_on`) off until
+# the user switches it on in Settings. A final (1.1.0) adds nothing:
+# Remote control reaches the finals only once P1's acceptance checks pass
+# (then it moves into the release set for good). A beta's files and app
+# descriptor keep the plain version and it builds into dist/ like any
+# release. `FW_BETA_FEATURES=` on the command line builds a beta without
+# it (a measurement's baseline); anything else in it but `connect` is
+# refused unless DIST is given (never into dist/). The release recipe checks
+# the image both ways: a beta's names the Connect server, a final's (with
+# no connect feature asked) does not; and no image without connect-measure
+# asked carries the measuring half. Beta or not is Cargo.toml's version,
+# never a FW_VERSION given on the command line (the paint probe's).
+FW_BETA := $(findstring -,$(FW_CARGO_VERSION))
+FW_BETA_FEATURES ?= connect
+FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_BETA_FEATURES=$(FW_BETA_FEATURES): a beta release build takes connect or nothing; anything else wants a DIST of its own (not dist/)"; exit 2; }),true)
+# (fw-release-variant's own, so bench builds and clippy never take it.)
+fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
 # A Connect measurement build's files and app descriptor say so
 # ("<version>-connect"): they cannot be taken for the release's.
 ifneq ($(filter $(FW_CONNECT_FEATURES),$(subst $(comma), ,$(FW_RELEASE_FEATURES))),)
@@ -925,7 +959,7 @@ FW_EXTRA_SDKCONFIG_CHECK = ; \
 	   else grep -qx "$$kv" "$$cfg" || { echo "$$cfg: no $$kv (asked; a dependency it lacks?)"; exit 1; }; fi; \
 	 done; echo "sdkconfig: $(FW_EXTRA_SDKCONFIG) in force"
 FW_COMMA := ,
-FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram) $(if $(FW_DISABLE),$(FW_ENABLED))))
+FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(FW_CHANNEL_FEATURES) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram) $(if $(FW_DISABLE),$(FW_ENABLED))))
 DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
@@ -964,13 +998,14 @@ fw-release: web
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
 fw-release-variant:
 	@$(FW_CONNECT_RELEASE_GUARD)
+	@$(FW_BETA_GUARD)
 	@# OPENDMD_CONNECT_* point a build at another server, root or key: the
 	@# emulator lane's image (connect-test) only, never a release.
 	@if env | grep -q '^OPENDMD_CONNECT_' && ! echo ",$(FW_RELEASE_FEATURES)," | grep -q ',connect-test,'; then \
 	   echo "OPENDMD_CONNECT_* is set: for the emulator lane's image only (FW_RELEASE_FEATURES with connect-test)"; exit 2; fi
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
-	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
+	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE))$(if $(FW_CHANNEL_FEATURES), with the beta's $(FW_CHANNEL_FEATURES)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
 	@mkdir -p $(FW_RELEASE_VTARGET) $(DIST)
 	@$(FW_FRAGMENT) > $(FW_RELEASE_SDKCONFIG_FRAG)
 	@# The generated sdkconfig keeps the values it has over changed defaults
@@ -1006,6 +1041,22 @@ fw-release-variant:
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
+	@# Remote control is in the image exactly when it was asked for (a
+	@# beta's FW_BETA_FEATURES, or a connect feature given): the image
+	@# names the Connect server only then (an emulator image, connect-test,
+	@# may name its local one instead).
+	@n=$$(grep -ac 'connect\.opendmd\.dev' $(FW_APP_IMAGE) || true); \
+	 if [ -n "$(filter connect-test,$(FW_CONNECT))" ]; then echo "remote control: in the image, the emulator lane's ($(FW_CONNECT))"; \
+	 elif [ -n "$(FW_CONNECT)" ]; then test "$$n" -gt 0 || { echo "$(FW_APP_IMAGE): built with $(FW_CONNECT) but it does not name connect.opendmd.dev"; exit 1; }; \
+	   echo "remote control: in the image ($(FW_CONNECT))"; \
+	 else test "$$n" -eq 0 || { echo "$(FW_APP_IMAGE): no connect feature asked, but it names connect.opendmd.dev"; exit 1; }; \
+	   echo "remote control: not in the image"; fi
+	@# The measuring half (its telemetry's tls_hs_peak) only when asked.
+	@n=$$(grep -ac 'tls_hs_peak' $(FW_APP_IMAGE) || true); \
+	 if [ -n "$(filter connect-measure,$(FW_CONNECT))" ]; then test "$$n" -gt 0 || { echo "$(FW_APP_IMAGE): built with connect-measure but has no measuring half"; exit 1; }; \
+	   echo "measuring half: in the image (connect-measure)"; \
+	 else test "$$n" -eq 0 || { echo "$(FW_APP_IMAGE): connect-measure not asked, but the measuring half is in it"; exit 1; }; \
+	   echo "measuring half: not in the image"; fi
 	@size=$$(stat -c %s $(FW_APP_IMAGE)); \
 	 spare=$$(( $(FW_APP_BYTES) - size )); \
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
@@ -1500,7 +1551,8 @@ emu-s3-probe: emu-build
 # fw-release-variant into a directory of its own, $(S3_P1_DIR)/<name>/
 # (never dist/), with its own target dir under it:
 #
-#   base        the Connect probe (connect-probe) and the bench WiFi seed
+#   base        the Connect client with the measuring half (connect-measure)
+#               and the bench WiFi seed
 #               (dev-credentials, from S3_CREDENTIALS, firmware/.env's form);
 #               nothing moved to PSRAM: the internal heap as the firmware
 #               uses it, with WiFi up and a TLS session open
@@ -1527,8 +1579,8 @@ emu-s3-probe: emu-build
 #
 #   carrier     a normal device (the release feature set: web app, card,
 #               Formulas) on the bench WiFi, with all-psram's switches and
-#               the Connect probe compiled in but off (Remote control is
-#               off until switched on over the LAN, `cx_on`); the card at
+#               Remote control with the measuring half (connect-measure),
+#               off until switched on (cx_on); the card at
 #               20 MHz (card_speed safe only on the S3), the panel clock the
 #               panel timing's i2s_speed exactly (8 MHz by default; 16, 20);
 #               the beam raced off GDMA's OUT_DSCR (NVS `scan_reg` dscr,
@@ -1565,7 +1617,7 @@ S3_CREDENTIALS ?= $(CURDIR)/$(FW)/.env
 S3_REFUSED_PORTS ?=
 S3_FLASH_BAUD ?= 115200
 S3_FLASH ?= full
-S3_COMMON := dev-credentials,bench,connect-probe
+S3_COMMON := dev-credentials,bench,connect-measure
 S3_TLS_SDK := CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 S3_WIFI_SDK := CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 S3_IRAM_SDK := CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y \
@@ -1602,6 +1654,7 @@ S3_FLASH_CMD_app = espflash flash --chip esp32s3 --port $(PORT) --baud $(S3_FLAS
 S3_FLASH_CMD = $(S3_FLASH_CMD_$(S3_FLASH))
 
 fw-s3-image:
+	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
 	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@$(if $(S3_ON_WIFI),test -f "$(S3_CREDENTIALS)" || { echo "no $(S3_CREDENTIALS): S3_CREDENTIALS=<a file like firmware/.env.example>"; exit 2; },true)

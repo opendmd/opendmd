@@ -324,6 +324,11 @@ steps to set it up and what the panel does.
 long the display has been running. **Reload playlist** reads the card again
 if you changed it in a computer, and **Reboot** restarts the display.
 
+**Remote control**, in the beta versions, lets you use the display from a
+phone away from home, through opendmd.dev. It's off until you switch it on:
+[Remote control](remote.md) has the steps, how to link and remove devices,
+and what the relay sees.
+
 **Card speed** is **Safe** unless you choose **Fast**, which reads the card
 faster. Some cards return wrong data at Fast without an error, so choose
 Safe again if GIFs look damaged.

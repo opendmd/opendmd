@@ -22,8 +22,14 @@ the web app. No internals.
 
 ## 1.1.0-beta.3 · 2026-11-13
 
-Sprites from your own pictures.
+Sprites from your own pictures, and Remote control to try.
 
+- **Remote control**, new and off until you switch it on in **Settings ›
+  Device**: see what's playing, skip, pause, change the brightness or the
+  playlist from your phone away from home, through opendmd.dev, with no
+  account. Link a phone with a link or the QR code on the panel. Sending
+  GIFs from the Studio and Create Art comes later on the standard board.
+  [Remote control](guide/remote.md) has the steps and what the relay sees.
 - **Picture…** in the Formula editor makes a sprite from a picture you
   choose, drop or paste: crop it, size it up to 64 × 32 and pick 2, 4 or
   16 colours, with what each costs the Formula said as you go.
