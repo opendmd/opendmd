@@ -54,6 +54,7 @@ pub enum XferError {
 }
 
 /// Read a binary chunk frame.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_chunk(frame: &[u8]) -> Result<Chunk<'_>, XferError> {
     if frame.len() <= CHUNK_HEAD || frame.len() > CHUNK_HEAD + MAX_CHUNK || frame[0] != TYPE_CHUNK {
         return Err(XferError::BadFrame);
@@ -64,6 +65,7 @@ pub fn parse_chunk(frame: &[u8]) -> Result<Chunk<'_>, XferError> {
 }
 
 /// A chunk frame, for the sender (and the tests).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn chunk_frame(id: u32, offset: u32, data: &[u8]) -> Vec<u8> {
     let mut f = Vec::with_capacity(CHUNK_HEAD + data.len());
     f.push(TYPE_CHUNK);
@@ -89,27 +91,33 @@ pub struct Transfer {
 impl Transfer {
     /// Start a transfer for a validated `send`; `window`: chunks of credit
     /// at a time (2 on the classic, 4 or more on the S3).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn start(send: SendArgs, window: u32, now: Duration) -> Transfer {
         let mut t = Transfer { send, offset: 0, upto: 0, window: window.clamp(1, MAX_WINDOW), gif: Sha256::new(), copy: Sha256::new(), touched: now };
         t.upto = t.grant();
         t
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn total(&self) -> u32 {
         self.send.size + self.send.copy_size
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn offset(&self) -> u32 {
         self.offset
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn upto(&self) -> u32 {
         self.upto
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn grant(&self) -> u32 {
         self.offset.saturating_add(self.window.saturating_mul(MAX_CHUNK as u32)).min(self.total())
     }
 
     /// The `credit` message for the current credit.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn credit_message(&self) -> String {
         format!(r#"{{"t":"credit","id":{},"upto":{}}}"#, self.send.id, self.upto)
     }
@@ -118,6 +126,7 @@ impl Transfer {
     /// end inside the credit. On success the caller writes `data` to the
     /// card (the GIF's `.part` for the bytes below `send.size`, the copy's
     /// after) and then calls [`written`](Self::written).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn chunk(&mut self, c: &Chunk<'_>, now: Duration) -> Result<(), XferError> {
         if c.id != self.send.id {
             return Err(XferError::UnknownTransfer);
@@ -136,6 +145,7 @@ impl Transfer {
 
     /// The card write returned: more credit if any is left to give. `None`
     /// when the stream is complete (call [`finish`](Self::finish)).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn written(&mut self) -> Option<String> {
         if self.offset >= self.total() {
             return None;
@@ -148,6 +158,7 @@ impl Transfer {
     }
 
     /// All bytes in: both hashes must match.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn finish(&self) -> Result<(), XferError> {
         if self.offset != self.total() {
             return Err(XferError::Incomplete);
@@ -168,6 +179,7 @@ impl Transfer {
     /// A `send` signed again after a reconnect resumes this transfer if it
     /// names the same id, file and hashes, within [`RESUME_FOR`]; the
     /// credit then runs from the offset reached.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn resume(&mut self, again: &SendArgs, now: Duration) -> bool {
         if *again != self.send || now.saturating_sub(self.touched) > RESUME_FOR {
             return false;
@@ -179,6 +191,7 @@ impl Transfer {
 }
 
 impl core::fmt::Debug for Transfer {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Transfer")
             .field("id", &self.send.id)
@@ -198,16 +211,19 @@ pub struct Quota {
 }
 
 impl Quota {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn prune(&mut self, now: Duration) {
         let hour = now.as_secs() / 3600;
         let span = QUOTA_WINDOW.as_secs() / 3600;
         self.hours.retain(|&(h, _)| h + span > hour);
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn used(&mut self, now: Duration) -> u64 {
         self.prune(now);
         self.hours.iter().map(|&(_, b)| b).sum()
     }
     /// Charge `bytes` if they fit; `false` (and nothing charged) if not.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn charge(&mut self, bytes: u64, now: Duration) -> bool {
         if self.used(now) + bytes > QUOTA_BYTES {
             return false;

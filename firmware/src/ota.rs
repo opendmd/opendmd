@@ -298,6 +298,9 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
     if len == 0 {
         return up.error(411, "411 Length Required", "Content-Length required");
     }
+    // Remote control closes and holds off until the restart.
+    #[cfg(feature = "connect")]
+    crate::connect::hold_for_update();
     let max = HEADER_LEN as u64 + u64::from(factory.size);
     if len > max {
         return up.error(

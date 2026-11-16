@@ -15,6 +15,7 @@ This document is the reference. The implementations are:
 | `opendmd-core/src/connect/` (feature `connect`) | the panel's checks and the controller's encoding, in Rust (`proto.rs`, `keys.rs`, `pair.rs`, `xfer.rs`, `codec.rs`, `json.rs`; `ws.rs` is the WebSocket client) |
 | `opendmd-core/tests/connect-vectors.json` | the shared test vectors: every implementation checks itself against them |
 | `tools/connect/` | an independent Python implementation (`odc.py`), a mock server and a mock panel, and the round trip (`make connect-mock`) |
+| `firmware/src/connect/` (feature `connect`) | the panel's client: TLS, registration, the session policy, the commands carried out (`make emu-connect` runs it in the emulator against the mock server) |
 
 The firmware's client, the Worker and the web controller are built on this
 version; none of it changes the LAN API, which stays the only full tier. A

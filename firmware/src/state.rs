@@ -41,10 +41,10 @@ pub const FEATURES: &[&str] = &[
     "formulas",
     #[cfg(feature = "jit")]
     "jit",
-    #[cfg(feature = "connect-core")]
-    "connect-core",
+    #[cfg(feature = "connect")]
+    "connect",
     #[cfg(feature = "connect-measure")]
-    "connect-probe",
+    "connect-measure",
 ];
 
 /// [`FEATURES`] as a JSON array.
@@ -709,4 +709,9 @@ pub enum Command {
     /// a game started, its context index is ready, back to normal). No
     /// reply; see `follow::Runner`.
     Follow(crate::follow::Event),
+    /// Remote control's flash write (the switch, the identity, the
+    /// controller list, the name: `connect::Store`), made here because
+    /// NVS is the main task's. Answered `Ok` once written.
+    #[cfg(feature = "connect")]
+    ConnectStore { what: Box<crate::connect::Store>, reply: Reply },
 }

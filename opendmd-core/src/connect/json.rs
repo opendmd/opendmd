@@ -35,30 +35,35 @@ pub enum Value {
 
 impl Value {
     /// The member `key` of an object.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn get(&self, key: &str) -> Option<&Value> {
         match self {
             Value::Object(m) => m.iter().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
             _ => None,
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
             _ => None,
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
             _ => None,
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
@@ -76,6 +81,7 @@ pub enum JsonError {
 }
 
 /// Parse `text` as one JSON object.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse(text: &[u8]) -> Result<Value, JsonError> {
     let mut p = Parser { s: text, i: 0 };
     p.ws();
@@ -96,14 +102,17 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn peek(&self) -> Option<u8> {
         self.s.get(self.i).copied()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn ws(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.i += 1;
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn eat(&mut self, c: u8) -> Result<(), JsonError> {
         if self.peek() == Some(c) {
             self.i += 1;
@@ -112,6 +121,7 @@ impl Parser<'_> {
             Err(JsonError::Syntax)
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn lit(&mut self, word: &[u8], v: Value) -> Result<Value, JsonError> {
         if self.s[self.i..].starts_with(word) {
             self.i += word.len();
@@ -121,6 +131,7 @@ impl Parser<'_> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn value(&mut self, depth: usize) -> Result<Value, JsonError> {
         match self.peek().ok_or(JsonError::Syntax)? {
             b'{' => self.object(depth + 1),
@@ -134,6 +145,7 @@ impl Parser<'_> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn object(&mut self, depth: usize) -> Result<Value, JsonError> {
         if depth > MAX_DEPTH {
             return Err(JsonError::TooDeep);
@@ -171,6 +183,7 @@ impl Parser<'_> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn array(&mut self, depth: usize) -> Result<Value, JsonError> {
         if depth > MAX_DEPTH {
             return Err(JsonError::TooDeep);
@@ -197,6 +210,7 @@ impl Parser<'_> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn number(&mut self) -> Result<Value, JsonError> {
         let neg = self.peek() == Some(b'-');
         if neg {
@@ -223,6 +237,7 @@ impl Parser<'_> {
         Ok(Value::Int(if neg { -n } else { n }))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn hex4(&mut self) -> Result<u32, JsonError> {
         let h = self.s.get(self.i..self.i + 4).ok_or(JsonError::BadString)?;
         let mut v = 0u32;
@@ -234,6 +249,7 @@ impl Parser<'_> {
         Ok(v)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn string(&mut self) -> Result<String, JsonError> {
         self.eat(b'"')?;
         let mut out: Vec<u8> = Vec::new();
@@ -289,6 +305,7 @@ impl Parser<'_> {
 
 /// Append `s` to `out` as a JSON string, quotes included. Escapes `"`,
 /// `\` and every control character; everything else is written as is.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn push_str(out: &mut String, s: &str) {
     out.push('"');
     for ch in s.chars() {
@@ -308,6 +325,7 @@ pub fn push_str(out: &mut String, s: &str) {
 }
 
 /// `s` as a JSON string.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     push_str(&mut out, s);

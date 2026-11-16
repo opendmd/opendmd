@@ -30,6 +30,7 @@ const KNOWN_FLAGS: u8 = FLAG_CAN_ADD;
 pub type KeyId = [u8; 8];
 
 /// `k` for a public key.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn key_id(public: &[u8; 32]) -> KeyId {
     let h = sha256(&[public]);
     let mut k = [0u8; 8];
@@ -40,6 +41,7 @@ pub fn key_id(public: &[u8; 32]) -> KeyId {
 /// A public key a controller may use: a valid curve point and not one of
 /// small order (`verify_strict` would refuse every signature from such a
 /// key anyway; refusing it here keeps it off the list).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn usable_public_key(public: &[u8; 32]) -> bool {
     VerifyingKey::from_bytes(public).is_ok_and(|k| !k.is_weak())
 }
@@ -56,9 +58,11 @@ pub struct Entry {
 }
 
 impl Entry {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn id(&self) -> KeyId {
         key_id(&self.public)
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn can_add(&self) -> bool {
         self.flags & FLAG_CAN_ADD != 0
     }
@@ -84,12 +88,14 @@ pub enum KeyError {
 /// ones that can disguise text (zero widths, line and paragraph separators, bidi controls, soft
 /// hyphen, BOM), trim, and refuse it if empty or longer than `max_bytes` UTF-8
 /// bytes or `max_chars` characters after that.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clean_text(s: &str, max_bytes: usize, max_chars: usize) -> Option<String> {
     let kept: String = s.chars().filter(|&c| !invisible(c)).collect();
     let t = kept.trim();
     (!t.is_empty() && t.len() <= max_bytes && t.chars().count() <= max_chars).then(|| t.to_string())
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn invisible(c: char) -> bool {
     c.is_control()
         || matches!(c as u32,
@@ -100,6 +106,7 @@ fn invisible(c: char) -> bool {
 }
 
 /// A label as stored: [`clean_text`] at [`MAX_LABEL`] bytes.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clean_label(s: &str) -> Option<String> {
     clean_text(s, MAX_LABEL, MAX_LABEL)
 }
@@ -110,23 +117,29 @@ pub struct KeyList {
 }
 
 impl KeyList {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new() -> KeyList {
         KeyList::default()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn find(&self, k: &KeyId) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id() == *k)
     }
 
     /// Add a key; the label is cleaned ([`clean_label`]) first.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn add(&mut self, mut e: Entry) -> Result<KeyId, KeyError> {
         if !usable_public_key(&e.public) {
             return Err(KeyError::BadKey);
@@ -146,6 +159,7 @@ impl KeyList {
         Ok(k)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn remove(&mut self, k: &KeyId) -> Result<Entry, KeyError> {
         let i = self.entries.iter().position(|e| e.id() == *k).ok_or(KeyError::Unknown)?;
         Ok(self.entries.remove(i))
@@ -154,6 +168,7 @@ impl KeyList {
     /// The NVS blob: `K`, version 1, count, then per entry the public key,
     /// flags, `added` (u32 big-endian), `added_by` (8 bytes, zero for
     /// none), the label's length and the label.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn encode(&self) -> Vec<u8> {
         let mut b = vec![BLOB_MAGIC, BLOB_VERSION, self.entries.len() as u8];
         for e in &self.entries {
@@ -170,6 +185,7 @@ impl KeyList {
     /// Read a blob back, refusing anything [`encode`](Self::encode) would
     /// not have written: trailing bytes, too many entries, a bad key or
     /// label, unknown flags, duplicates.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn decode(b: &[u8]) -> Result<KeyList, KeyError> {
         if b.len() < 3 || b.len() > MAX_BLOB || b[0] != BLOB_MAGIC || b[1] != BLOB_VERSION {
             return Err(KeyError::BadBlob);
@@ -205,6 +221,7 @@ impl KeyList {
 
     /// The `keys` message to the server: the public keys and flags only
     /// (labels stay on the panel).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn keys_message(&self) -> String {
         let mut s = String::from(r#"{"t":"keys","keys":["#);
         for (i, e) in self.entries.iter().enumerate() {
@@ -221,6 +238,7 @@ impl KeyList {
     /// flags, date and who added it (`null`: paired on the panel), and the
     /// last use this boot (`last_s`, the caller's seconds, `null` if not
     /// used), which only the caller knows.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn controllers_result(&self, last_use: impl Fn(&KeyId) -> Option<u64>) -> String {
         let mut s = String::from("[");
         for (i, e) in self.entries.iter().enumerate() {

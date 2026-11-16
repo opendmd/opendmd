@@ -335,22 +335,24 @@ fn run(worker: NetWorker) {
         }, rx);
     }
     let (save_settings, save_cmd) = (settings.clone(), cmd.clone());
+    #[cfg(feature = "connect")]
+    let link = crate::connect::dispatch_link(cmd.clone(), status.clone(), settings.clone());
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
     let Some(mut net) = start(modem, sysloop, nvs, ssid, password, eap, hostname, status, save_settings, save_cmd) else {
         return;
     };
 
-    // The Connect probe (spike S0, `connect-probe` builds only): polled
-    // from this loop, on this stack (`connect_probe`).
-    #[cfg(feature = "connect-core")]
-    let mut probe = crate::connect_probe::Probe::new();
+    // Remote control (`connect` builds only): polled from this loop, on
+    // this stack (`connect`).
+    #[cfg(feature = "connect")]
+    let mut probe = crate::connect::Client::new(link);
 
     // --- Steady state ------------------------------------------------------
     loop {
         // Commands from the HTTP handlers. `recv_timeout` doubles as the poll
         // interval, so a scan is never left waiting for a sleep to finish.
         let wait = follow.wait().min(config::WIFI_POLL_INTERVAL);
-        #[cfg(feature = "connect-core")]
+        #[cfg(feature = "connect")]
         let wait = wait.min(probe.wait());
         let got = rx.recv_timeout(wait);
         crate::improv::log_events();
@@ -453,7 +455,7 @@ fn run(worker: NetWorker) {
 
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
-        #[cfg(feature = "connect-core")]
+        #[cfg(feature = "connect")]
         probe.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
         // The S3 preview's memory line (`s3mem`), every 30 s.
         #[cfg(esp32s3)]

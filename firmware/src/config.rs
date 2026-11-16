@@ -498,7 +498,7 @@ pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 /// at most over two signature checks, two scans, Follow polling and its
 /// test, a cache count, `/api/wifi/scan` and two full-size FAT index
 /// builds. 11 KB leaves 1,816 B over that.
-pub const NET_WORKER_STACK: usize = 11 * 1024;
+pub const NET_WORKER_STACK: usize = if cfg!(feature = "connect") { 12 * 1024 } else { 11 * 1024 };
 /// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
 /// handed over): the web app's CRC pass, the HTTP server's start, the mount
 /// attempts and the playlist index (opened, or built: one streaming pass
@@ -687,7 +687,7 @@ pub const HTTP_MAX_SOCKETS: u16 = 7;
 /// whole server is dropped (the player carries on, unreachable): that
 /// happened when `/api/quiet` became the 51st under a limit of 50
 /// (2026-11-02). A slot costs ~16 B of heap; keep a dozen spare.
-pub const HTTP_MAX_HANDLERS: u16 = 64;
+pub const HTTP_MAX_HANDLERS: u16 = if cfg!(feature = "connect") { 70 } else { 64 };
 
 /// Where the playlists live on the card. (The web app is not on the card: it
 /// is a www pack in flash, `www.rs`.)

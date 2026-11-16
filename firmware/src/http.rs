@@ -46,11 +46,11 @@ const SETUP_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup.htm
 /// six is full: a frame held up on the card behind an upload's writes held
 /// live edits for 10 s and the polls beside them got no connection at all
 /// (a test board, net-stall run c). The loop takes commands every frame.
-const TAKE_WAIT: Duration = Duration::from_millis(800);
+pub(crate) const TAKE_WAIT: Duration = Duration::from_millis(800);
 /// A play, Previous or a pause, once taken: how long its outcome (a 404,
 /// a 409 for a live edit that found no formula, …) is waited for before
 /// the answer is `202` + `"pending":true` (`/api/status` shows the result).
-const PLAY_ANSWER: Duration = Duration::from_millis(700);
+pub(crate) const PLAY_ANSWER: Duration = Duration::from_millis(700);
 
 /// [`mpsc::Receiver::answer_within`] as a `Result`, for the handlers that
 /// wait on the main task.
@@ -213,12 +213,78 @@ struct PlayRequest {
 /// A Formula refused for want of heap for its program or canvas (only a
 /// build with Formulas has either).
 #[cfg(feature = "psi")]
-fn short_of_memory(e: &str) -> bool {
+pub(crate) fn short_of_memory(e: &str) -> bool {
     e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS
 }
 #[cfg(not(feature = "psi"))]
-fn short_of_memory(_: &str) -> bool {
+pub(crate) fn short_of_memory(_: &str) -> bool {
     false
+}
+
+/// `POST /api/play`'s checks of a path (and Remote control's `play`, after
+/// its own stricter rule: `connect::dispatch`): `Err((status, sentence))`.
+#[optimize(size)]
+pub(crate) fn check_play_path(path: &str, live: bool, over: bool) -> std::result::Result<(), (u16, String)> {
+    // An inline formula (`@formula?psb=…`) may be up to 6 KB; it is
+    // compiled on the main task as it opens (a compile error or one too
+    // heavy for the panel is a 400 with the compiler's sentence; a
+    // bundled name or a card file that isn't there, a 404).
+    if opendmd_core::synth::is_formula(path)
+        && path.len() > opendmd_core::synth::MAX_FORMULA_PATH
+    {
+        return Err((
+            413,
+            format!(
+                "this formula is too long for the panel ({} B as sent; the limit is {} B)",
+                path.len(),
+                opendmd_core::synth::MAX_FORMULA_PATH
+            ),
+        ));
+    }
+    // A build without Formulas (`formulas` off): a Formula, inline,
+    // bundled or the card's, or one drawn over the GIF, is a 501 that
+    // says so (the web app hides Formulas there; a script hears why).
+    if !crate::state::FORMULAS
+        && (opendmd_core::synth::is_formula(path)
+            || opendmd_core::synth::formula_file(path).is_some()
+            || over
+            || live)
+    {
+        return Err((501, crate::state::NO_FORMULAS.to_string()));
+    }
+    // A built-in effect's path from before they were Formulas: a 415
+    // that says so.
+    if opendmd_core::synth::is_retired_effect(path) {
+        return Err((415, "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)".to_string()));
+    }
+    // The live items likewise (a clock is a Formula now).
+    if opendmd_core::synth::is_retired_live(path) {
+        return Err((415, "the clock and the scrolling text are gone: play a Formula (a clock is one, @formula:big-clock)".to_string()));
+    }
+    // A virtual file (`@card:…`, `@boot…`) is drawn, not read; one this
+    // build does not know is a 415 from the engine.
+    if live && !opendmd_core::synth::is_formula(path) {
+        return Err((400, "\"live\" is only for a formula (@formula?psb=…)".to_string()));
+    }
+    let formula_file = opendmd_core::synth::formula_file(path);
+    if over
+        && !path.is_empty()
+        && !opendmd_core::synth::is_formula(path)
+        && formula_file.is_none()
+    {
+        return Err((400, "\"over\" is only for a formula (@formula?psb=…), or \"\" to take it off".to_string()));
+    }
+    let virtual_file = opendmd_core::synth::is_virtual(path);
+    // A Formula's file may carry its controls after `?`.
+    let on_card = formula_file.map_or(path, |(f, _)| f);
+    if !(over && path.is_empty())
+        && !virtual_file
+        && (!on_card.starts_with('/')
+            || files::card_path(config::SD_MOUNT, on_card).is_none())
+    {
+        return Err((400, "path must be card-absolute and stay on the card, or a Formula (@formula…)".to_string()));
+    }
+    Ok(())
 }
 
 /// `/api/play`'s and Previous's answer to a [`PlayError`], or to no answer
@@ -454,7 +520,7 @@ where
 /// Numbers are read wide so a value out of range gets the range message.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PanelWire {
+pub(crate) struct PanelWire {
     clk_phase: Option<bool>,
     latch_blanking: Option<i64>,
     driver: Option<String>,
@@ -873,7 +939,7 @@ pub struct ConfigPatch {
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
-    panel: Option<Option<PanelWire>>,
+    pub(crate) panel: Option<Option<PanelWire>>,
     /// The schedule's JSON: read from the settings file on the card only
     /// (`settings_card`); `PUT /api/config` ignores it (`PUT /api/schedule`
     /// sets the schedule).
@@ -1261,75 +1327,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        // An inline formula (`@formula?psb=…`) may be up to 6 KB; it is
-        // compiled on the main task as it opens (a compile error or one too
-        // heavy for the panel is a 400 with the compiler's sentence; a
-        // bundled name or a card file that isn't there, a 404).
-        if opendmd_core::synth::is_formula(&play.path)
-            && play.path.len() > opendmd_core::synth::MAX_FORMULA_PATH
-        {
-            return req.error(
-                413,
-                "413 Payload Too Large",
-                &format!(
-                    "this formula is too long for the panel ({} B as sent; the limit is {} B)",
-                    play.path.len(),
-                    opendmd_core::synth::MAX_FORMULA_PATH
-                ),
-            );
-        }
-        // A build without Formulas (`formulas` off): a Formula, inline,
-        // bundled or the card's, or one drawn over the GIF, is a 501 that
-        // says so (the web app hides Formulas there; a script hears why).
-        if !crate::state::FORMULAS
-            && (opendmd_core::synth::is_formula(&play.path)
-                || opendmd_core::synth::formula_file(&play.path).is_some()
-                || play.over
-                || play.live)
-        {
-            return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
-        }
-        // A built-in effect's path from before they were Formulas: a 415
-        // that says so.
-        if opendmd_core::synth::is_retired_effect(&play.path) {
-            return req.error(
-                415,
-                "415 Unsupported Media Type",
-                "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)",
-            );
-        }
-        // The live items likewise (a clock is a Formula now).
-        if opendmd_core::synth::is_retired_live(&play.path) {
-            return req.error(
-                415,
-                "415 Unsupported Media Type",
-                "the clock and the scrolling text are gone: play a Formula (a clock is one, @formula:big-clock)",
-            );
-        }
-        // A virtual file (`@card:…`, `@boot…`) is drawn, not read; one this
-        // build does not know is a 415 from the engine.
-        if play.live && !opendmd_core::synth::is_formula(&play.path) {
-            return req.bad_request("\"live\" is only for a formula (@formula?psb=…)");
-        }
-        let formula_file = opendmd_core::synth::formula_file(&play.path);
-        if play.over
-            && !play.path.is_empty()
-            && !opendmd_core::synth::is_formula(&play.path)
-            && formula_file.is_none()
-        {
-            return req.bad_request(
-                "\"over\" is only for a formula (@formula?psb=…), or \"\" to take it off",
-            );
-        }
-        let virtual_file = opendmd_core::synth::is_virtual(&play.path);
-        // A Formula's file may carry its controls after `?`.
-        let on_card = formula_file.map_or(play.path.as_str(), |(f, _)| f);
-        if !(play.over && play.path.is_empty())
-            && !virtual_file
-            && (!on_card.starts_with('/')
-                || files::card_path(config::SD_MOUNT, on_card).is_none())
-        {
-            return req.bad_request("path must be card-absolute and stay on the card, or a Formula (@formula…)");
+        if let Err((code, msg)) = check_play_path(&play.path, play.live, play.over) {
+            return match code {
+                413 => req.error(413, "413 Payload Too Large", &msg),
+                415 => req.error(415, "415 Unsupported Media Type", &msg),
+                501 => req.error(501, "501 Not Implemented", &msg),
+                _ => req.bad_request(&msg),
+            };
         }
         send_play(req, &c, play.path, play.live, play.over, None)
     })?;
@@ -1995,10 +1999,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         })?;
     }
 
-    // The Connect probe's test hooks (`connect-probe` builds only; not in
-    // docs/api.md: this build's alone).
+    // Remote control's LAN routes (`connect` builds only), and spike S0's
+    // test hooks (`connect-measure` builds only; not in docs/api.md).
+    #[cfg(feature = "connect")]
+    crate::connect::api::routes(&mut server, ctx.clone())?;
     #[cfg(feature = "connect-measure")]
-    crate::connect_probe::routes(&mut server)?;
+    crate::connect::measure_routes(&mut server)?;
     // The S3 preview's memory report (`s3mem`: not in docs/api.md, the
     // preview's alone).
     #[cfg(esp32s3)]
@@ -2327,7 +2333,7 @@ fn send_setup(req: &mut Req) -> Result<()> {
 /// `Ok(None)` means a 413 has already been sent. ESP-IDF's server only takes
 /// bodies with a `Content-Length`, so the declared length is the whole check;
 /// whatever is left unread is drained by the server after the handler.
-fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
+pub(crate) fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
     let declared = req.content_len();
     if declared > MAX_JSON_BODY {
         req.error(
@@ -2369,7 +2375,13 @@ pub(crate) fn heap_now() -> admit::Heap {
 pub(crate) fn admitted(req: &mut Req, ask: Ask) -> Result<bool> {
     let heap = heap_now();
     match admit::admit(ask, heap) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            // A heavy request on the LAN: Remote control holds its
+            // handshakes back a while (`connect::lan_busy`).
+            #[cfg(feature = "connect")]
+            crate::connect::note_heavy();
+            Ok(true)
+        }
         Err(r) => {
             log::warn!(
                 "{}: {}, 503 (needs {} B; {} B free, largest block {} B)",
@@ -2983,9 +2995,9 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         stream::stack_low().map_or_else(|| "null".to_string(), |v| v.to_string()),
         net_json(),
     );
-    // The Connect probe (spike S0, `connect-probe` builds only).
-    #[cfg(feature = "connect-measure")]
-    let _ = write!(out, r#""connect":{},"#, crate::connect_probe::json());
+    // Remote control (`connect` builds only).
+    #[cfg(feature = "connect")]
+    let _ = write!(out, r#""connect":{},"#, crate::connect::status_json());
     let _ = write!(
         out,
         r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{}"#,
@@ -3664,28 +3676,12 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                     shared.panel_sync,
                     shared.panel_split
                 );
-                {
-                    // The look as it is now, unless this request named one:
-                    // its Formula may have been deleted since the copy was
-                    // taken (`formula_look::file_changed` cleared it).
-                    let mut live = c.settings.lock().unwrap();
-                    let mut shared = shared;
-                    if !look_named {
-                        std::mem::swap(&mut shared.look_formula, &mut live.look_formula);
-                    }
-                    // The start-up show's Formula likewise.
-                    if !boot_named {
-                        std::mem::swap(&mut shared.boot_formula, &mut live.boot_formula);
-                    }
-                    *live = *shared;
-                }
+                commit_config(&c.settings, shared, look_named, boot_named);
                 // In effect at once: the sky's inputs for the new location
                 // (or zone), here on CPU0 (the zone is already set).
                 if sky_changed {
                     crate::inputs::set_place(location);
                 }
-                // Durable at once on the card (CPU0; `settings_card`).
-                crate::settings_card::save_shared(&c.settings);
                 if let Some(name) = renamed.take() {
                     // Queued, not waited for: the worker may be mid-connect.
                     if c.net.send(NetCommand::Rename(name)).is_err() {
@@ -3736,6 +3732,64 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         })
         }))
     }
+
+/// The settings the main task applied become the shared ones (what
+/// `GET /api/config` reads), then the card's copy (`settings_card`): after
+/// `PUT /api/config` and Remote control's brightness and playlist alike,
+/// on CPU0. `look_named`, `boot_named`: the request named that Formula;
+/// if not, the look as it is now is kept (its Formula may have been
+/// deleted since the copy was taken: `formula_look::file_changed`).
+#[optimize(size)]
+pub(crate) fn commit_config(settings: &Mutex<Settings>, mut shared: Box<Settings>, look_named: bool, boot_named: bool) {
+    {
+        let mut live = settings.lock().unwrap();
+        if !look_named {
+            std::mem::swap(&mut shared.look_formula, &mut live.look_formula);
+        }
+        // The start-up show's Formula likewise.
+        if !boot_named {
+            std::mem::swap(&mut shared.boot_formula, &mut live.boot_formula);
+        }
+        *live = *shared;
+    }
+    // Durable at once on the card (CPU0; `settings_card`).
+    crate::settings_card::save_shared(settings);
+}
+
+/// Remote control's `status` message (P1-PLAN 2.7, ~250-400 B): what plays
+/// and the settings a controller shows; never heap, card or network
+/// internals. With a key over everything but the position, so the client
+/// sends it on a change and not for the clock.
+#[cfg(feature = "connect")]
+#[optimize(size)]
+pub(crate) fn connect_status(status: &Mutex<Status>, settings: &Mutex<Settings>, name: &str) -> (String, u32) {
+    use std::fmt::Write as _;
+    let (brightness, max, set) = {
+        let s = settings.lock().unwrap();
+        (s.brightness, s.max_brightness, s.set.clone())
+    };
+    let snap = status_snapshot(status);
+    let mut rest = String::with_capacity(384);
+    let _ = write!(
+        rest,
+        r#","path":{},"title":{}{}{},"next":{}}},"paused":{},"brightness":{brightness},"max_brightness":{max},"set":{},"context":{{"state":{}}},"transfer":{},"fw":{},"name":{},"id":{}}}"#,
+        json_string(&snap.path),
+        json_string(&snap.title),
+        kept_json(&snap),
+        identity_json(&snap),
+        opt_json((!snap.next.is_empty()).then_some(snap.next.as_str())),
+        snap.paused,
+        json_string(&set),
+        json_string(crate::follow::state_name()),
+        stream::transfers() > 0 || stream::uploads() > 0,
+        json_string(crate::state::firmware_version()),
+        json_string(name),
+        opt_json(crate::state::panel_id()),
+    );
+    let key = opendmd_core::www_pack::crc32(rest.as_bytes());
+    let elapsed = snap.position_at(snap.epoch.elapsed()).as_millis();
+    (format!(r#"{{"t":"status","now_playing":{{"elapsed_ms":{elapsed}{rest}"#), key)
+}
 
 /// A route's body out of `start`, for size like the routes' closures (CPU0,
 /// not on a frame's path).

@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// `bytes` as lowercase hex.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -24,6 +25,7 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn hex_digit(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -34,6 +36,7 @@ fn hex_digit(c: u8) -> Option<u8> {
 
 /// Exactly `N` bytes of lowercase hex (`2 N` characters), else `None`.
 /// Uppercase is refused: one spelling per value.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
     let s = s.as_bytes();
     if s.len() != 2 * N {
@@ -49,6 +52,7 @@ pub fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
 const B32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
 /// The first `bits` bits of `bytes` in base32, `ceil(bits / 5)` characters.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn base32_bits(bytes: &[u8], bits: usize) -> String {
     let chars = bits.div_ceil(5);
     let mut s = String::with_capacity(chars);
@@ -65,6 +69,7 @@ pub fn base32_bits(bytes: &[u8], bits: usize) -> String {
 }
 
 /// `bytes` in base32 (all their bits).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn base32(bytes: &[u8]) -> String {
     base32_bits(bytes, bytes.len() * 8)
 }
@@ -73,6 +78,7 @@ pub fn base32(bytes: &[u8]) -> String {
 /// (`N * 8 >= bits`; any bits past `bits` come out zero). `None` for a wrong
 /// length, a character outside the alphabet (uppercase included) or a
 /// non-zero padding bit.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn unbase32_bits<const N: usize>(s: &str, bits: usize) -> Option<[u8; N]> {
     let s = s.as_bytes();
     if s.len() != bits.div_ceil(5) || N * 8 < bits {
@@ -97,11 +103,13 @@ pub fn unbase32_bits<const N: usize>(s: &str, bits: usize) -> Option<[u8; N]> {
 }
 
 /// Decode canonical base32 of exactly `N` bytes.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn unbase32<const N: usize>(s: &str) -> Option<[u8; N]> {
     unbase32_bits::<N>(s, N * 8)
 }
 
 /// SHA-256 of the concatenation of `parts`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = Sha256::new();
     for p in parts {
@@ -111,6 +119,7 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// HMAC-SHA256 (RFC 2104) of the concatenation of `parts` under `key`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut k = [0u8; 64];
     if key.len() > 64 {
@@ -132,6 +141,7 @@ pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 
 /// Constant-time equality of two equal-length byte strings (a MAC
 /// compare); different lengths are simply unequal.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

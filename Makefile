@@ -657,14 +657,14 @@ FW_L2_COPY ?= 0
 # the frame loop's own depth, and left 268 B of the 16 KB; a
 # release build never runs them. (From the heap: the probe's heap figures
 # are 2 KB under a release build's.)
-# connect-probe builds only (OpenDMD Connect's spike S0, src/connect_probe.rs):
-# firmware/sdkconfig.connect-probe (dynamic TLS buffers, session tickets, the
+# connect builds only (OpenDMD Connect's Remote control, src/connect/):
+# firmware/sdkconfig.connect (dynamic TLS buffers, session tickets, the
 # trusted-certificate callback, one more socket) and the TLS record sizes,
 # CONNECT_TLS_IN/OUT (CONNECT.md 5.2: 4096 in, 2048 out). Every other build
 # keeps sdkconfig.defaults' TLS section as it is.
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
-FW_CONNECT_FEATURES := connect-probe connect-core connect-measure
+FW_CONNECT_FEATURES := connect connect-probe connect-core connect-measure
 FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
 # The feature and its sdkconfig must go together: a bench build takes it in
 # FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
@@ -674,12 +674,12 @@ FW_CONNECT_IN_RELEASE = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(
 FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE) is for release builds (make fw-release); a bench build takes FW_FEATURES=$(FW_CONNECT_IN_RELEASE)"; exit 2; },true)
 # A Connect release build is a measurement build: never into the release's
 # own dist/ or target dir (give both: DIST=... FW_RELEASE_TARGET_DIR=...),
-# and its version says so (FW_VERSION gets -connect-s0, below).
+# and its version says so (FW_VERSION gets -connect, below).
 FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=$(FW_CONNECT_IN_BENCH) is for bench builds; a release build takes FW_RELEASE_FEATURES=$(FW_CONNECT_IN_BENCH)"; exit 2; },true) \
 	$(if $(FW_CONNECT_IN_RELEASE),$(if $(filter command line environment,$(origin DIST)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a DIST of its own (not dist/)"; exit 2; }) \
 	$(if $(filter command line environment,$(origin FW_RELEASE_TARGET_DIR)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a FW_RELEASE_TARGET_DIR of its own"; exit 2; }) \
 	&& { test "$(abspath $(DIST))" != "$(abspath dist)" || { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): DIST must not be dist/"; exit 2; }; })
-# fw-clippy's connect-probe lane: a target dir of its own (keyed by the
+# fw-clippy's connect lanes: a target dir of its own (keyed by the
 # fragment's inputs, so a change makes a new one), its sdkconfig the
 # feature's.
 FW_CLIPPY_CONNECT = $(CURDIR)/$(FW)/target/connect-clippy$(if $(FW_CHIP_SDKCONFIG),-$(FW_CHIP))
@@ -690,7 +690,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
 	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
-	$(if $(FW_CONNECT),cat $(CURDIR)/$(FW)/sdkconfig.connect-probe; echo 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)'; echo 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)';)$(if $(FW_EXTRA_SDKCONFIG),printf '%s\n' $(FW_EXTRA_SDKCONFIG);) \
+	$(if $(FW_CONNECT),cat $(CURDIR)/$(FW)/sdkconfig.connect; echo 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)'; echo 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)';)$(if $(FW_EXTRA_SDKCONFIG),printf '%s\n' $(FW_EXTRA_SDKCONFIG);) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy).
@@ -714,7 +714,7 @@ FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 fw-sdkconfig-flavour:
 	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal)$(if $(FW_CONNECT),+connect-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag)$(if $(FW_CHIP_SDKCONFIG), $(FW_CHIP_SDKCONFIG)) $(if $(FW_CONNECT),$(FW)/sdkconfig.connect-probe) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal)$(if $(FW_CONNECT),+connect-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag)$(if $(FW_CHIP_SDKCONFIG), $(FW_CHIP_SDKCONFIG)) $(if $(FW_CONNECT),$(FW)/sdkconfig.connect) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -788,7 +788,7 @@ fw-clippy: fw-sdkconfig-flavour
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets --no-default-features -- -D warnings'
 	@$(MAKE) --no-print-directory fw-clippy-connect FW_FEATURES=connect-probe
 
-# The connect-probe feature set (src/connect_probe.rs) with its sdkconfig,
+# The connect feature sets (src/connect/) with their sdkconfig,
 # in a target dir of its own (FW_CLIPPY_CONNECT), so fw-clippy's other
 # lanes keep theirs. Run by fw-clippy.
 fw-clippy-connect:
@@ -800,10 +800,10 @@ fw-clippy-connect:
 	   rm -f $(FW_CLIPPY_CONNECT)/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW_CLIPPY_CONNECT)/sdkconfig.stamp; \
 	 fi
-	@echo "==> Clippy firmware, connect-probe (the Connect spike's probe, with sdkconfig.connect-probe)"
+	@echo "==> Clippy firmware, connect-probe (Remote control with S0's measuring half, with sdkconfig.connect)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
-	@echo "==> Clippy firmware, connect-core (the probe's session alone, M1's build)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-core -- -D warnings'
+	@echo "==> Clippy firmware, connect (Remote control as it ships, with sdkconfig.connect)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -850,9 +850,9 @@ fw-clean:
 # See docs/deploying.md.
 FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
 # A Connect measurement build's files and app descriptor say so
-# ("<version>-connect-s0"): they cannot be taken for the release's.
-ifneq ($(filter connect-probe connect-core connect-measure,$(subst $(comma), ,$(FW_RELEASE_FEATURES))),)
-FW_VERSION := $(FW_VERSION)-connect-s0
+# ("<version>-connect"): they cannot be taken for the release's.
+ifneq ($(filter $(FW_CONNECT_FEATURES),$(subst $(comma), ,$(FW_RELEASE_FEATURES))),)
+FW_VERSION := $(FW_VERSION)-connect
 endif
 # The release build wants ~1.5 GB of its own (host build scripts plus a
 # second ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier moves it.
@@ -1299,25 +1299,28 @@ emu-image-leak:
 emu-leak: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
-# OpenDMD Connect's spike S0 in the emulator (tools/connect-s0/m8_emu.py): M8
-# (the heap's pools and census around a TLS session) and the probe's
-# behaviour end to end, against tools/connect-s0/echo_server.py inside the
-# lane's own network namespace. The image: emu-census + connect-probe, the
-# host connect-s0.test at 10.0.2.2:8443 and a local test root
-# ($(EMU_CONNECT_DIR)/certs, made once and again after 20 days) pinned beside
-# the real ones; never a device's. EMU_CONNECT_OK.
+# Remote control in the emulator (tools/connect/emu_lane.py): the real
+# firmware's Connect client against tools/connect/mock_server.py over TLS,
+# inside the lane's own network namespace: registration, hello, the
+# command set, the LAN routes, reconnects and the server's closes, forget,
+# a restart; and the red list put straight onto the panel's socket (every
+# frame refused by the panel itself, none reaching the player). The image:
+# emu-census + connect, the host connect.test at 10.0.2.2:8443, a 30 s
+# hold, a local test root ($(EMU_CONNECT_DIR)/certs-p1, made once and again
+# after 20 days) pinned beside the real ones and the lane's test controller
+# key; never a device's. EMU_CONNECT_OK.
 EMU_CONNECT_DIR = $(EMU_DIR)/connect
-EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-connect-s0-4mb-full.bin
+EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-connect-4mb-full.bin
 emu-connect-certs:
-	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect-s0/echo_server.py certs $(EMU_CONNECT_DIR)/certs; fi
+	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs-p1/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect/emu_lane.py certs $(EMU_CONNECT_DIR)/certs-p1; fi
 emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
-	OPENDMD_CONNECT_HOST=connect-s0.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_TOKEN=emu-s0 OPENDMD_CONNECT_HOLD_S=90 \
-	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs/root.der \
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect-probe FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 \
+	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-connect: emu-build emu-card
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
-	uv run --quiet tools/connect-s0/m8_emu.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs $(EMU_ARGS)
+	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real

@@ -41,12 +41,14 @@ pub const CLOSE_REFUSED: u16 = 4403;
 pub const CLOSE_PROTOCOL: u16 = 1002;
 
 /// `odc<N>`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn subprotocol(v: u32) -> String {
     format!("odc{v}")
 }
 
 /// The version an `odc<N>` subprotocol names: decimal, no sign, no leading
 /// zero, 1 to 999.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_subprotocol(s: &str) -> Option<u32> {
     let d = s.strip_prefix("odc")?;
     if d.is_empty() || d.len() > 3 || d.starts_with('0') || !d.bytes().all(|c| c.is_ascii_digit()) {
@@ -72,6 +74,7 @@ pub enum Negotiated {
 
 /// Pick the newest accepted version among `offered` (the
 /// `Sec-WebSocket-Protocol` values, in any order).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn negotiate<'a>(offered: impl IntoIterator<Item = &'a str>) -> Negotiated {
     let (mut best, mut low, mut high) = (None::<u32>, false, false);
     for v in offered.into_iter().filter_map(|s| parse_subprotocol(s.trim())) {
@@ -103,6 +106,7 @@ pub struct Dev(pub [u8; 16]);
 
 impl Dev {
     /// The server's mint: `random` from its RNG.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn mint(random: &[u8; 10], id_key: &[u8]) -> Dev {
         let tag = hmac_sha256(id_key, &[DEV_TAG_DOMAIN, random]);
         let mut d = [0u8; 16];
@@ -111,21 +115,26 @@ impl Dev {
         Dev(d)
     }
     /// The server's check of an id it is shown.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn tag_ok(&self, id_key: &[u8]) -> bool {
         let tag = hmac_sha256(id_key, &[DEV_TAG_DOMAIN, &self.0[..10]]);
         ct_eq(&tag[..6], &self.0[10..])
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn text(&self) -> String {
         super::codec::base32(&self.0)
     }
     /// Canonical lowercase base32 only.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn parse(s: &str) -> Option<Dev> {
         unbase32::<16>(s).map(Dev)
     }
     /// The `d.<dev>` subprotocol that carries it (never a URL).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn subprotocol(&self) -> String {
         format!("d.{}", self.text())
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn from_subprotocol(s: &str) -> Option<Dev> {
         Dev::parse(s.strip_prefix("d.")?)
     }
@@ -164,6 +173,7 @@ pub struct Frame<'a> {
 /// Split a command frame. `Err(None)`: not a command frame at all (no key
 /// id to answer); `Err(Some(k))`: one whose body is over [`MAX_BODY`] (an empty body
 /// goes on, to fail its signature or its parse).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn split_command(frame: &[u8]) -> Result<Frame<'_>, Option<KeyId>> {
     if frame.len() < COMMAND_HEAD || frame[0] != TYPE_COMMAND {
         return Err(None);
@@ -181,6 +191,7 @@ pub fn split_command(frame: &[u8]) -> Result<Frame<'_>, Option<KeyId>> {
 
 /// Does `sig` verify over the domain and `body` for `public`? Strict
 /// verification (no small-order keys, canonical `S`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn verify_body(public: &[u8; 32], body: &[u8], sig: &[u8; 64]) -> bool {
     let Ok(key) = VerifyingKey::from_bytes(public) else {
         return false;
@@ -193,6 +204,7 @@ pub fn verify_body(public: &[u8; 32], body: &[u8], sig: &[u8; 64]) -> bool {
 
 /// The server's pre-check (P1-PLAN 2.5): a known key and a good signature,
 /// before the frame goes to the panel. `keys`: (id, public key) pairs.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn precheck(keys: &[(KeyId, [u8; 32])], frame: &[u8]) -> Result<KeyId, Refusal> {
     let f = match split_command(frame) {
         Ok(f) => f,
@@ -209,6 +221,7 @@ pub fn precheck(keys: &[(KeyId, [u8; 32])], frame: &[u8]) -> Result<KeyId, Refus
 /// A controller's command body: `{"v","dev","sess","n","c","a"}`. `args`:
 /// the members of `a` already as JSON (`""` for none), e.g.
 /// `"path":"/gifs/x.gif"`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn command_body(dev: &Dev, sess: &[u8; 12], n: u64, c: &str, args: &str) -> String {
     let mut s = format!(r#"{{"v":{VERSION},"dev":"{}","sess":"{}","n":{n},"c":"#, dev.text(), hex(sess));
     push_str(&mut s, c);
@@ -219,6 +232,7 @@ pub fn command_body(dev: &Dev, sess: &[u8; 12], n: u64, c: &str, args: &str) -> 
 }
 
 /// A controller's signed command frame for `body` (its bytes as sent).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sign_command(key: &SigningKey, body: &[u8]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(CMD_DOMAIN.len() + body.len());
     msg.extend_from_slice(CMD_DOMAIN);
@@ -232,17 +246,20 @@ pub fn sign_command(key: &SigningKey, body: &[u8]) -> Vec<u8> {
     f
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn attach_message(dev: &Dev, nonce: &[u8; 16]) -> Vec<u8> {
     [ATTACH_DOMAIN, &dev.0, nonce].concat()
 }
 
 /// A controller's answer to the server's `challenge`: the signature over
 /// the domain ‖ `dev` ‖ nonce.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn attach_signature(key: &SigningKey, dev: &Dev, nonce: &[u8; 16]) -> [u8; 64] {
     key.sign(&attach_message(dev, nonce)).to_bytes()
 }
 
 /// The server's check of an `attach`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn verify_attach(public: &[u8; 32], dev: &Dev, nonce: &[u8; 16], sig: &[u8; 64]) -> bool {
     VerifyingKey::from_bytes(public).is_ok_and(|k| k.verify_strict(&attach_message(dev, nonce), &Signature::from_bytes(sig)).is_ok())
 }
@@ -269,6 +286,7 @@ pub enum Refusal {
 }
 
 impl Refusal {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn code(self) -> &'static str {
         match self {
             Refusal::BadSig => "bad-sig",
@@ -396,6 +414,7 @@ pub const MAX_NAME_CHARS: usize = 32;
 
 /// A Formula's stem in a remote play: `[a-z0-9_-]`, 1 to 64, starting with
 /// a letter or digit (so never `~sent`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn formula_stem_ok(s: &str) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
@@ -407,6 +426,7 @@ fn formula_stem_ok(s: &str) -> bool {
 /// A path segment a remote path may hold: not empty, not `.`/`..` or any
 /// hidden name, none ending in `.` or a space (FAT drops those, so two
 /// spellings would name one file), no control or path-meaningful character.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn segment_ok(s: &str) -> bool {
     !s.is_empty() && !s.starts_with('.') && !s.ends_with(['.', ' ']) && !s.chars().any(|c| c.is_control() || matches!(c, '\\' | '?' | '#' | ':' | '*' | '<' | '>' | '|' | '"'))
 }
@@ -418,6 +438,7 @@ pub const MAX_PATH: usize = 240;
 /// never `..`), `@formula:<stem>` or `/formulas/<stem>.psi` (never an
 /// inline Formula, never `~sent`). The firmware's own play validation runs
 /// as well (F2).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn remote_play_path_ok(path: &str) -> bool {
     if let Some(stem) = path.strip_prefix("@formula:") {
         return formula_stem_ok(stem);
@@ -437,12 +458,14 @@ pub fn remote_play_path_ok(path: &str) -> bool {
 /// A playlist a remote `playlist` may choose: `""` (the main list) or one
 /// name, as the LAN's rule (`valid_set_name`) and stricter: ≤ 64 bytes, no
 /// control character, not hidden.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn remote_set_ok(set: &str) -> bool {
     set.is_empty() || (set.len() <= 64 && segment_ok(set) && !set.contains(['/', '\0']) && !set.contains(".."))
 }
 
 /// A sent GIF's file name (the web app's rule): no slash, no control
 /// characters, `.gif`, ≤ 120 characters; and not hidden.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sent_name_ok(name: &str) -> bool {
     name.chars().count() <= 120
         && name.len() > 4
@@ -451,18 +474,22 @@ pub fn sent_name_ok(name: &str) -> bool {
         && !name.contains('/')
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn arg<'a>(a: &'a Value, key: &str) -> Option<&'a Value> {
     a.get(key)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn u32_arg(a: &Value, key: &str) -> Result<u32, Refusal> {
     arg(a, key).and_then(Value::as_int).and_then(|n| u32::try_from(n).ok()).ok_or(Refusal::BadArg)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn str_arg<'a>(a: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     arg(a, key).and_then(Value::as_str).ok_or(Refusal::BadArg)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn send_args(a: &Value) -> Result<SendArgs, Refusal> {
     let id = u32_arg(a, "id")?;
     let name = str_arg(a, "name")?;
@@ -497,6 +524,7 @@ fn send_args(a: &Value) -> Result<SendArgs, Refusal> {
 /// Look `c` up in the allow-list and validate its arguments `a`. `can_add`:
 /// the sender's key has the flag. `keys`: the panel's list (a removal must
 /// name a key on it).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &KeyList) -> Result<Command, Refusal> {
     Ok(match c {
         "play" => {
@@ -565,10 +593,12 @@ pub struct Bucket {
 }
 
 impl Bucket {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(per_s: u32, now: Duration) -> Bucket {
         Bucket { per_s, micro: u64::from(per_s) * 1_000_000, last: now }
     }
     /// Take one token if there is one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn take(&mut self, now: Duration) -> bool {
         let cap = u64::from(self.per_s) * 1_000_000;
         let dt = now.saturating_sub(self.last).as_micros().min(u128::from(u64::MAX)) as u64;
@@ -613,6 +643,7 @@ pub struct Refused {
 
 impl Refused {
     /// The `ack` to send, or `None` (no key id: drop the frame).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn ack(&self) -> Option<String> {
         self.k.map(|k| ack_err(&k, self.n, self.err))
     }
@@ -632,11 +663,13 @@ pub struct Session {
 
 impl Session {
     /// A new connection; `sess`: 12 fresh random bytes.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(dev: Dev, sess: [u8; 12], version: u32, now: Duration) -> Session {
         Session { dev, sess, version, counters: Vec::new(), panel_rate: Bucket::new(RATE_PER_PANEL, now) }
     }
 
     /// The last `n` accepted from `k` this session.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn last_n(&self, k: &KeyId) -> Option<u64> {
         self.counters.iter().find(|(x, _, _)| x == k).map(|&(_, n, _)| n)
     }
@@ -646,6 +679,7 @@ impl Session {
     /// signature over the body's bytes, the body, `v`, `dev`, `sess`, `n`
     /// above the key's last (which then advances), the key's rate, the
     /// allow-list and the arguments.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check(&mut self, keys: &KeyList, limits: &Limits, frame: &[u8], now: Duration) -> Result<Accepted, Refused> {
         let no = |k: Option<KeyId>, n: Option<u64>, err| Refused { k, n, err };
         let f = match split_command(frame) {
@@ -708,6 +742,7 @@ impl Session {
 // --- Text messages -------------------------------------------------------------
 
 /// `ack` for an accepted command; `r`: its result as JSON, if any.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ack_ok(k: &KeyId, n: u64, r: Option<&str>) -> String {
     match r {
         Some(r) => format!(r#"{{"t":"ack","k":"{}","n":{n},"ok":true,"r":{r}}}"#, hex(k)),
@@ -716,6 +751,7 @@ pub fn ack_ok(k: &KeyId, n: u64, r: Option<&str>) -> String {
 }
 
 /// `ack` for a refused one (`n` left out when it could not be read).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ack_err(k: &KeyId, n: Option<u64>, err: Refusal) -> String {
     match n {
         Some(n) => format!(r#"{{"t":"ack","k":"{}","n":{n},"err":"{}"}}"#, hex(k), err.code()),
@@ -725,8 +761,29 @@ pub fn ack_err(k: &KeyId, n: Option<u64>, err: Refusal) -> String {
 
 /// The body of `POST /v1/register`: the version and SHA-256 of the panel
 /// secret.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn register_body(secret: &[u8; 32]) -> String {
     format!(r#"{{"v":{VERSION},"secret_hash":"{}"}}"#, hex(&sha256(&[secret])))
+}
+
+/// The server's answer to `POST /v1/register` (`{"dev":"<base32>"}`): the
+/// panel's new Connect id.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn parse_register_answer(body: &[u8]) -> Option<Dev> {
+    if body.len() > MAX_TEXT_IN {
+        return None;
+    }
+    json::parse(body).ok()?.get("dev")?.as_str().and_then(Dev::parse)
+}
+
+/// The reason of a "stay away" close ([`CLOSE_STAY_AWAY`]) as minutes: its
+/// text a decimal of at most 5 digits, else none.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn stay_away_minutes(reason: &[u8]) -> Option<u32> {
+    if reason.is_empty() || reason.len() > 5 || !reason.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    core::str::from_utf8(reason).ok()?.parse().ok()
 }
 
 /// What the panel can do, for `hello`.
@@ -739,6 +796,7 @@ pub struct Caps {
 }
 
 /// The panel's first message on a connection.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn hello(secret: &[u8; 32], fw: &str, sess: &[u8; 12], caps: Caps) -> String {
     let mut s = format!(r#"{{"t":"hello","v":{VERSION},"secret":"{}","fw":"#, hex(secret));
     push_str(&mut s, fw);
@@ -747,6 +805,7 @@ pub fn hello(secret: &[u8; 32], fw: &str, sess: &[u8; 12], caps: Caps) -> String
 }
 
 /// `info`: the panel's name (after `hello` and after a rename).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn info(name: &str) -> String {
     let mut s = String::from(r#"{"t":"info","name":"#);
     push_str(&mut s, name);
@@ -754,19 +813,23 @@ pub fn info(name: &str) -> String {
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn pair_open(pair_id: &[u8; 10], ttl_s: u32) -> String {
     format!(r#"{{"t":"pair-open","pair_id":"{}","ttl":{ttl_s}}}"#, hex(pair_id))
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn pair_close(pair_id: &[u8; 10]) -> String {
     format!(r#"{{"t":"pair-close","pair_id":"{}"}}"#, hex(pair_id))
 }
 
 /// The panel's answer to guest `g`'s `pair`, once the key is stored.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn paired(g: u8, k: &KeyId, mac2: &[u8; 32]) -> String {
     format!(r#"{{"t":"paired","g":{g},"k":"{}","mac2":"{}"}}"#, hex(k), hex(mac2))
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn paired_err(g: u8, err: &str) -> String {
     format!(r#"{{"t":"paired","g":{g},"err":"{err}"}}"#)
 }
@@ -797,6 +860,7 @@ pub enum TextError {
 }
 
 /// Read a text frame from the server.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_server_text(text: &[u8]) -> Result<ServerMsg, TextError> {
     if text.len() > MAX_TEXT_IN {
         return Err(TextError::TooBig);
@@ -915,6 +979,20 @@ mod tests {
         assert_eq!(parse_server_text(b"ping"), Err(TextError::Malformed));
         let big = format!(r#"{{"t":"watch","on":true,"p":"{}"}}"#, "x".repeat(MAX_TEXT_IN));
         assert_eq!(parse_server_text(big.as_bytes()), Err(TextError::TooBig));
+    }
+
+    #[test]
+    fn register_answers() {
+        let d = Dev::mint(&[7; 10], b"k");
+        assert_eq!(parse_register_answer(format!(r#"{{"dev":"{}"}}"#, d.text()).as_bytes()), Some(d));
+        assert_eq!(parse_register_answer(format!(r#"{{"dev":"{}","x":1}}"#, d.text()).as_bytes()), Some(d));
+        for bad in [&b"{}"[..], b"{\"dev\":1}", b"{\"dev\":\"ABC\"}", b"[]", b"", b"{\"dev\":\"x\",\"dev\":\"y\"}"] {
+            assert_eq!(parse_register_answer(bad), None, "{bad:?}");
+        }
+        assert_eq!(stay_away_minutes(b"15"), Some(15));
+        for bad in [&b""[..], b"-1", b"1.5", b"123456", b"x"] {
+            assert_eq!(stay_away_minutes(bad), None);
+        }
     }
 
     #[test]

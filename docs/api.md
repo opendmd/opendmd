@@ -289,6 +289,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `wake_until` | while `/api/wake` holds the schedule off, `"HH:MM"` |
 | `schedule` | `{rule, set, until}`: the rule in force (by position), its playlist, its end |
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
+| `connect` | Remote control, in a build with it (`features` has `"connect"`): `{enabled, registered, state, since_s, opened, reconnects, resumed, handshake_ms, refused, too_old, watched, last_error, last_error_s}`, as `GET /api/connect` (see "Remote control") |
 | `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, seen, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s; `seen`: s since the box last answered a poll (null: not since the address was set; both null in the events) |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `boot_formula` | null (no Formula as the start-up show this boot, or `boot_show` `off`), or `{"played": true}`, or `{"played": false, "error": why}` once the wordmark played in its place (`{"played": false}` alone while a card Formula is waited for) |
@@ -888,6 +889,55 @@ only `ok`, `reachable`, `error` (and `version`).
 ```sh
 curl -s $DMD/api/follow/test --json '{"host":"192.0.2.20","code":"1234"}'
 ```
+
+## Remote control
+
+In a build with it (`/api/status` `features` has `"connect"`), the panel
+can be controlled from away from home through the OpenDMD Connect server
+(`docs/connect-protocol.md`): one outbound connection from the panel,
+nothing opened on the home network. It is off until switched on here, and
+the LAN API stays the only full tier: a remote controller can only play,
+skip, go back, pause, set the brightness and the playlist, list the
+playlists and the controllers, add or remove a controller and rename the
+panel, each command signed by a key the panel itself paired.
+
+### GET /api/connect
+
+`{"enabled","registered","name","controllers","pairing",…}` with the
+summary fields of `/api/status` `connect`. `registered`: the panel has its
+Connect identity. `name`: the name a controller gave it (`""`: its
+hostname is shown). `controllers`: `[{k, label, f, added, added_by,
+last_s}]`, `k` the key's id (16 hex digits), `f` 1 for a key paired on the
+panel (it may add others), `added` Unix seconds (0: no clock then),
+`added_by` the key that added it (`null`: paired on the panel). `state` is
+`off`, `waiting after boot`, `waiting for network`, `waiting for clock`,
+`waiting for quiet` (a LAN upload or heavy request in the last 10 s),
+`waiting for memory`, `registering`, `connecting`, `handshake`,
+`upgrading`, `open`, `backoff`, `refused: set Remote control up again`
+(`refused` true: the server does not know this panel; `POST
+/api/connect/forget` makes a new identity), `update needed` (`too_old`),
+`held for an update`, `off after two crashes in a row`. The panel's
+secret is never shown.
+
+### PUT /api/connect
+
+`{"enabled": bool}`. Saved; on starts at once (no hold after boot, no
+backoff, also after a refusal or two crashes). Reply: as `GET`.
+
+```sh
+curl -s -X PUT $DMD/api/connect --json '{"enabled":true}'
+```
+
+### DELETE /api/connect/controllers/&lt;k&gt;
+
+Remove one controller; the server is told and closes its connections.
+`404` for a key not on the list. Reply: as `GET`.
+
+### POST /api/connect/forget
+
+Forget the panel's Connect identity and every controller: the server
+deletes its record and the panel registers a new identity. Links and
+pairings made before stop working. Reply: as `GET`.
 
 ## Network
 

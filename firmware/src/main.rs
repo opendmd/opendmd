@@ -48,8 +48,8 @@ mod cardspeed;
 mod chan;
 mod clock;
 mod config;
-#[cfg(feature = "connect-core")]
-mod connect_probe;
+#[cfg(feature = "connect")]
+mod connect;
 mod diag;
 mod dns_server;
 mod events;
@@ -872,6 +872,9 @@ fn main() -> Result<()> {
     // Dropped once the card is handed over: the channel's few hundred bytes
     // are not kept for the life of the run.
     let mut boot_rx = Some(boot_rx);
+    // Remote control's stored state, before the network worker can start.
+    #[cfg(feature = "connect")]
+    connect::init(nvs_config.connect_load());
     let boot_ctx = Arc::new(Ctx {
         status: status.clone(),
         settings: shared_settings.clone(),
@@ -931,9 +934,6 @@ fn main() -> Result<()> {
     // back with the paused frame, if one is.
     let mut update_named: Option<(String, String)> = None;
 
-    // The CRC-32 of the sent Formula's bytes last held (`PlayNow`'s, made
-    // on CPU0): `now_playing.sent` for the start that plays them.
-    let mut sent_crc = 0u32;
     loop {
         // 0. Safe start: extended once when the network comes up, then the
         //    saved ceiling takes over.
@@ -1030,9 +1030,11 @@ fn main() -> Result<()> {
                     if !reply.claim() {
                         continue;
                     }
-                    if let Some((psb, crc)) = psb {
-                        opendmd_core::synth::set_sent(Some(psb));
-                        sent_crc = crc;
+                    // The bytes and their CRC-32 (made by the handler, on
+                    // CPU0) are held together: `now_playing.sent` reads the
+                    // CRC from there (`synth::sent_crc`).
+                    if psb.is_some() {
+                        opendmd_core::synth::set_sent(psb);
                     }
                     // A Formula in place: (the frame ms it starts at, asked).
                     let mut in_place = None;
@@ -1088,7 +1090,7 @@ fn main() -> Result<()> {
                                         s.title = np.title.into();
                                         // (A live edit of the sent one: its new bytes.)
                                         if opendmd_core::synth::is_sent(&path) {
-                                            s.sent = Some((np.ordinal, sent_crc));
+                                            s.sent = opendmd_core::synth::sent_crc().map(|crc| (np.ordinal, crc));
                                         }
                                     }
                                 }
@@ -1115,7 +1117,7 @@ fn main() -> Result<()> {
                             // The sent one, held (just now, or still from
                             // its last send): which bytes this start plays.
                             if opendmd_core::synth::is_sent(&path) {
-                                s.sent = ordinal.map(|o| (o, sent_crc));
+                                s.sent = ordinal.zip(opendmd_core::synth::sent_crc());
                             }
                         }
                         r
@@ -1628,6 +1630,17 @@ fn main() -> Result<()> {
                     let _ = reply.send(Ok(Applied::unchanged(
                         engine.as_ref().map_or(0, |e| e.catalog_len()),
                     )));
+                }
+                #[cfg(feature = "connect")]
+                Command::ConnectStore { what, reply } => {
+                    if !reply.claim() {
+                        continue;
+                    }
+                    let r = nvs_config
+                        .connect_store(&what)
+                        .map(|()| Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len())))
+                        .map_err(|e| format!("saving Remote control: {e:#}"));
+                    let _ = reply.send(r);
                 }
                 Command::Follow(event) => {
                     let was_context = runner.context().is_some();

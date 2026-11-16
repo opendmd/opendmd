@@ -120,6 +120,14 @@ pub fn status_json(since: bool) -> String {
     )
 }
 
+/// What Follow RePlayOS is doing, in one word (`status_json`'s `state`):
+/// Remote control's status carries only this.
+#[cfg(feature = "connect")]
+pub fn state_name() -> &'static str {
+    let s = SHARED.lock().unwrap();
+    rules::state_name(s.state, s.step.is_some())
+}
+
 /// For the heartbeat.
 pub fn summary() -> String {
     let s = SHARED.lock().unwrap();
