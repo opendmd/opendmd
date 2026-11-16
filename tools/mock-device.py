@@ -390,7 +390,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 - **Remote control** (`--connect`: a build with `connect`, `features` gains
   `"connect"`; docs/api.md "Remote control"): `GET /api/connect`, `PUT
   /api/connect` (`enabled`, `name`), `POST /api/connect/pair[?qr=1]` (a
-  5-minute window and its `https://opendmd.dev/connect/#pair=<S>` link; a
+  5-minute window and its `https://opendmd.dev/c#<S>` link; a
   409 while off), `DELETE /api/connect/pair`, `DELETE
   /api/connect/controllers/<k>`, `POST /api/connect/forget`, in memory, with
   two controllers to start with. No server: on, the state is `open` at once.
@@ -4471,7 +4471,7 @@ def make_handler(ctx: Context, quiet: bool):
                 secret = "".join(random.choice("abcdefghijklmnopqrstuvwxyz234567") for _ in range(20))
                 cx["pairing"] = {"until": time.monotonic() + CX_PAIR_S, "qr": qr, "secret": secret}
                 cx["registered"] = True
-                self.send_json(200, {"link": "https://opendmd.dev/connect/#pair=" + secret, "expires_s": CX_PAIR_S, "qr": qr, "online": True})
+                self.send_json(200, {"link": "https://opendmd.dev/c#" + secret, "expires_s": CX_PAIR_S, "qr": qr, "online": True})
 
         def h_cx_unpair(self, path):
             with ctx.lock:

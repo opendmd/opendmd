@@ -23,8 +23,7 @@ playlists, controllers, name, add-controller; the LAN routes; the panel
 reconnecting after a server close; a refusal (4403) and a too-new close
 (4406) handled by policy; the server gone and back; pairing (the LAN
 link's window with its QR code on the panel, a guest found by `pair_id`,
-the key stored with can_add, `keys` before `paired`, `mac2` over the
-label as sent, `pair-close`, "Remote control added", the new device's
+the key stored with can_add, `keys` before `paired`, `mac2`, `pair-close`, "Remote control added", the new device's
 commands; a window cancelled on the LAN); switch off; forget (a new
 identity); a restart (the identity kept, back after the hold).
 Red, each refused by the panel itself (frames put straight onto the
@@ -659,9 +658,9 @@ class Lane:
     async def open_window(self, qr=False, key=None):
         """POST /api/connect/pair: (secret, the answer)."""
         code, r = await self.http("POST", "/api/connect/pair" + ("?qr=1" if qr else ""), key=key)
-        if code != 200 or not r or not str(r.get("link", "")).startswith("https://opendmd.dev/connect/#pair="):
+        if code != 200 or not r or not str(r.get("link", "")).startswith("https://opendmd.dev/c#"):
             raise Fail(f"POST /api/connect/pair: {code} {r}")
-        return r["link"].split("#pair=", 1)[1], r
+        return r["link"].split("/c#", 1)[1], r
 
     async def guest(self, http, secret, ctl, macs=(None,), raw_label=None, timeout=60):
         """A new browser pairing as a guest: find, guest, one `pair` a MAC
@@ -733,7 +732,7 @@ class Lane:
         res = await self.guest(http, secret, g1)
         rep = (res.get("replies") or [None])[0]
         self.expect(res.get("dev") == dev and rep and rep.get("k") == g1.k.hex(), "a guest found the panel by pair_id and paired", json.dumps(rep))
-        self.expect(bytes.fromhex(rep.get("mac2", "")) == odc.paired_mac(secret, dev, g1.pub, g1.label.encode()), "paired's mac2: the secret, this panel, the key and the label as sent", "")
+        self.expect(bytes.fromhex(rep.get("mac2", "")) == odc.paired_mac(secret, dev, g1.pub), "paired's mac2: the secret, this panel and the key", "")
         said = self.srv.said[mark:]
         ki = next((i for i, m in enumerate(said) if m.get("t") == "keys" and any(e.get("k") == g1.k.hex() for e in m.get("keys", []))), None)
         pi = next((i for i, m in enumerate(said) if m.get("t") == "paired" and m.get("k") == g1.k.hex()), None)

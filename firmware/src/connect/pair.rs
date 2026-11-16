@@ -15,14 +15,14 @@
 //!   sent (one use, three tries); only then is the label cleaned (the
 //!   controller cleans and bounds it before its MAC, so a correct one is
 //!   never spoilt here). The key is stored with `can_add`; `keys` goes,
-//!   then `paired {k, mac2}` (`mac2` over the same label bytes), then
+//!   then `paired {k, mac2}`, then
 //!   `pair-close`. A store that fails answers `busy`; the window is used
 //!   up either way.
 //! - **The screens**: the QR code while a window opened with `qr=1` is
 //!   open, then "Remote control added" for 10 s after a pairing, through
 //!   `Command::ConnectScreen` (the main task draws them).
 
-use super::api::QR_LINK;
+use super::api::LINK;
 use super::client::{core_now, Client, PairReq, Shown};
 use super::tls::Phase;
 use super::{change, error, shared, Screen, Store, ADDED_FOR};
@@ -57,7 +57,7 @@ impl Client {
         .flatten();
         match &cur {
             Some((seq, qr_wanted, _, Some(secret))) => {
-                let code = qr_wanted.then(|| qr::encode(format!("{QR_LINK}{secret}").as_bytes()).map(Box::new)).flatten();
+                let code = qr_wanted.then(|| qr::encode(format!("{LINK}{secret}").as_bytes()).map(Box::new)).flatten();
                 self.window = Some((*seq, pair_id(secret), code));
             }
             Some(_) => {}

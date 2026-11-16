@@ -11779,7 +11779,7 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         page.wait_for_selector("#rc-pair:not([hidden])", timeout=20000)
         href = page.get_attribute("#rc-link", "href") or ""
         _, cx = cx_get(base)
-        check(re.fullmatch(r"https://opendmd\.dev/connect/#pair=[a-z2-7]{20}", href) is not None
+        check(re.fullmatch(r"https://opendmd\.dev/c#[a-z2-7]{20}", href) is not None
               and page.get_attribute("#rc-link", "target") == "_blank" and "noopener" in (page.get_attribute("#rc-link", "rel") or "")
               and cx["pairing"] == {"expires_s": cx["pairing"]["expires_s"], "qr": False} and "this browser" in page.inner_text("#rc-pair-say"),
               f"remote: Control from this browser: a link to open, no code on the panel ({href}, {cx['pairing']})")
@@ -11788,7 +11788,7 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         _, cx = cx_get(base)
         left = page.inner_text("#rc-left")
         check(cx["pairing"] and cx["pairing"]["qr"] is True and re.fullmatch(r"[45]:\d\d left", left) is not None
-              and page.input_value("#rc-url").startswith("https://opendmd.dev/connect/#pair="),
+              and page.input_value("#rc-url").startswith("https://opendmd.dev/c#"),
               f"remote: Add a device: the code on the panel, the link to send, the time left ({cx['pairing']}, {left!r})")
         page.click("#rc-cancel")
         page.wait_for_timeout(800)

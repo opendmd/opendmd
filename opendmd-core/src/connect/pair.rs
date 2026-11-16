@@ -8,9 +8,8 @@
 //!   server sees (never `S`).
 //! - `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub` ‖ label),
 //!   from the controller (the label's bytes as sent, last); `mac2` =
-//!   HMAC-SHA256(`S`, `"opendmd paired v1"` ‖ `dev` ‖ `pub` ‖ label), the
-//!   panel's answer (the same label bytes), sent only once the key is
-//!   stored.
+//!   HMAC-SHA256(`S`, `"opendmd paired v1"` ‖ `dev` ‖ `pub`), the panel's
+//!   answer, sent only once the key is stored.
 //! - Invites: a 128-bit secret (26 base32 characters), `invite_id` =
 //!   SHA-256(`"opendmd invite id v1"` ‖ secret)\[..10\], `add-req`'s `mac` =
 //!   HMAC-SHA256(secret, `"opendmd add v1"` ‖ `dev` ‖ `pub` ‖ label), and the
@@ -93,11 +92,9 @@ pub fn pair_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -
     hmac_sha256(secret.as_bytes(), &[PAIR_MAC_DOMAIN, dev, public, label])
 }
 
-/// `label` as for [`pair_mac`]: the bytes the panel was sent, so a label
-/// rewritten on the way to the panel shows up on the way back too.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn paired_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -> [u8; 32] {
-    hmac_sha256(secret.as_bytes(), &[PAIRED_MAC_DOMAIN, dev, public, label])
+pub fn paired_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32]) -> [u8; 32] {
+    hmac_sha256(secret.as_bytes(), &[PAIRED_MAC_DOMAIN, dev, public])
 }
 
 /// `label` as for [`pair_mac`].
@@ -210,7 +207,7 @@ impl Window {
             return Err(PairError::BadMac { left: self.tries });
         }
         self.open = false;
-        Ok(paired_mac(&self.secret, dev, public, label))
+        Ok(paired_mac(&self.secret, dev, public))
     }
 }
 
@@ -245,8 +242,7 @@ mod tests {
         let s = secret();
         let mut w = Window::open(s.clone(), T0);
         let mac2 = w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0).unwrap();
-        assert_eq!(mac2, paired_mac(&s, &DEV, &PUB, L));
-        assert_ne!(mac2, paired_mac(&s, &DEV, &PUB, b"Den phone "));
+        assert_eq!(mac2, paired_mac(&s, &DEV, &PUB));
         // One use.
         assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0), Err(PairError::Closed));
     }

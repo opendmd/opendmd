@@ -938,7 +938,7 @@
     "label": "C tablet \"é\"",
     "link": "https://opendmd.dev/connect/#pair=z5bltqg6537uvagizsvc",
     "mac": "a710cd78940b618b745851978a3e5e65c7aa583ce38df874aaada9d7aabfe504",
-    "mac2": "775504c741b072f1c886cc7ec90eb4d524349be207c64aa1661c691f104b7663",
+    "mac2": "e6e233763ce99f7f6cde28d81975f7b41fb571c24b6144f21e15a744a333c395",
     "mac_for_a_rewritten_label": "e41894504dca1c08973927f7d967c599427a28795f3294bddc740f840b5f754b",
     "mac_for_a_swapped_key": "70065068edb8ccc9e453f2c3f8e4e6a914e823149e03386041600fd834f114df",
     "message": "{\"t\":\"pair\",\"pub\":\"817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a\",\"label\":\"C tablet \\\"é\\\"\",\"mac\":\"a710cd78940b618b745851978a3e5e65c7aa583ce38df874aaada9d7aabfe504\"}",

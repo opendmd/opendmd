@@ -97,7 +97,7 @@ def main():
     check(s == pr["secret"] and odc.pair_id(s).hex() == pr["pair_id"], "pairing secret / id")
     gpub = bytes.fromhex(pr["pub"])
     label = pr["label"].encode()
-    check(odc.pair_mac(s, dev, gpub, label).hex() == pr["mac"] and odc.paired_mac(s, dev, gpub, label).hex() == pr["mac2"], "pairing MACs")
+    check(odc.pair_mac(s, dev, gpub, label).hex() == pr["mac"] and odc.paired_mac(s, dev, gpub).hex() == pr["mac2"], "pairing MACs")
     check(odc.pair_mac(s, dev, gpub, b"C tablet").hex() == pr["mac_for_a_rewritten_label"], "the label is in the MAC")
     pm = odc.loads(pr["message"].encode())
     check(pm["label"].encode() == label and pm["mac"] == pr["mac"], "pair message")

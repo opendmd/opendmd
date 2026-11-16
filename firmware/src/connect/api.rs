@@ -10,7 +10,8 @@
 //!   switch (on starts at once; off closes any pairing window), the
 //!   panel's name (`""`: its hostname).
 //! - `POST /api/connect/pair[?qr=1]`: a new pairing window (any open one
-//!   goes); the answer's `link` carries the secret, for this caller only.
+//!   goes); the answer's `link` (`https://opendmd.dev/c#<S>`) carries the
+//!   secret, for this caller only.
 //!   With `qr=1` the panel shows the QR code until the window dies.
 //! - `DELETE /api/connect/pair`: the window goes (and the QR code).
 //! - `POST /api/connect/forget`: a new identity; every controller goes.
@@ -31,9 +32,11 @@ use opendmd_core::connect::pair::secret_from_random;
 use opendmd_core::connect::proto::MAX_NAME_CHARS;
 use std::sync::Arc;
 
-/// The links a pairing secret goes in (`docs/connect-protocol.md` 6.1).
-pub const LINK: &str = "https://opendmd.dev/connect/#pair=";
-pub const QR_LINK: &str = "https://opendmd.dev/c#";
+/// The link a pairing secret goes in, for the LAN caller and in the QR
+/// code alike (`docs/connect-protocol.md` 6.1; `/c` hands the fragment to
+/// `/connect/`): 42 bytes, version 3-L.
+pub const LINK: &str = "https://opendmd.dev/c#";
+const _: () = assert!(LINK.len() + opendmd_core::connect::pair::SECRET_CHARS <= opendmd_core::connect::qr::MAX_DATA);
 
 /// `GET /api/connect`'s body.
 #[optimize(size)]

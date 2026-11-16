@@ -944,10 +944,10 @@ curl -s -X PUT $DMD/api/connect --json '{"name":"Den panel"}'
 Open a pairing window: a fresh secret, good for one browser, 5 minutes and
 three tries (any window already open goes). Reply: `{"link",
 "expires_s", "qr", "online"}`, `link` being
-`https://opendmd.dev/connect/#pair=<secret>`: open it in the browser to
+`https://opendmd.dev/c#<secret>`: open it in the browser to
 link (it pairs through the Connect server; `online`: the panel is
 connected to it now, else the window is announced once it is). `?qr=1`:
-the panel also shows the QR code of `https://opendmd.dev/c#<secret>`
+the panel also shows the same link as a QR code
 until the window is used, cancelled or over, then "Remote control
 added" for 10 s after a pairing. `409` while Remote control is off. The
 API key applies (an API key is recommended before the first pairing: on

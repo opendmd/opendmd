@@ -223,9 +223,7 @@ fn a_key_swapped_by_the_server_cannot_pair_or_fake_the_answer() {
     // The guest's MAC with the server's key in its place.
     assert!(matches!(w.check(&dev, &theirs, LABEL, &pair::pair_mac(&s, &dev, &public, LABEL), t), Err(PairError::BadMac { .. })));
     // And the panel's answer for the server's key is not the guest's.
-    assert_ne!(pair::paired_mac(&s, &dev, &theirs, LABEL), pair::paired_mac(&s, &dev, &public, LABEL));
-    // Nor for a label the server rewrote on the way in.
-    assert_ne!(pair::paired_mac(&s, &dev, &public, b"Admin"), pair::paired_mac(&s, &dev, &public, LABEL));
+    assert_ne!(pair::paired_mac(&s, &dev, &theirs), pair::paired_mac(&s, &dev, &public));
 }
 
 // --- The server's checks ---------------------------------------------------------

@@ -308,9 +308,10 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
 1. On the LAN, `POST /api/connect/pair` (the API key applies). The panel
    opens the window and sends `pair-open {pair_id, ttl}`, with
    `pair_id` = the first 10 bytes of SHA-256(`"opendmd pair id v1"` ‖ `S`).
-   The server sees `pair_id`, never `S`. The web app opens
-   `https://opendmd.dev/connect/#pair=<S>`; with `?qr=1` the panel also
-   shows a QR of `https://opendmd.dev/c#<S>` (42 bytes, version 3-L,
+   The server sees `pair_id`, never `S`. The route answers the link
+   `https://opendmd.dev/c#<S>` (`/c` hands the fragment to `/connect/`),
+   which the web app opens; with `?qr=1` the panel also shows it as a QR
+   code (42 bytes, version 3-L,
    byte mode, the mask the standard's penalty rules pick:
    `opendmd_core::connect::qr`), one LED a module: light modules lit, dark
    ones off, on a lit quiet zone of one row above, two below and four
@@ -336,9 +337,7 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
    the key before the new controller attaches; if the panel's budget for
    `keys` is spent, `keys` follows within the second instead) and answers
    `paired {g, k, mac2}` with `mac2` = HMAC-SHA256(`S`,
-   `"opendmd paired v1"` ‖ `dev` ‖ `pub` ‖ label), the label's bytes as
-   received (so a label rewritten on the way in shows on the way back),
-   then `pair-close`. The panel sends `pair-close` the moment any window
+   `"opendmd paired v1"` ‖ `dev` ‖ `pub`), then `pair-close`. The panel sends `pair-close` the moment any window
    dies: used, expired, out of tries, cancelled on the LAN, replaced by a
    new one, Remote control switched off; and, after a reconnect, for a
    window it announced that died meanwhile. A store that fails answers
