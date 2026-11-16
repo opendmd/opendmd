@@ -490,6 +490,26 @@ class Lane:
             self.expect(code == 404, "DELETE an unknown controller: 404", f"{code}")
 
             # --- reconnects and the server's closes ----------------------------
+            # Config buckets over time: 14 controllers, each added, sending a
+            # brightness and removed (with A, 15 buckets; the core's own
+            # counters cap a session at 16 keys, B is one); after the
+            # reconnect below two more keys' config commands are still ok
+            # (17 in all: buckets pruned with their keys, cleared per session).
+            async def churn(label):
+                c_ = Controller(self.ctl_base, dev, label)
+                r = await cmd("add-controller", {"pub": c_.pub.hex(), "label": label})
+                if not (r and r.get("ok")):
+                    raise Fail(f"churn: add {label}: {r}")
+                await asyncio.sleep(1.2)
+                sess_now = bytes.fromhex(self.rec().sess)
+                got = await self.injected_ack(f"{label}'s brightness", odc.sign_command(c_.sk, odc.command_body(dev, sess_now, 1, "brightness", {"v": 30})), c_.k)
+                code, _ = await self.http("DELETE", f"/api/connect/controllers/{c_.k.hex()}")
+                return got, code
+            outs = []
+            for i in range(14):
+                got, code = await churn(f"churn{i}")
+                outs.append((got.get("ok") or got.get("err"), code))
+            self.expect(all(o == (True, 200) for o in outs), "14 controllers added, a config command each, removed", f"{outs}")
             old = a.sess
             await self.panel_ws().close(code=1001, message=b"bye")
             new = await self.open_session("back after a server close", before_sess=rec.sess, timeout=900)
@@ -497,6 +517,10 @@ class Lane:
             await asyncio.sleep(3)
             got = await self.injected_ack("an old session's frame", odc.sign_command(key, odc.command_body(dev, old, 10**12, "pause")), a.k)
             self.expect(got.get("err") == "stale-session", "red: a frame signed for the session before: stale-session", json.dumps(got))
+            await a.ws.close()
+            await a.attach(http)
+            later = [await churn(f"later{i}") for i in range(2)]
+            self.expect(all(g.get("ok") is True and c == 200 for g, c in later), "keys 16 and 17's config commands, after a reconnect: ok (buckets pruned, per session)", f"{later}")
 
             await self.panel_ws().close(code=odc.CLOSE_TOO_NEW, message=b"1")
             s406 = await self.open_session("back after a too-new close (transient: the usual backoff)", before_sess=rec.sess, timeout=900)

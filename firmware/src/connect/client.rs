@@ -295,6 +295,10 @@ impl Client {
         if self.pending.is_some() {
             return w.min(Duration::from_millis(200));
         }
+        // The card's copy is due: the next turn makes it.
+        if self.card_due.is_some_and(|t| Instant::now() >= t) {
+            return busy;
+        }
         w
     }
 
@@ -456,6 +460,9 @@ impl Client {
             });
         }
         if let Some(k) = keys {
+            // A removed key's config bucket goes with it (else 16 keys
+            // over time would fill the table for good).
+            self.config_rate.retain(|(x, _)| k.find(x).is_some());
             self.keys = k;
             self.need_keys = true;
         }
@@ -942,6 +949,8 @@ impl Client {
         };
         let sess = random::<12>();
         self.sess = Some(Session::new(dev, sess, proto::VERSION, core_now()));
+        // Per session, as the core's counters.
+        self.config_rate.clear();
         self.watched = false;
         self.status_sent = None;
         lite(|l| {
@@ -1265,13 +1274,11 @@ impl Client {
         ok
     }
 
-    /// The card's copy due `after` from now (or sooner if already).
+    /// The card's copy due `after` from now (or sooner if already). Made
+    /// at a turn's top (`save_card`), never down in a command's path.
     pub(super) fn save_card_after(&mut self, after: Duration) {
         let at = Instant::now() + after;
         self.card_due = Some(self.card_due.map_or(at, |d| d.min(at)));
-        if after.is_zero() {
-            self.save_card(true);
-        }
     }
 
     /// The settings' card copy, when it is due (`now`: the session ended).
