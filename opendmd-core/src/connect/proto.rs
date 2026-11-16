@@ -463,14 +463,15 @@ pub fn remote_set_ok(set: &str) -> bool {
     set.is_empty() || (set.len() <= 64 && segment_ok(set) && !set.contains(['/', '\0']) && !set.contains(".."))
 }
 
-/// A sent name's longest, in bytes.
-pub const MAX_SENT_NAME_BYTES: usize = 240;
+/// A sent name's longest, in bytes: `/gifs/Sent/<name>` fits a remote
+/// play's [`MAX_PATH`] (240).
+pub const MAX_SENT_NAME_BYTES: usize = MAX_PATH - "/gifs/Sent/".len();
 
 /// A sent GIF's file name (the web app's rule): no slash, no control
 /// characters, `.gif`, ≤ 120 characters; and not hidden.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sent_name_ok(name: &str) -> bool {
-    // ≤ 240 bytes, and room in FAT's 255 UTF-16 units for the panel's
+    // ≤ 229 bytes, and room in FAT's 255 UTF-16 units for the panel's
     // `.<id>.copy.part` (19 more).
     name.len() <= MAX_SENT_NAME_BYTES
         && name.encode_utf16().count() + 19 <= 255
@@ -964,10 +965,12 @@ mod tests {
         assert!(sent_name_ok(&format!("{}.gif", "a".repeat(116))));
         // 116 three-byte characters: 120 characters but 352 bytes.
         assert!(!sent_name_ok(&format!("{}.gif", "\u{20ac}".repeat(116))));
-        assert!(sent_name_ok(&format!("{}.gif", "\u{20ac}".repeat(78))));
-        // Characters outside the BMP: 59 fit the 240 bytes, 60 do not.
-        assert!(sent_name_ok(&format!("{}.gif", "\u{1F600}".repeat(59))));
-        assert!(!sent_name_ok(&format!("{}.gif", "\u{1F600}".repeat(60))));
+        assert!(sent_name_ok(&format!("{}.gif", "\u{20ac}".repeat(75))));
+        assert!(!sent_name_ok(&format!("{}.gif", "\u{20ac}".repeat(76))));
+        // Characters outside the BMP: 56 fit the 229 bytes, 57 do not.
+        assert!(sent_name_ok(&format!("{}.gif", "\u{1F600}".repeat(56))));
+        assert!(!sent_name_ok(&format!("{}.gif", "\u{1F600}".repeat(57))));
+        assert_eq!(MAX_SENT_NAME_BYTES, 229);
     }
 
     #[test]

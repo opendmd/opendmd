@@ -573,13 +573,13 @@ fn head(path: &str) -> Option<Vec<u8>> {
 /// rename is the check). The name used.
 #[optimize(size)]
 #[inline(never)]
-fn place(part: &str, name: &str, id: u32) -> Option<String> {
+fn place(part: &str, sent: &str, id: u32) -> Option<String> {
     let _held = crate::cache_builder::busy();
-    let mut name = name.to_string();
+    let mut name = sent.to_string();
     for k in 0..=NAME_TRIES {
         if k == NAME_TRIES {
-            // That many taken: the stem and the transfer's id.
-            name = xfer::fallback_name(&name, id);
+            // That many taken: the sent name's own stem and the transfer's id.
+            name = xfer::fallback_name(sent, id);
         }
         let dest = format!("{SENT}/{name}");
         crate::fatidx::touched(&dest);

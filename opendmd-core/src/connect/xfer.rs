@@ -505,10 +505,13 @@ pub fn fallback_name(name: &str, id: u32) -> String {
 /// `….copy.part`), and nothing else: what the boot sweep may remove.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn is_send_part(file: &str) -> bool {
-    let Some(rest) = file.strip_suffix(".copy.part").or_else(|| file.strip_suffix(".part")) else { return false };
-    let Some(dot) = rest.len().checked_sub(9) else { return false };
-    let (head, tail) = rest.split_at(dot);
-    tail.as_bytes()[0] == b'.' && tail[1..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && head.len() > 4 && head.get(head.len() - 4..).is_some_and(|e| e.eq_ignore_ascii_case(".gif"))
+    // On bytes: a file name of any characters (a user's, an interrupted
+    // upload's) is only compared, never cut at a computed index.
+    let b = file.as_bytes();
+    let rest = b.strip_suffix(b".copy.part").or_else(|| b.strip_suffix(b".part"));
+    let Some(rest) = rest.filter(|r| r.len() >= 9 + 5) else { return false };
+    let (head, tail) = rest.split_at(rest.len() - 9);
+    tail[0] == b'.' && tail[1..].iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c)) && head[head.len() - 4..].eq_ignore_ascii_case(b".gif")
 }
 
 /// A landed transfer's last `credit` (also said again for a `send` signed
@@ -896,6 +899,13 @@ mod tests {
         assert!(!is_send_part("cat.gif.0000004D.part"));
         assert!(!is_send_part("notes.txt.0000004d.part"));
         assert!(!is_send_part(".0000004d.part"));
+        // Any name at all, never a panic: non-ASCII, short, odd.
+        for n in ["ああ.gif.part", "ああ.part", "あ.gif.0000004d.part", "é", "", ".part", ".copy.part", "x.gif.0000004dあ.part", "ああああああああああ.copy.part", "ab.gif.0000004d.copy.part"] {
+            let _ = is_send_part(n);
+        }
+        assert!(is_send_part("あ.gif.0000004d.part"));
+        assert!(!is_send_part("x.gif.0000004dあ.part"));
+        assert_eq!(fallback_name("ああ.gif", 1), "ああ_00000001.gif");
     }
 
     #[test]

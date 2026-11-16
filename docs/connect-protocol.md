@@ -384,7 +384,7 @@ server can show a controller a false state, never change the panel's.
 - Signed `send {id, name, size, sha256, copy_size, copy_sha256, play}`:
   `id` a non-zero 32-bit transfer id; `name` a file name only (no `/`, no
   control character, not `.`-leading, ending `.gif`, at most 120
-  characters, at most 240 bytes) for `/gifs/Sent/`, never overwriting (a taken name gets the
+  characters, at most 229 bytes, so `/gifs/Sent/<name>` fits a remote play's 240) for `/gifs/Sent/`, never overwriting (a taken name gets the
   web app's next name: `x_09.gif` → `x_10.gif`, `cat.gif` → `cat_2.gif`);
   `size` 1 to 524,288 (more is `too-big`); `sha256` hex; `copy_size` 0
   (no prepared copy) to 524,288, with `copy_sha256` exactly when it is

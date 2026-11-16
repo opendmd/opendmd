@@ -415,7 +415,7 @@ def remote_set_ok(s: str) -> bool:
 def sent_name_ok(s: str) -> bool:
     b = s.encode()
     utf16 = len(s.encode("utf-16-le")) // 2
-    return len(s) <= 120 and len(b) <= 240 and utf16 + 19 <= 255 and len(b) > 4 and b[-4:].lower() == b".gif" and _segment_ok(s) and "/" not in s
+    return len(s) <= 120 and len(b) <= 229 and utf16 + 19 <= 255 and len(b) > 4 and b[-4:].lower() == b".gif" and _segment_ok(s) and "/" not in s
 
 
 # --- The panel's checks ------------------------------------------------------------
