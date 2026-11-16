@@ -27,8 +27,10 @@ use {
 /// changes it (RAM only).
 #[derive(Clone)]
 pub struct Cfg {
-    pub host: String,
-    pub addr: String,
+    /// The build's own server (borrowed: a shipping build's turn makes no
+    /// string); a measuring build's config may give another (owned).
+    pub host: std::borrow::Cow<'static, str>,
+    pub addr: std::borrow::Cow<'static, str>,
     pub ping_s: u32,
     pub tickets: bool,
     /// The heap a full handshake needs free (P1-PLAN 4.4), a resumed one,
@@ -50,8 +52,8 @@ impl Cfg {
         #[cfg(not(esp32s3))]
         let (full, resumed) = (48 * 1024, 44 * 1024);
         Cfg {
-            host: super::HOST.into(),
-            addr: super::ADDR.into(),
+            host: std::borrow::Cow::Borrowed(super::HOST),
+            addr: std::borrow::Cow::Borrowed(super::ADDR),
             ping_s: 90,
             tickets: true,
             gate_full: full,
@@ -530,10 +532,10 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
         "config" => {
             let mut c = cfg();
             if let Some(v) = query_param(q, "host") {
-                c.host = v;
+                c.host = v.into();
             }
             if let Some(v) = query_param(q, "addr") {
-                c.addr = v;
+                c.addr = v.into();
             }
             c.ping_s = ranged(num(q, "ping_s", u64::from(c.ping_s))?, 1, 3600, "ping_s")? as u32;
             c.tickets = num(q, "tickets", u8::from(c.tickets))? != 0;

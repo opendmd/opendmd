@@ -916,8 +916,12 @@ panel (it may add others), `added` Unix seconds (0: no clock then),
 `upgrading`, `open`, `backoff`, `refused: set Remote control up again`
 (`refused` true: the server does not know this panel; `POST
 /api/connect/forget` makes a new identity), `update needed` (`too_old`),
-`held for an update`, `off after two crashes in a row`. The panel's
-secret is never shown.
+`held for an update`, `off after two crashes in a row`. `reset` true:
+Remote control was reset (the server had dropped the panel's identity, so
+it made a new one, and the controllers paired before cannot follow it):
+pair your devices again; cleared by a switch-off (and by the next
+pairing). After three such resets in a day the panel says `refused`
+instead. The panel's secret is never shown.
 
 ### PUT /api/connect
 
@@ -936,7 +940,9 @@ Remove one controller; the server is told and closes its connections.
 ### POST /api/connect/forget
 
 Forget the panel's Connect identity and every controller: the server
-deletes its record and the panel registers a new identity. Links and
+deletes its record (if the panel is online then; otherwise the old record
+stays on the server, unused and harmless) and the panel registers a new
+identity. Links and
 pairings made before stop working. Reply: as `GET`.
 
 ## Network

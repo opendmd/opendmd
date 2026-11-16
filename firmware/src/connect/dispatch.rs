@@ -14,7 +14,7 @@
 use super::client::Client;
 use super::{change, Store};
 use crate::chan as mpsc;
-use crate::http::{self, ConfigPatch};
+use crate::http;
 use crate::nvs_config::Settings;
 use crate::state::{Applied, Command, PlayError, Status};
 use opendmd_core::connect::codec::hex;
@@ -35,7 +35,9 @@ pub struct Link {
 /// waited for.
 pub struct Pending {
     pub rx: mpsc::Receiver<Result<Applied, String>>,
-    pub shared: Box<Settings>,
+    /// The one field asked (a playlist: brightness is answered at once).
+    pub brightness: Option<u8>,
+    pub set: Option<String>,
     pub until: Instant,
 }
 
@@ -60,8 +62,8 @@ impl Client {
             Remote::Next => self.link.cmd.send(Command::Skip).map(|_| None).map_err(|_| Refusal::Busy),
             Remote::Prev => self.back(),
             Remote::Pause => self.pause(),
-            Remote::Brightness { v } => self.config(ConfigPatch { brightness: Some(v), ..Default::default() }),
-            Remote::Playlist { set } => self.config(ConfigPatch { set: Some(set), ..Default::default() }),
+            Remote::Brightness { v } => self.config(Some(v), None),
+            Remote::Playlist { set } => self.config(None, Some(set)),
             Remote::Playlists => self.playlists(),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
                 self.last_use.iter().find(|(x, _)| x == k).map(|(_, at)| at.elapsed().as_secs())
@@ -127,29 +129,36 @@ impl Client {
     /// settings shared once the player has applied them. One at a time.
     #[optimize(size)]
     #[inline(never)]
-    fn config(&mut self, patch: ConfigPatch) -> Done {
+    fn config(&mut self, brightness: Option<u8>, set: Option<String>) -> Done {
         if self.pending.is_some() {
             return Err(Refusal::Busy);
         }
-        let mut next = Box::new(self.link.settings.lock().unwrap().clone());
-        if http::apply_patch(&mut next, &patch).is_err() {
+        // One a second (a drag of the slider sends 4: the last one wins
+        // a moment later; the player and the card are spared the rest).
+        if !self.config_rate.take(super::client::core_now()) {
+            return Err(Refusal::Rate);
+        }
+        // The LAN's own rule for a playlist name, beside the remote one.
+        if set.as_deref().is_some_and(|s| !crate::nvs_config::valid_set_name(s)) {
             return Err(Refusal::BadArg);
         }
-        let shared = next.clone();
         let (tx, rx) = mpsc::channel();
         self.link
             .cmd
-            .send(Command::ApplyConfig { settings: next, panel: None, look_named: false, boot_named: false, reply: tx })
+            .send(Command::RemoteConfig { brightness, set: set.clone(), reply: tx })
             .map_err(|_| Refusal::Busy)?;
         crate::wake::kick();
-        match rx.answer_within(http::TAKE_WAIT, http::PLAY_ANSWER) {
+        let p = Pending { rx, brightness, set, until: Instant::now() + CONFIG_WAIT };
+        match p.rx.answer_within(http::TAKE_WAIT, http::PLAY_ANSWER) {
             mpsc::Handoff::Answered(answer) => {
                 let refused = answer.as_ref().err().map(|e| refusal_of(e));
-                settle(&self.link, Pending { rx, shared, until: Instant::now() }, answer);
+                if settle(&self.link, p, answer) {
+                    self.card_due = Some(Instant::now() + crate::config::REMOTE_SAVE_AFTER);
+                }
                 refused.map_or(Ok(None), Err)
             }
             mpsc::Handoff::Taken => {
-                self.pending = Some(Pending { rx, shared, until: Instant::now() + CONFIG_WAIT });
+                self.pending = Some(p);
                 Ok(Some(PENDING.into()))
             }
             mpsc::Handoff::Withdrawn => Err(Refusal::Busy),
@@ -167,14 +176,17 @@ impl Client {
         let Ok(dir) = std::fs::read_dir(crate::config::SETS_DIR) else {
             return Ok(Some(r#"{"sets":[],"more":false}"#.into()));
         };
-        // In the directory's order: a controller sorts them.
-        let names: Vec<String> = dir
+        // In the directory's order: a controller sorts them. One past the
+        // most says there are more.
+        let mut names: Vec<String> = dir
             .filter_map(|e| e.ok())
-            .take(SETS_MAX)
             .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".txt")).map(str::to_string))
             .filter(|n| proto::remote_set_ok(n) && !n.is_empty())
+            .take(SETS_MAX + 1)
             .collect();
-        Ok(Some(sets_result(&names)))
+        let cut = names.len() > SETS_MAX;
+        names.truncate(SETS_MAX);
+        Ok(Some(sets_result(&names, cut)))
     }
 
     #[optimize(size)]
@@ -184,7 +196,7 @@ impl Client {
         let k = key_id(&public);
         change(
             &self.link.cmd,
-            |s| {
+            move |s| {
                 let mut keys = s.keys.clone();
                 keys.add(Entry { public, flags: 0, label, added, added_by: Some(by) }).map_err(|e| format!("{e:?}"))?;
                 Ok((Store::Keys(keys.encode()), keys))
@@ -203,7 +215,7 @@ impl Client {
     fn remove(&mut self, k: [u8; 8]) -> Done {
         change(
             &self.link.cmd,
-            |s| {
+            move |s| {
                 let mut keys = s.keys.clone();
                 keys.remove(&k).map_err(|e| format!("{e:?}"))?;
                 Ok((Store::Keys(keys.encode()), keys))
@@ -220,7 +232,7 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn rename(&mut self, name: String) -> Done {
-        change(&self.link.cmd, |_| Ok((Store::Name(name.clone()), name)), |s, n| {
+        change(&self.link.cmd, move |_| Ok((Store::Name(name.clone()), name)), |s, n| {
             s.name = n;
             s.name_changed = true;
         })
@@ -271,11 +283,26 @@ fn refusal_of(e: &str) -> Refusal {
 /// settings follow it (as `PUT /api/config`'s handler does), on CPU0.
 #[optimize(size)]
 #[inline(never)]
-pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) {
+/// Only the field asked changes in the shared settings (a LAN change made
+/// meanwhile stays); `true`: changed, the card's copy is due (made once
+/// commands stop: `Client::card_due`).
+pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> bool {
     crate::state::drop_spent();
     match answer {
-        Ok(_) => http::commit_config(&link.settings, p.shared, false, false),
-        Err(e) => log::info!("connect: a remote setting refused: {e}"),
+        Ok(_) => {
+            let mut s = link.settings.lock().unwrap();
+            if let Some(v) = p.brightness {
+                s.brightness = v;
+            }
+            if let Some(set) = p.set {
+                s.set = set;
+            }
+            true
+        }
+        Err(e) => {
+            log::info!("connect: a remote setting refused: {e}");
+            false
+        }
     }
 }
 
@@ -284,10 +311,10 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) {
 /// limit.
 #[optimize(size)]
 #[inline(never)]
-fn sets_result(names: &[String]) -> String {
+fn sets_result(names: &[String], cut: bool) -> String {
     const ROOM: usize = MAX_TEXT_OUT - 100;
     let mut s = String::from(r#"{"sets":["#);
-    let mut more = false;
+    let mut more = cut;
     for (i, n) in names.iter().enumerate() {
         let q = opendmd_core::connect::json::quote(n);
         if s.len() + q.len() + 1 + r#"],"more":true}"#.len() > ROOM {

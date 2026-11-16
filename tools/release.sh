@@ -429,6 +429,11 @@ else
   rm -f "$STAMP"
 
   step "3. Build (make fw-release, signed)"
+  # A release never points at another Connect server, root or test key.
+  if env | grep -q '^OPENDMD_CONNECT_'; then
+    echo "release: OPENDMD_CONNECT_* is set: those are the emulator lane's; unset them" >&2
+    exit 2
+  fi
   rm -rf "$DIST"
   make fw-release "${MK[@]}"
   pass "make fw-release"

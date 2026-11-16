@@ -45,6 +45,8 @@ pub const FEATURES: &[&str] = &[
     "connect",
     #[cfg(feature = "connect-measure")]
     "connect-measure",
+    #[cfg(feature = "connect-test")]
+    "connect-test",
 ];
 
 /// [`FEATURES`] as a JSON array.
@@ -714,4 +716,11 @@ pub enum Command {
     /// NVS is the main task's. Answered `Ok` once written.
     #[cfg(feature = "connect")]
     ConnectStore { what: Box<crate::connect::Store>, reply: Reply },
+    /// Remote control's brightness or playlist: only that field, applied
+    /// onto this task's own settings (never a copy of all of them, which a
+    /// LAN change made meanwhile would lose). Brightness is live at once
+    /// and saved once commands stop (`REMOTE_SAVE_AFTER`); a playlist goes
+    /// through `ApplyConfig`'s own checks and rebuild.
+    #[cfg(feature = "connect")]
+    RemoteConfig { brightness: Option<u8>, set: Option<String>, reply: Reply },
 }

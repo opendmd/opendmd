@@ -33,6 +33,7 @@
 //! it runs) asks lwIP's resolver ([`lookup`]).
 
 use super::{tele, Cause, End};
+#[cfg(feature = "connect-measure")]
 use crate::state::free_heap;
 use esp_idf_sys as sys;
 use opendmd_core::connect::{self as cx, Decoder};
@@ -238,11 +239,18 @@ impl Bio {
     #[optimize(size)]
     #[inline(never)]
     fn sample(&mut self) {
+        crate::netstat::sample(crate::netstat::At::Connect);
+        // The rest feeds only a measuring build's telemetry.
+        #[cfg(feature = "connect-measure")]
+        self.measure();
+    }
+
+    #[cfg(feature = "connect-measure")]
+    fn measure(&mut self) {
         let f = free_heap();
         if f < self.hs_low {
             self.hs_low = f;
         }
-        crate::netstat::sample(crate::netstat::At::Connect);
         let low = tele(|t| (f < t.heap_low).then(|| t.heap_low = f).is_some());
         if low {
             let largest = crate::state::largest_free_block() as u32;
@@ -352,7 +360,10 @@ unsafe extern "C" fn ca_cb(_: *mut c_void, child: *const sys::mbedtls_x509_crt, 
             tls_free(crt as *mut c_void);
             continue;
         }
+        #[cfg(feature = "connect-measure")]
         ROOT_USED.store(k as u32 + 1, Relaxed);
+        #[cfg(not(feature = "connect-measure"))]
+        let _ = k;
         *out = crt;
         return 0;
     }
@@ -365,6 +376,8 @@ pub struct Verify {
     pub called: bool,
     /// The clock floor in force (Unix seconds), when SNTP has not set it.
     floor: Option<i64>,
+    /// The build's date (Unix seconds): no certificate that ended before it.
+    build: i64,
     pub flags: u32,
 }
 
@@ -374,15 +387,18 @@ unsafe extern "C" fn verify_cb(ctx: *mut c_void, crt: *mut sys::mbedtls_x509_crt
     // SAFETY: `ctx` is the connection's boxed `Verify`.
     let v = &mut *(ctx as *mut Verify);
     v.called = true;
-    if let Some(floor) = v.floor {
-        // The clock reads 1970: "not yet valid" means nothing; "ended" is
-        // judged against the build date.
+    // No clock (or one before the build date, `client::clock_ready`):
+    // "not yet valid" means nothing then.
+    if v.floor.is_some() {
         *flags &= !BADCERT_FUTURE;
-        let t = &(*crt).valid_to;
-        let to = cx::civil_to_unix(t.year.into(), t.mon as u32, t.day as u32, t.hour as u32, t.min as u32, t.sec as u32);
-        if to < floor {
-            *flags |= BADCERT_EXPIRED;
-        }
+    }
+    // "Ended" is judged against the build date always, as well as the
+    // clock: a time server that says it is years ago cannot bring an
+    // expired certificate back.
+    let t = &(*crt).valid_to;
+    let to = cx::civil_to_unix(t.year.into(), t.mon as u32, t.day as u32, t.hour as u32, t.min as u32, t.sec as u32);
+    if to < v.build {
+        *flags |= BADCERT_EXPIRED;
     }
     v.flags |= *flags;
     0
@@ -601,6 +617,7 @@ impl Conn {
     #[optimize(size)]
     #[inline(never)]
     pub fn text(&mut self, s: &str) -> Result<(), End> {
+        debug_assert!(s.len() <= cx::proto::MAX_TEXT_OUT, "a {} B text over MAX_TEXT_OUT", s.len());
         if s.len() > cx::proto::MAX_TEXT_OUT {
             log::warn!("connect: a {} B message not sent (over {} B)", s.len(), cx::proto::MAX_TEXT_OUT);
             return Ok(());
@@ -661,7 +678,7 @@ pub fn connect(host: &str, addr: SocketAddr, purpose: Purpose, tickets: bool, ti
         // SAFETY: zeroed mbedTLS contexts, _init'ed below before any use.
         tls: unsafe { Box::new_zeroed().assume_init() },
         bio: Box::new(Bio { fd, hs_low: free, rx: 0, tx: 0, deadline: Instant::now() + BLOCK_MAX }),
-        verify: Box::new(Verify { called: false, floor, flags: 0 }),
+        verify: Box::new(Verify { called: false, floor, build: env!("OPENDMD_BUILD_UNIX").parse().unwrap_or(0), flags: 0 }),
         phase: Phase::Handshake,
         purpose,
         t0,
@@ -728,10 +745,14 @@ pub fn step_handshake(conn: &mut Conn, started: Instant) -> Result<bool, End> {
         if conn.hs_t0.elapsed() > HANDSHAKE_TIMEOUT {
             return Err(End::new(Cause::Handshake, format!("no handshake within {} s", HANDSHAKE_TIMEOUT.as_secs())));
         }
+        #[cfg(feature = "connect-measure")]
         let t = now_us();
         // SAFETY: a set-up context.
         let r = unsafe { sys::mbedtls_ssl_handshake(ssl) };
-        conn.hs_cpu_us += now_us() - t;
+        #[cfg(feature = "connect-measure")]
+        {
+            conn.hs_cpu_us += now_us() - t;
+        }
         if r == 0 {
             return Ok(true);
         }

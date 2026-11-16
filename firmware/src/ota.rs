@@ -298,9 +298,6 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
     if len == 0 {
         return up.error(411, "411 Length Required", "Content-Length required");
     }
-    // Remote control closes and holds off until the restart.
-    #[cfg(feature = "connect")]
-    crate::connect::hold_for_update();
     let max = HEADER_LEN as u64 + u64::from(factory.size);
     if len > max {
         return up.error(
@@ -317,6 +314,11 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             "no card (or one that cannot be read): a firmware update is staged on the card, insert one",
         );
     }
+
+    // An update is under way (past the refusals a bad request gets):
+    // Remote control closes and holds off until the restart.
+    #[cfg(feature = "connect")]
+    crate::connect::hold_for_update();
 
     // The header, and its signature, before anything touches the card.
     let mut head = [0u8; HEADER_LEN];

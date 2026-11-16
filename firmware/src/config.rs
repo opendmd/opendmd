@@ -498,6 +498,11 @@ pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 /// at most over two signature checks, two scans, Follow polling and its
 /// test, a cache count, `/api/wifi/scan` and two full-size FAT index
 /// builds. 11 KB leaves 1,816 B over that.
+/// Remote control's brightness is saved this long after its last command
+/// (one NVS write and one card write for a drag, not one each).
+#[cfg(feature = "connect")]
+pub const REMOTE_SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub const NET_WORKER_STACK: usize = if cfg!(feature = "connect") { 12 * 1024 } else { 11 * 1024 };
 /// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
 /// handed over): the web app's CRC pass, the HTTP server's start, the mount

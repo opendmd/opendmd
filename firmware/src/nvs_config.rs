@@ -766,6 +766,8 @@ const KEY_CX_SEC: &str = "cx_sec";
 const KEY_CX_KEYS: &str = "cx_keys";
 #[cfg(feature = "connect")]
 const KEY_CX_NAME: &str = "cx_name";
+#[cfg(feature = "connect")]
+const KEY_CX_RESET: &str = "cx_reset";
 
 #[cfg(feature = "connect")]
 impl Config {
@@ -783,7 +785,8 @@ impl Config {
             Ok(Some(b)) => Some(b.to_vec()),
             _ => None,
         };
-        crate::connect::Stored { on, identity: dev.zip(sec), keys, name: self.get_string(KEY_CX_NAME) }
+        let reset = matches!(self.nvs.get_u8(KEY_CX_RESET), Ok(Some(1)));
+        crate::connect::Stored { on, identity: dev.zip(sec), keys, name: self.get_string(KEY_CX_NAME), reset }
     }
 
     /// One of Remote control's writes.
@@ -792,17 +795,26 @@ impl Config {
     pub fn connect_store(&mut self, what: &crate::connect::Store) -> anyhow::Result<()> {
         use crate::connect::Store;
         match what {
-            Store::On(on) => self.nvs.set_u8(KEY_CX_ON, u8::from(*on))?,
-            Store::Identity { dev, secret, keys } => {
+            Store::On(on) => {
+                self.nvs.set_u8(KEY_CX_ON, u8::from(*on))?;
+                // A switch-off clears "reset: pair again".
+                if !on {
+                    self.nvs.remove(KEY_CX_RESET)?;
+                }
+            }
+            Store::Identity { dev, secret, keys, reset } => {
                 // The secret first: one without an id reads as no identity.
                 self.nvs.set_blob(KEY_CX_SEC, secret)?;
                 self.nvs.set_blob(KEY_CX_KEYS, keys)?;
                 self.nvs.set_blob(KEY_CX_DEV, dev)?;
+                if *reset {
+                    self.nvs.set_u8(KEY_CX_RESET, 1)?;
+                }
             }
             Store::Keys(keys) => self.nvs.set_blob(KEY_CX_KEYS, keys)?,
             Store::Name(name) => self.nvs.set_str(KEY_CX_NAME, name)?,
             Store::Forget => {
-                for k in [KEY_CX_DEV, KEY_CX_SEC, KEY_CX_KEYS] {
+                for k in [KEY_CX_DEV, KEY_CX_SEC, KEY_CX_KEYS, KEY_CX_RESET] {
                     self.nvs.remove(k)?;
                 }
             }

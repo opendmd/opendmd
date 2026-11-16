@@ -804,6 +804,8 @@ fw-clippy-connect:
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
 	@echo "==> Clippy firmware, connect (Remote control as it ships, with sdkconfig.connect)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect -- -D warnings'
+	@echo "==> Clippy firmware, connect-test (the emulator lane's image: its test hooks, nothing set)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-test -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -960,6 +962,10 @@ fw-release: web
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
 fw-release-variant:
 	@$(FW_CONNECT_RELEASE_GUARD)
+	@# OPENDMD_CONNECT_* point a build at another server, root or key: the
+	@# emulator lane's image (connect-test) only, never a release.
+	@if env | grep -q '^OPENDMD_CONNECT_' && ! echo ",$(FW_RELEASE_FEATURES)," | grep -q ',connect-test,'; then \
+	   echo "OPENDMD_CONNECT_* is set: for the emulator lane's image only (FW_RELEASE_FEATURES with connect-test)"; exit 2; fi
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
 	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
@@ -1317,7 +1323,7 @@ emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-connect: emu-build emu-card
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 $(EMU_ARGS)

@@ -106,6 +106,12 @@ connect = ["opendmd-core/connect"]
 connect-measure = ["connect"]
 connect-probe = ["connect-measure"]
 connect-core = ["connect"]
+# The emulator lane's image only (`make emu-image-connect`): lets the build
+# take OPENDMD_CONNECT_HOST, _ADDR, _HOLD_S, _TEST_ROOT and _TEST_KEY (a
+# local server, a test root, a test controller key whose seed is public).
+# build.rs refuses those variables in any build without it, and the
+# release recipe refuses them outright.
+connect-test = ["connect"]
 # ESP32-S3 measurement switches (S3 port phase 1, `make fw-s3-image`;
 # refused on the classic): mbedTLS's allocations from PSRAM (the Connect
 # probe's allocator, with sdkconfig's MBEDTLS_EXTERNAL_MEM_ALLOC for IDF's

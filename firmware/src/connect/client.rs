@@ -34,6 +34,7 @@ use super::measure::{cfg, cfg_gen, Cfg};
 use super::tls::{self, now_us, rand_u32, random, Conn, Phase, Purpose, Ticket, BIN_KEEP, BLOCK_MAX, DNS, DNS_WAIT, ERR_PEER_CLOSE_NOTIFY, ERR_WANT_READ, ERR_WANT_WRITE, ROOTS, ROOT_USED, SLICE, TLS_PEAK};
 use super::{error, lite, set_state, shared, tele, Cause, End, Store};
 use crate::state::{free_heap, largest_free_block};
+#[cfg(any(feature = "connect-measure", feature = "connect-test"))]
 use esp_idf_sys as sys;
 use opendmd_core::connect::keys::{KeyId, KeyList};
 use opendmd_core::connect::proto::{self, Caps, Dev, ServerMsg, Session};
@@ -44,13 +45,17 @@ use std::time::{Duration, Instant};
 
 /// No attempt of its own before this much uptime (seconds;
 /// `OPENDMD_CONNECT_HOLD_S` at build time, the emulator lane's shorter).
+#[cfg(feature = "connect-test")]
 pub const HOLD_S: u64 = match option_env!("OPENDMD_CONNECT_HOLD_S") {
     Some(v) => parse_u64(v),
     None => 180,
 };
+#[cfg(not(feature = "connect-test"))]
+pub const HOLD_S: u64 = 180;
 /// After a crash boot.
 const CRASH_HOLD_S: u64 = 15 * 60;
 
+#[cfg(feature = "connect-test")]
 const fn parse_u64(v: &str) -> u64 {
     let b = v.as_bytes();
     let mut n = 0u64;
@@ -87,6 +92,9 @@ const STATUS_MIN: Duration = Duration::from_secs(2);
 const STATUS_EVERY: Duration = Duration::from_secs(30);
 /// A server that says the panel is too old: asked again a day later.
 const TOO_OLD_WAIT: Duration = Duration::from_secs(24 * 3600);
+/// Registrations made again for a dropped id, a day, before the panel
+/// says refused instead.
+const REREGISTER_MAX: u32 = 3;
 /// The register answer's longest, head and body.
 const REGISTER_MAX: usize = 2048;
 
@@ -166,6 +174,11 @@ pub struct Client {
     need_info: bool,
     /// The shared state was read once (the first turn takes all of it).
     synced: bool,
+    /// A forget asked on the LAN, not yet acted on.
+    forget: bool,
+    /// Registrations made again for a dropped id: how many since `at`
+    /// (at most [`REREGISTER_MAX`] a day, then refused).
+    reregs: (u32, Instant),
     /// The server no longer knows this id (HTTP 404 at the upgrade: a
     /// registration that never said `hello`, deleted): register anew,
     /// keeping the controllers.
@@ -181,6 +194,12 @@ pub struct Client {
     pub(super) link: Link,
     /// A configuration change the player has not answered yet.
     pub(super) pending: Option<Pending>,
+    /// Remote config commands: one a second.
+    pub(super) config_rate: proto::Bucket,
+    /// The settings' card copy (`settings_card`) is due then: once remote
+    /// config commands stop (one card write for a drag), or at the
+    /// session's end.
+    pub(super) card_due: Option<Instant>,
     /// Each key's last accepted command this boot.
     pub(super) last_use: Vec<(KeyId, Instant)>,
 }
@@ -236,6 +255,8 @@ impl Client {
             need_keys: false,
             need_info: false,
             synced: false,
+            forget: false,
+            reregs: (0, Instant::now()),
             reregister: false,
             meta_at: Instant::now(),
             meta_burst: 0,
@@ -244,6 +265,8 @@ impl Client {
             status_sent: None,
             link,
             pending: None,
+            config_rate: proto::Bucket::new(1, core_now()),
+            card_due: None,
             last_use: Vec::new(),
         }
     }
@@ -280,9 +303,16 @@ impl Client {
     #[inline(never)]
     pub fn tick(&mut self, online: bool) {
         self.turn(online);
-        // SAFETY: the calling task's own high-water mark (bytes on IDF).
-        let unused = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
-        tele(|t| t.stack_unused = t.stack_unused.min(unused));
+        // The worker's stack margin, where something reads it (a measuring
+        // build's telemetry, an emulator image's lane).
+        #[cfg(any(feature = "connect-measure", feature = "connect-test"))]
+        {
+            // SAFETY: the calling task's own high-water mark (bytes on IDF).
+            let unused = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+            tele(|t| t.stack_unused = t.stack_unused.min(unused));
+            #[cfg(feature = "connect-test")]
+            lite(|l| l.stack_unused = l.stack_unused.min(unused));
+        }
     }
 
     #[optimize(size)]
@@ -307,7 +337,7 @@ impl Client {
         let gen = cfg_gen();
         if gen != self.cfg_gen {
             self.cfg_gen = gen;
-            let target = (c.host.clone(), c.addr.clone());
+            let target = (c.host.to_string(), c.addr.to_string());
             if target != self.target {
                 // Another server: its ticket and address are not this one's.
                 self.ticket = None;
@@ -323,8 +353,12 @@ impl Client {
             self.quiet_since = Instant::now();
         }
         self.poll_pending();
-        let Some((on, forget)) = self.sync_shared() else { return };
-        if forget {
+        self.save_card(false);
+        let Some(on) = self.sync_shared() else { return };
+        // (Latched: a forget taken in by a command's sync is acted on here.
+        // Offline, it never reaches the server: the old record lingers there,
+        // harmless, never used again.)
+        if std::mem::take(&mut self.forget) {
             // The old identity's last word; the next attempt registers anew.
             if let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) {
                 let _ = conn.text(proto::FORGET);
@@ -403,7 +437,7 @@ impl Client {
     /// the identity, the keys, the name. `Some((on, forget))`.
     #[optimize(size)]
     #[inline(never)]
-    pub(super) fn sync_shared(&mut self) -> Option<(bool, bool)> {
+    pub(super) fn sync_shared(&mut self) -> Option<bool> {
         let all = !std::mem::replace(&mut self.synced, true);
         let (on, identity, forget, start_now, keys, name) = shared(|s| {
             let keys = (std::mem::take(&mut s.keys_changed) || all).then(|| s.keys.clone());
@@ -430,13 +464,17 @@ impl Client {
             self.need_info = true;
         }
         self.identity = identity;
-        Some((on, forget))
+        self.forget |= forget;
+        Some(on)
     }
 
     #[optimize(size)]
     #[inline(never)]
     fn clock_ready(&mut self, online_since: Instant) -> bool {
-        if crate::clock::synced_ago_secs().is_some() {
+        // A clock before the build date is wrong (a spoofed or broken
+        // time server): certificates are then judged against the build date.
+        let build: i64 = BUILD_UNIX.parse().unwrap_or(0);
+        if crate::clock::synced_ago_secs().is_some() && crate::clock::unix_valid().is_some_and(|t| t >= build) {
             self.floor = None;
             tele(|t| t.clock = "sntp");
             return true;
@@ -665,7 +703,7 @@ impl Client {
         match done {
             Some((Ok(a), ms)) => {
                 tele(|t| t.dns_ms = ms);
-                self.resolved = Some((c.host.clone(), a, Instant::now()));
+                self.resolved = Some((c.host.to_string(), a, Instant::now()));
                 Some(a)
             }
             Some((Err(e), ms)) => {
@@ -674,7 +712,7 @@ impl Client {
                 None
             }
             None => {
-                if let Err(e) = tls::lookup(c.host.clone()) {
+                if let Err(e) = tls::lookup(c.host.to_string()) {
                     self.failed(End::new(Cause::Dns, e));
                 } else {
                     set_state("looking up the server");
@@ -750,22 +788,18 @@ impl Client {
     #[inline(never)]
     fn step_register(&mut self, started: Instant) -> Result<(), End> {
         let conn = self.conn.as_mut().expect("held");
-        let complete = loop {
+        let ended = loop {
             let r = conn.read();
             if r > 0 {
                 conn.head.extend_from_slice(&conn.buf[..r as usize]);
-                if conn.head.len() > REGISTER_MAX {
-                    return Err(End::new(Cause::Register, "the answer is too long"));
+                match cx::response(&conn.head, REGISTER_MAX) {
+                    cx::Response::TooLong => return Err(End::new(Cause::Register, "the answer is too long")),
+                    cx::Response::Complete { .. } => break false,
+                    cx::Response::Partial => continue,
                 }
-                if let Some(end) = cx::head_end(&conn.head) {
-                    if cx::content_length(&conn.head[..end]).is_some_and(|n| conn.head.len() >= end + n) {
-                        break true;
-                    }
-                }
-                continue;
             }
             if r == 0 || r == ERR_PEER_CLOSE_NOTIFY {
-                break false;
+                break true;
             }
             if r != ERR_WANT_READ && r != ERR_WANT_WRITE {
                 return Err(End::new(Cause::Register, format!("reading the answer: {}", tls::tls_error(r))));
@@ -779,15 +813,17 @@ impl Client {
             }
             conn.poll((left.as_millis() as u32).min(50));
         };
-        let Some(end) = cx::head_end(&conn.head) else {
-            return Err(End::new(Cause::Register, "the answer ended early"));
+        // The body: by its length (bounded by `response`), or what came
+        // before the connection ended.
+        let (end, body) = match cx::response(&conn.head, REGISTER_MAX) {
+            cx::Response::Complete { end, len } => (end, &conn.head[end..end + len]),
+            _ if ended => match cx::head_end(&conn.head) {
+                Some(end) => (end, &conn.head[end..]),
+                None => return Err(End::new(Cause::Register, "the answer ended early")),
+            },
+            _ => return Err(End::new(Cause::Register, "the answer is too long")),
         };
-        let head = &conn.head[..end];
-        let status = cx::http_status(head).unwrap_or(0);
-        let body = match cx::content_length(head) {
-            Some(n) if complete => &conn.head[end..end + n],
-            _ => &conn.head[end..],
-        };
+        let status = cx::http_status(&conn.head[..end]).unwrap_or(0);
         if status != 200 && status != 201 {
             let mut e = End::new(Cause::Register, format!("registration refused: HTTP {status}"));
             e.code = status;
@@ -802,17 +838,21 @@ impl Client {
         let Some(secret) = self.reg_secret.take() else {
             return Err(End::new(Cause::Register, "no secret"));
         };
-        // A new identity starts with the image's first list; one made again
-        // for an id the server dropped keeps the panel's controllers.
-        let keys = if self.reregister { self.keys.clone() } else { super::first_keys() };
+        // A new identity starts with the image's first list. One made again
+        // for an id the server dropped starts so too: its controllers know
+        // only the old id and cannot follow, so Remote control says it was
+        // reset and asks for them to pair again (`reset`).
+        let keys = super::first_keys();
         let blob = keys.encode();
+        let reset = self.reregister;
         let stored = super::change(
             &self.link.cmd,
-            |_| Ok((Store::Identity { dev: dev.0, secret, keys: blob }, ())),
-            |s, ()| {
+            move |_| Ok((Store::Identity { dev: dev.0, secret, keys: blob, reset }, ())),
+            move |s, ()| {
                 s.identity = Some((dev, secret));
                 s.keys = keys;
                 s.keys_changed = true;
+                s.reset |= reset;
             },
         );
         match stored {
@@ -820,7 +860,9 @@ impl Client {
                 log::info!("connect: registered");
                 self.reregister = false;
                 set_state("registered");
-                self.backoff.reset();
+                // The backoff is forgotten only by a session that ran: a
+                // server that registers and then refuses the id cannot make
+                // a loop of it.
                 self.not_before = Instant::now();
                 let _ = self.sync_shared();
                 Ok(())
@@ -1198,7 +1240,9 @@ impl Client {
         match p.rx.try_recv() {
             Ok(answer) => {
                 let p = self.pending.take().expect("held");
-                super::dispatch::settle(&self.link, p, answer);
+                if super::dispatch::settle(&self.link, p, answer) {
+                    self.card_due = Some(Instant::now() + crate::config::REMOTE_SAVE_AFTER);
+                }
             }
             Err(crate::chan::TryRecvError::Empty) if p.until > Instant::now() => {}
             Err(_) => {
@@ -1206,6 +1250,16 @@ impl Client {
                 self.pending = None;
                 crate::state::drop_spent();
             }
+        }
+    }
+
+    /// The settings' card copy, when it is due (`now`: the session ended).
+    #[optimize(size)]
+    #[inline(never)]
+    fn save_card(&mut self, now: bool) {
+        if self.card_due.is_some_and(|t| now || Instant::now() >= t) {
+            self.card_due = None;
+            crate::settings_card::save_shared(&self.link.settings);
         }
     }
 
@@ -1241,12 +1295,12 @@ impl Client {
         match (e.cause, e.code) {
             // The id is gone (a registration that never said `hello` is
             // deleted, or the record lost): a new one, on the usual backoff.
-            (Cause::Upgrade, 404) if self.identity.is_some() => {
+            (Cause::Upgrade, 404) if self.identity.is_some() && self.rereg_allowed() => {
                 self.reregister = true;
-                error("the server no longer knows this id: registering again".into());
+                error("the server no longer knows this id: registering again (the controllers must pair again)".into());
                 None
             }
-            (Cause::ServerClose, proto::CLOSE_REFUSED) | (Cause::Upgrade, 403) => {
+            (Cause::ServerClose, proto::CLOSE_REFUSED) | (Cause::Upgrade, 403 | 404) => {
                 lite(|l| l.refused = true);
                 error("the server does not know this panel: set Remote control up again (Forget all, in Settings)".into());
                 Some(BACKOFF_CAP)
@@ -1258,7 +1312,8 @@ impl Client {
             }
             (Cause::ServerClose, proto::CLOSE_STAY_AWAY) | (Cause::Register | Cause::Upgrade, 429) => {
                 let minutes = proto::stay_away_minutes(&e.reason).unwrap_or(15).clamp(1, 24 * 60);
-                Some(Duration::from_secs(u64::from(minutes) * 60))
+                // With the 0-30 s spread, so panels told at once come back apart.
+                Some(Duration::from_secs(u64::from(minutes) * 60) + Duration::from_millis(u64::from(rand_u32() % 30_001)))
             }
             // Too new (4406): a server behind the panel, for a while.
             _ => None,
@@ -1267,6 +1322,18 @@ impl Client {
 
     #[optimize(size)]
     #[inline(never)]
+    /// One more re-registration within the day's cap?
+    fn rereg_allowed(&mut self) -> bool {
+        if self.reregs.1.elapsed() >= Duration::from_secs(24 * 3600) {
+            self.reregs = (0, Instant::now());
+        }
+        if self.reregs.0 >= REREGISTER_MAX {
+            return false;
+        }
+        self.reregs.0 += 1;
+        true
+    }
+
     fn wait_for(&mut self, wait: Duration) {
         self.not_before = Instant::now() + wait;
         tele(|t| t.backoff_s = wait.as_secs() as u32);
@@ -1278,6 +1345,7 @@ impl Client {
     #[inline(never)]
     pub(super) fn end(&mut self, e: End) {
         let Some(conn) = self.conn.take() else { return };
+        self.save_card(true);
         self.sess = None;
         self.watched = false;
         lite(|l| l.watched = false);

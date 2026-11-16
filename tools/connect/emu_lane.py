@@ -326,6 +326,26 @@ class Lane:
             r = await cmd("brightness", {"v": mx + 1})
             self.expect(r and r.get("err") == "bad-arg" and ((await self.http("GET", "/api/config"))[1] or {}).get("brightness") == 40,
                         "red: brightness over the ceiling: bad-arg, unchanged", json.dumps(r))
+            # Config commands: one a second (a drag's extras are refused).
+            await asyncio.sleep(1.5)
+            f1, f2 = a.frame("brightness", {"v": 42}), a.frame("brightness", {"v": 43})
+            await a.ws.send_bytes(f1)
+            await a.ws.send_bytes(f2)
+            r1, r2 = await a.ack(f1), await a.ack(f2)
+            self.expect(r1 and r1.get("ok") and r2 and r2.get("err") == "rate", "red: two config commands within the second: the second is rate", f"{r1} {r2}")
+            # A LAN change racing a remote one: both stay (the remote one
+            # carries only its field, never a copy of all the settings).
+            await asyncio.sleep(1.5)
+            cfg = (await self.http("GET", "/api/config"))[1] or {}
+            dwell = (cfg.get("dwell_max") or 10) + 1
+            f = a.frame("brightness", {"v": 60})
+            await a.ws.send_bytes(f)
+            code, _ = await self.http("PUT", "/api/config", {"dwell_max": dwell})
+            r = await a.ack(f)
+            await asyncio.sleep(7)  # past the remote save's 5 s
+            cfg = (await self.http("GET", "/api/config"))[1] or {}
+            self.expect(code == 200 and r and r.get("ok") and cfg.get("brightness") == 60 and cfg.get("dwell_max") == dwell,
+                        "a LAN config change racing a remote brightness: both kept", f"PUT {code}, ack {r}, brightness {cfg.get('brightness')}, dwell_max {cfg.get('dwell_max')} (want {dwell})")
             path = ((await self.status()).get("now_playing") or {}).get("next") or ((await self.status()).get("now_playing") or {}).get("path")
             if path and path.startswith("/gifs/"):
                 r = await cmd("play", {"path": path})
@@ -340,8 +360,10 @@ class Lane:
             self.expect(r and r.get("err") == "bad-arg", "play a GIF that is not there: bad-arg", json.dumps(r))
             r = await cmd("playlists")
             self.expect(r and r.get("ok") and isinstance((r.get("r") or {}).get("sets"), list), "playlists: a bounded list", json.dumps(r)[:300])
+            await asyncio.sleep(1.2)
             r = await cmd("playlist", {"set": ""})
             self.expect(r and r.get("ok"), "playlist \"\" (the main list): ok", json.dumps(r))
+            await asyncio.sleep(1.2)
             r = await cmd("playlist", {"set": "no-such-set"})
             if r and r.get("r", {}).get("pending"):
                 await asyncio.sleep(5)
@@ -374,6 +396,9 @@ class Lane:
             cc = Controller(self.ctl_base, dev, "third")
             r = await cmd("add-controller", {"pub": cc.pub.hex(), "label": "third"}, ctl=b)
             self.expect(r and r.get("err") == "not-allowed" and cc.k not in rec.keys, "red: a one-level key adding another: not-allowed", json.dumps(r))
+            su = ((await self.status()).get("connect") or {}).get("stack_unused")
+            self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after the command set (card present): >= 1 KB left", f"{su} B")
+            self.report["stack_unused"] = su
 
             # --- red: frames straight onto the panel's socket ------------------------
             mark_line = self.emu.mark()
@@ -486,6 +511,11 @@ class Lane:
             # The server lost the record (a registration that never said
             # hello is deleted): 404 at the upgrade, a new id, the
             # controllers kept.
+            d = Controller(self.ctl_base, dev, "dropped")
+            await asyncio.sleep(1)
+            r = await cmd("add-controller", {"pub": d.pub.hex(), "label": "dropped"})
+            self.expect(r and r.get("ok"), "a controller added before the id is lost", json.dumps(r))
+            await asyncio.sleep(2)
             regs = self.srv.registered
             gone = self.srv.panels.pop(dev)
             if gone.panel is not None and not gone.panel.closed:
@@ -493,15 +523,18 @@ class Lane:
             await self.wait("registered again after a 404", lambda: self._dev_changed(dev), 900)
             new_dev = next(iter(self.srv.panels))
             await self.open_session("open under the id made again", timeout=600)
-            self.expect(self.srv.registered == regs + 1 and tk in self.rec().keys, "404 at the upgrade: registered again, the controllers kept", odc.dev_text(new_dev))
             info = await self.connect_info()
-            self.expect(info.get("refused") is False, "404: not a refusal", f"state {info.get('state')!r}")
+            ks = [x.get("k") for x in info.get("controllers", [])]
+            self.expect(self.srv.registered == regs + 1 and d.k.hex() not in ks and d.k not in self.rec().keys,
+                        "404 at the upgrade: registered again, the old controllers dropped (they cannot follow a new id)", f"{odc.dev_text(new_dev)}, controllers {ks}")
+            self.expect(info.get("reset") is True and info.get("refused") is False, "404: Remote control says it was reset (pair again), not refused", f"reset {info.get('reset')}, state {info.get('state')!r}")
             dev = new_dev
 
             # Switch off.
             code, info = await self.http("PUT", "/api/connect", {"enabled": False})
             await self.wait("switched off", lambda: self._info(lambda i: i.get("state") == "off" and self.panel_ws() is None), 300)
             self.ok("PUT /api/connect off: closed, off")
+            self.expect((await self.connect_info()).get("reset") is False, "a switch-off clears the reset notice", "")
             st_off = await self.status()
             await self.http("PUT", "/api/connect", {"enabled": True})
             await self.open_session("on again", before_sess=None, timeout=600)

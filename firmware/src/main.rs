@@ -785,6 +785,9 @@ fn main() -> Result<()> {
     // Settings changed while a Formula played, not yet in NVS
     // (`save_settings`), and whether a Formula is what plays.
     let mut unsaved = false;
+    // Remote control's last unsaved brightness (`Command::RemoteConfig`).
+    #[cfg(feature = "connect")]
+    let mut remote_dirty: Option<Instant> = None;
     let mut formula_on = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
@@ -948,6 +951,14 @@ fn main() -> Result<()> {
             panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
         }
 
+        // Remote control's brightness, saved once its commands stop (a drag
+        // is many: one NVS write, not one each).
+        #[cfg(feature = "connect")]
+        if remote_dirty.is_some_and(|t: Instant| t.elapsed() >= config::REMOTE_SAVE_AFTER) {
+            remote_dirty = None;
+            unsaved = true;
+            SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+        }
         // Settings kept back while a Formula played: written once none does.
         if unsaved && (!formula_on || sched.off()) {
             flush_settings(&mut nvs_config, &settings, &mut unsaved);
@@ -1630,6 +1641,33 @@ fn main() -> Result<()> {
                     let _ = reply.send(Ok(Applied::unchanged(
                         engine.as_ref().map_or(0, |e| e.catalog_len()),
                     )));
+                }
+                #[cfg(feature = "connect")]
+                Command::RemoteConfig { brightness, set, reply } => {
+                    if !reply.claim() {
+                        continue;
+                    }
+                    if let Some(v) = brightness {
+                        if v > settings.max_brightness {
+                            let _ = reply.send(Err("brightness over the ceiling".into()));
+                            continue;
+                        }
+                        settings.brightness = v;
+                        if !sched.off() && ptest.is_none() {
+                            panel.set_brightness(sched.brightness(&settings));
+                        }
+                        remote_dirty = Some(Instant::now());
+                        let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
+                    } else if let Some(name) = set {
+                        // This task's own settings with the new playlist,
+                        // through ApplyConfig's checks (the set must open)
+                        // and rebuild, at the next turn of the loop. (A
+                        // copy here, on the display core: a playlist change
+                        // is rare and rebuilds the engine anyway.)
+                        let mut next = Box::new(settings.clone());
+                        next.set = name;
+                        let _ = cmd_tx.send(Command::ApplyConfig { settings: next, panel: None, look_named: true, boot_named: true, reply });
+                    }
                 }
                 #[cfg(feature = "connect")]
                 Command::ConnectStore { what, reply } => {

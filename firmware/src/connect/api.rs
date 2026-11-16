@@ -54,11 +54,14 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
             Some(on) if matches!(v, Some(opendmd_core::connect::json::Value::Object(ref m)) if m.len() == 1) => on,
             _ => return req.bad_request(r#"the body is {"enabled": true|false}"#),
         };
-        match change(&c.cmd, |_| Ok((Store::On(on), on)), |s, on| {
+        match change(&c.cmd, move |_| Ok((Store::On(on), on)), |s, on| {
             s.on = on;
             // On from Settings: at once (no hold, no backoff; after two
-            // crashes too).
+            // crashes too). Off clears "reset: pair again".
             s.start_now = on;
+            if !on {
+                s.reset = false;
+            }
         }) {
             Ok(()) => {
                 log::info!("connect: Remote control switched {}", if on { "on" } else { "off" });
@@ -75,6 +78,7 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
             s.keys = KeyList::new();
             s.keys_changed = true;
             s.forget = true;
+            s.reset = false;
         }) {
             Ok(()) => {
                 log::info!("connect: identity forgotten, every controller removed");
@@ -94,7 +98,7 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
         }
         match change(
             &c.cmd,
-            |s| {
+            move |s| {
                 let mut keys = s.keys.clone();
                 keys.remove(&k).map_err(|e| format!("{e:?}"))?;
                 Ok((Store::Keys(keys.encode()), keys))

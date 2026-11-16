@@ -72,14 +72,22 @@ use std::time::Duration;
 /// certificate's name too), and `OPENDMD_CONNECT_ADDR` (`ip:port`, the
 /// emulator lane's local server) to connect there instead of looking the
 /// host up.
+/// Only an emulator image (feature `connect-test`) may name another;
+/// `build.rs` refuses the variables in any other build.
+#[cfg(feature = "connect-test")]
 pub const HOST: &str = match option_env!("OPENDMD_CONNECT_HOST") {
     Some(h) => h,
     None => "connect.opendmd.dev",
 };
+#[cfg(not(feature = "connect-test"))]
+pub const HOST: &str = "connect.opendmd.dev";
+#[cfg(feature = "connect-test")]
 pub const ADDR: &str = match option_env!("OPENDMD_CONNECT_ADDR") {
     Some(a) => a,
     None => "",
 };
+#[cfg(not(feature = "connect-test"))]
+pub const ADDR: &str = "";
 pub const PANEL_PATH: &str = "/v1/panel";
 pub const REGISTER_PATH: &str = "/v1/register";
 
@@ -158,13 +166,17 @@ pub struct Stored {
     /// The controller list's blob (`KeyList::encode`), if any.
     pub keys: Option<Vec<u8>>,
     pub name: Option<String>,
+    /// The identity was made again and the controllers dropped (`cx_reset`):
+    /// Settings says to pair again, until a pairing or a switch-off.
+    pub reset: bool,
 }
 
 /// One write to NVS, made by the main task (`Command::ConnectStore`).
 pub enum Store {
     On(bool),
-    /// A new identity, with the controller list it starts with.
-    Identity { dev: [u8; 16], secret: [u8; 32], keys: Vec<u8> },
+    /// A new identity, with the controller list it starts with; `reset`:
+    /// made again for an id the server dropped (`cx_reset`).
+    Identity { dev: [u8; 16], secret: [u8; 32], keys: Vec<u8>, reset: bool },
     Keys(Vec<u8>),
     Name(String),
     /// The identity and the controllers go (the switch and the name stay).
@@ -190,6 +202,9 @@ pub struct Shared {
     pub start_now: bool,
     /// A store is being made (one at a time).
     pub storing: bool,
+    /// Remote control was reset (a new identity, the controllers gone):
+    /// pair again. Cleared by a switch-off (and, with P1's F3, a pairing).
+    pub reset: bool,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -204,7 +219,7 @@ pub fn shared<R>(f: impl FnOnce(&mut Shared) -> R) -> Option<R> {
 /// The test key an emulator image starts with (`OPENDMD_CONNECT_TEST_KEY`,
 /// hex, only beside its test root): the lane's controller, paired as if on
 /// the panel. Never in any other build.
-#[cfg(connect_test_root)]
+#[cfg(feature = "connect-test")]
 const TEST_KEY: Option<&str> = option_env!("OPENDMD_CONNECT_TEST_KEY");
 
 /// The list a new identity starts with: empty (an emulator image: its
@@ -214,7 +229,7 @@ const TEST_KEY: Option<&str> = option_env!("OPENDMD_CONNECT_TEST_KEY");
 pub fn first_keys() -> KeyList {
     #[allow(unused_mut)]
     let mut keys = KeyList::new();
-    #[cfg(connect_test_root)]
+    #[cfg(feature = "connect-test")]
     if let Some(public) = TEST_KEY.and_then(opendmd_core::connect::codec::unhex::<32>) {
         let _ = keys.add(opendmd_core::connect::keys::Entry {
             public,
@@ -259,6 +274,7 @@ pub fn init(s: Stored) {
         forget: false,
         start_now: false,
         storing: false,
+        reset: s.reset,
     });
 }
 
@@ -266,20 +282,34 @@ pub fn init(s: Stored) {
 const STORE_TAKE: Duration = Duration::from_millis(800);
 const STORE_ANSWER: Duration = Duration::from_secs(3);
 
+/// What a change does to the shared state once it is written.
+pub type Apply = Box<dyn FnOnce(&mut Shared) + Send>;
+type Make = Box<dyn FnOnce(&Shared) -> Result<(Store, Apply), String> + Send>;
+
 /// Change the shared state through NVS, one change at a time (a second
 /// meanwhile is refused `busy`): `make` sees the state and says what to
 /// store (or why not); the main task writes it (`Command::ConnectStore`),
 /// waited for on the caller's task (the httpd task or the network worker,
 /// never CPU1); once written, `apply` changes the state and bumps its
-/// generation.
+/// generation. (A thin shim over one copy, [`change_dyn`].)
+pub fn change<T: Send + 'static>(
+    cmd: &mpsc::Sender<Command>,
+    make: impl FnOnce(&Shared) -> Result<(Store, T), String> + Send + 'static,
+    apply: impl FnOnce(&mut Shared, T) + Send + 'static,
+) -> Result<(), String> {
+    change_dyn(
+        cmd,
+        Box::new(move |s| {
+            let (what, t) = make(s)?;
+            Ok((what, Box::new(move |s: &mut Shared| apply(s, t)) as Apply))
+        }),
+    )
+}
+
 #[optimize(size)]
 #[inline(never)]
-pub fn change<T>(
-    cmd: &mpsc::Sender<Command>,
-    make: impl FnOnce(&Shared) -> Result<(Store, T), String>,
-    apply: impl FnOnce(&mut Shared, T),
-) -> Result<(), String> {
-    let (what, t) = shared(|s| {
+fn change_dyn(cmd: &mpsc::Sender<Command>, make: Make) -> Result<(), String> {
+    let (what, apply) = shared(|s| {
         if s.storing {
             return Err("busy".to_string());
         }
@@ -292,7 +322,7 @@ pub fn change<T>(
     shared(|s| {
         s.storing = false;
         if r.is_ok() {
-            apply(s, t);
+            apply(s);
             s.gen = s.gen.wrapping_add(1);
         }
     });
@@ -376,6 +406,10 @@ pub struct Lite {
     /// The server is newer than this firmware can speak to (4426).
     pub too_old: bool,
     pub watched: bool,
+    /// The network worker's stack never used, bytes (an emulator image's,
+    /// `connect-test`: its lane checks the margin).
+    #[cfg(feature = "connect-test")]
+    pub stack_unused: u32,
 }
 
 pub static LITE: Mutex<Lite> = Mutex::new(Lite {
@@ -390,6 +424,8 @@ pub static LITE: Mutex<Lite> = Mutex::new(Lite {
     refused: false,
     too_old: false,
     watched: false,
+    #[cfg(feature = "connect-test")]
+    stack_unused: u32::MAX,
 });
 
 #[optimize(size)]
@@ -448,9 +484,14 @@ fn opt_u32(v: Option<u32>) -> String {
 #[optimize(size)]
 #[inline(never)]
 fn lite_fields() -> String {
+    let reset = shared(|s| s.reset).unwrap_or(false);
     let l = LITE.lock().unwrap_or_else(|p| p.into_inner());
+    #[cfg(feature = "connect-test")]
+    let stack = format!(r#","stack_unused":{}"#, l.stack_unused);
+    #[cfg(not(feature = "connect-test"))]
+    let stack = "";
     format!(
-        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"watched":{},"last_error":{},"last_error_s":{}"#,
+        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"reset":{reset},"watched":{},"last_error":{},"last_error_s":{}{stack}"#,
         json_string(l.state),
         l.since_s,
         l.opened,
