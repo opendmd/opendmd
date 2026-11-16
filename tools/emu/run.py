@@ -104,6 +104,10 @@ NOCARD = [
     ("settings in NVS", re.compile(r'nocard-test: store,"settings_store":"nvs \(no card\)"')),
     ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
+    # The raw check before the second mount attempt (opendmd_core::sd_check): the empty
+    # slot answers nothing (MISO high throughout), three CMD0s, classed silent.
+    ("card check: silent", re.compile(r'microSD check before attempt 2: the card gives no answer at all .*"class":"silent".*'
+                                      r'"miso_cs_high":"high","miso_cs_low":"high","cmd0":"ff ff ff ff ff ff ff ff","cmd0_tries":3,"cmd8":null,"acmd41":null')),
     # NVS names a card Formula as the start-up show (seeded): with no card, the wordmark.
     ("start-up formula: the wordmark", re.compile(r"boot show: formula /formulas/x\.psi does not build \((the card was not ready in time|no card)\): the built-in show")),
 ]

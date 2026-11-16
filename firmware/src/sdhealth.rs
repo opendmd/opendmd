@@ -50,6 +50,7 @@ use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::io;
 
 use opendmd_core::card_speed::{self, CardSpeed};
+use opendmd_core::sd_check::{IoFault, FAULT_WORDS};
 
 use crate::config::{
     SD_FAIL_TRIP, SD_FAIL_WINDOW, SD_REBOOT_CAP, SD_REBOOT_WINDOW, SD_REMOUNT_INTERVAL,
@@ -159,6 +160,50 @@ static mut LIVE: Live = Live {
     nvs: 0,
 };
 
+/// The last card transfer that failed (`opendmd_core::sd_check::IoFault`,
+/// encoded): [`FAULT_NOW`] this boot's, [`FAULT_BEFORE`] the boot before's
+/// (moved there by [`boot`]), so the write a card-failure restart came out
+/// of is still in status after it. A power-on clears both.
+#[link_section = ".rtc_noinit"]
+static mut FAULT_NOW: [u32; FAULT_WORDS] = [0; FAULT_WORDS];
+#[link_section = ".rtc_noinit"]
+static mut FAULT_BEFORE: [u32; FAULT_WORDS] = [0; FAULT_WORDS];
+
+fn fault_word(before: bool, i: usize) -> &'static AtomicU32 {
+    // SAFETY: a word of one of the two statics, only reached through this
+    // atomic view (loads and stores, never RMW).
+    unsafe {
+        let p = if before { &raw mut FAULT_BEFORE } else { &raw mut FAULT_NOW };
+        AtomicU32::from_ptr((p as *mut u32).add(i % FAULT_WORDS))
+    }
+}
+
+fn fault(before: bool) -> Option<IoFault> {
+    let mut w = [0; FAULT_WORDS];
+    for (i, v) in w.iter_mut().enumerate() {
+        *v = get(fault_word(before, i));
+    }
+    IoFault::decode(&w)
+}
+
+fn set_fault(before: bool, w: &[u32; FAULT_WORDS]) {
+    for (i, v) in w.iter().enumerate() {
+        set(fault_word(before, i), *v);
+    }
+}
+
+/// A card transfer failed (`cardspeed`, under the card's I/O lock, any
+/// task): kept in RTC memory at once. Plain word stores only.
+pub fn io_failed(f: &IoFault) {
+    set_fault(false, &f.encode());
+}
+
+/// The last failed transfer this boot in a line (the restart ring's note
+/// for a card-failure restart).
+pub fn fault_note() -> Option<String> {
+    fault(false).map(|f| f.note())
+}
+
 /// A word of [`RTC`] or [`LIVE`] as an atomic, for plain `Relaxed` loads and
 /// stores only (see the module note).
 macro_rules! w {
@@ -223,6 +268,14 @@ pub fn boot(poweron: bool, nvs_slow: Option<u32>, mode: CardSpeed) -> Boot {
         // SAFETY: as above, and nothing else touches RTC before this.
         unsafe { (&raw mut RTC).write_bytes(0, 1) };
         set(w!(RTC.magic), MAGIC);
+    }
+    // The last boot's failed transfer, if it had one (a power-on's garbage
+    // does not decode, but is cleared anyway).
+    let before = if poweron { None } else { fault(false) };
+    set_fault(true, &before.map_or([0; FAULT_WORDS], |f| f.encode()));
+    set_fault(false, &[0; FAULT_WORDS]);
+    if let Some(f) = before {
+        log::warn!("microSD: the last card transfer that failed before this boot: {}", f.note());
     }
     let mut clear_nvs = false;
     if get(w!(RTC.clear)) == CLEAR_COUNT {
@@ -686,6 +739,10 @@ pub fn status_json() -> String {
         get(w!(LIVE.fallback)) == 1,
         failures(),
         reboots(),
+    ) + &format!(
+        r#","io_error":{},"io_error_before":{}"#,
+        fault(false).map_or_else(|| "null".to_string(), |f| f.json()),
+        fault(true).map_or_else(|| "null".to_string(), |f| f.json()),
     )
 }
 

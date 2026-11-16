@@ -145,7 +145,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     const fact = (k, v, bad) => [h('dt', k), h('dd' + (bad ? '.bad' : ''), v)], m = s.misses, sd = s.sd;
     clear(facts,
       fact('Playlist', `${playlistLabel(s.manifest || setPath(app.config?.set))} · ${s.entries.toLocaleString()} GIFs` + (s.index_state === 'building' ? ' · updating…' : '')),
-      fact('Card', !sd.mounted ? 'Not mounted' : sd.formatting ? 'Formatting…' : sd.readable === false ? 'Not readable: needs FAT32'
+      fact('Card', !sd.mounted ? sd.stuck ? 'No card found. If one is in, unplug the power for 10 s' : 'Not mounted' : sd.formatting ? 'Formatting…' : sd.readable === false ? 'Not readable: needs FAT32'
         : bytes(sd.capacity_bytes) + (sd.clock_khz ? sd.clock_khz < 4e4 ? ' · Safe speed' : ' · Fast speed' : ''), sd.readable === false || !sd.mounted),
       fact('Running for', uptime(s.uptime_secs)),
       fact('Free memory', `${bytes(s.heap.free)} · lowest ${bytes(s.heap.floor)}`, s.heap.floor < 20000),

@@ -41,6 +41,9 @@ Sprites from your own pictures, and Remote control to try.
 - Now's preview of a Formula that never repeats draws the same picture as
   the panel, and knows a Formula you showed on the panel from another one
   shown there since, even one with the same name.
+- When no card answers after a restart, the panel and the web app now say
+  that a card that is in may need the power unplugged for 10 seconds, and
+  restarts no longer cut a card off part way through a write.
 
 ## 1.1.0-beta.2 · 2026-11-11
 

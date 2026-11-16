@@ -11216,9 +11216,20 @@ def platform_checks(page: Page, base: str) -> None:
     page.route(STATUS_RE, nocard({"mounted": False, "readable": False, "attempts": 2,
                                   "error": "no card, or card init failed: ESP_ERR_TIMEOUT"}))
     page.wait_for_function("document.querySelector('#now-title').textContent === 'No card'", timeout=5000)
-    check(page.is_hidden("#now-unfilter"), "now: a failed mount says No card")
+    check(page.is_hidden("#now-unfilter") and page.is_hidden("#now-sd"), "now: a failed mount says No card (no card line)")
     page.unroute(STATUS_RE)
-    page.wait_for_function("!document.querySelector('#now-title').textContent.startsWith('Nothing')", timeout=10000)
+    # No card answering since a restart that kept its power (`sd.stuck`, firmware
+    # sd_check::NOT_ANSWERING): the device's words, plainly, and no Format card button.
+    stuck = "No card found. If a card is in, unplug the power for 10 seconds, then plug it back in."
+    page.route(STATUS_RE, nocard({"mounted": False, "readable": False, "attempts": 8, "stuck": True, "error": stuck}))
+    page.wait_for_selector("#now-sd:not([hidden])", timeout=5000)
+    check(page.inner_text("#now-sd-text") == stuck and page.is_hidden("#now-format")
+          and page.inner_text("#now-title") == "No card",
+          f"now: no card answering says to check for one, else cut the power, no Format ({page.inner_text('#now-sd-text')!r})")
+    page.unroute(STATUS_RE)
+    page.wait_for_function("!['No card', 'Nothing playing'].includes(document.querySelector('#now-title').textContent)", timeout=10000)
+    page.wait_for_selector("#now-sd", state="hidden", timeout=5000)
+    check(True, "now: the card line goes once the card is back")
     check(True, "now: playing again once status has entries")
     goto_view(page, "settings/device")
     page.wait_for_selector("#st-facts dt")

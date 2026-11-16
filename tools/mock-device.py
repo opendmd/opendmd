@@ -312,7 +312,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   mounts but whose filesystem cannot be read (exFAT; firmware `sd::probe`):
   `sd` is `{mounted: true, readable: false, error: "card not readable: …"}`
   and nothing plays (`now_playing.path` "", `entries` 0, `index_state`
-  `unavailable`); `none`, no card (`mounted: false`). Only `/api/status`,
+  `unavailable`); `none`, no card (`mounted: false`, `sd.check` a silent
+  check); `stuck`, no answer to any command since a restart that kept its
+  power (no card, or one stuck: `sd.stuck` true, `sd.error` says to check
+  for a card and else to cut the power:
+  firmware `opendmd_core::sd_check::NOT_ANSWERING`). Only `/api/status`,
   `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`/`log`
   follow it; the card copy is still served. `POST /api/card/format`
   (`{"confirm":true}`) formats an unreadable card: 202, `sd.formatting`
@@ -3108,6 +3112,7 @@ class Context:
         # card-failure restart (the next "boot" is at 20 MHz, reset_note
         # "card failure"); ?sd_fallback=clear forgets it.
         self.sd = {"clock_khz": 40000, "fallback": False, "failures": 0, "reboots": 0,
+                   "io_error": None, "io_error_before": None,
                    "probe": None, "slowdowns": 0, "recoveries": 0}
         # Whether this card is recorded slow (what `card_speed: fast` reads;
         # `--sd slowed` and a card-failure restart set it).
@@ -3198,6 +3203,18 @@ def apply_card_speed(ctx: "Context") -> None:
 SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
 
 
+SD_NOT_ANSWERING = "No card found. If a card is in, unplug the power for 10 seconds, then plug it back in."
+SD_SILENT_WORDS = "the card gives no answer at all (no card in the socket, or one that has stopped answering)"
+
+
+def sd_check_silent(attempt: int, in_a_row: int) -> dict:
+    """`sd.check` for a card that answered nothing (firmware `sd.rs`)."""
+    return {"class": "silent", "words": SD_SILENT_WORDS, "attempt": attempt,
+            "silent_in_a_row": in_a_row, "stuck": in_a_row >= 3, "ms": 2,
+            "miso_cs_high": "high", "miso_cs_low": "high", "cmd0": " ".join(["ff"] * 8),
+            "cmd0_tries": 3, "cmd8": None, "acmd41": None}
+
+
 def sd_fields(ctx: "Context") -> dict:
     """/api/status's `sd`, per --sd (and a POST /api/card/format)."""
     if ctx.format_until and time.monotonic() >= ctx.format_until:
@@ -3208,14 +3225,23 @@ def sd_fields(ctx: "Context") -> dict:
         ctx.card_id = f"{random.getrandbits(64):016x}"  # a new volume serial
     base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES,
             "card_id": ctx.card_id, "error": None, "attempts": 1,
-            "formatting": bool(ctx.format_until), "format_error": ctx.format_error}
+            "formatting": bool(ctx.format_until), "format_error": ctx.format_error,
+            # The raw check before a mount after a failed one (firmware
+            # `sd.rs`, `opendmd_core::sd_check`), and the power advice.
+            "stuck": False, "check": None}
     if ctx.sd_state == "unreadable":
         base.update(readable=False, capacity_bytes=63_864_569_856, card_id=None, error=SD_UNREADABLE)
     elif ctx.sd_state == "none":
         base.update(mounted=False, readable=False, capacity_bytes=0, card_id=None, attempts=2,
-                    error="no card, or card init failed: ESP_ERR_TIMEOUT")
+                    error=SD_SILENT_WORDS + "; no card, or card init failed: ESP_ERR_TIMEOUT",
+                    check=sd_check_silent(2, 1))
+    elif ctx.sd_state == "stuck":
+        # No answer to any CMD0 since a restart that kept its power (no card,
+        # or one that has stopped answering).
+        base.update(mounted=False, readable=False, capacity_bytes=0, card_id=None, attempts=4,
+                    error=SD_NOT_ANSWERING, stuck=True, check=sd_check_silent(4, 3))
     out = {**base, **ctx.sd}
-    if ctx.sd_state == "none":
+    if ctx.sd_state in ("none", "stuck"):
         out["clock_khz"] = None
     return out
 
@@ -3858,7 +3884,7 @@ def make_handler(ctx: Context, quiet: bool):
             st = self.status_obj("")
             ev = {k: st[k] for k in self.EVENT_KEYS}
             ev["brightness"] = ctx.settings["brightness"]
-            ev["sd"] = {k: st["sd"].get(k) for k in ("mounted", "readable", "attempts", "error", "formatting")}
+            ev["sd"] = {k: st["sd"].get(k) for k in ("mounted", "readable", "attempts", "error", "formatting", "stuck")}
             ev.update({k: st[k] for k in self.EVENT_TAIL})
             ev["context"] = {**st["context"], "since": None, "seen": None}
             return ev
@@ -4323,7 +4349,7 @@ def make_handler(ctx: Context, quiet: bool):
                 card_speed_applied = None
                 if "card_speed" in patch:
                     apply_card_speed(ctx)
-                    card_speed_applied = "now" if ctx.sd_state != "none" else "at_mount"
+                    card_speed_applied = "now" if ctx.sd_state not in ("none", "stuck") else "at_mount"
 
                 if needs_reindex:
                     manifest_rel = ctx.player.resolve(ctx.settings["set"])
@@ -5100,7 +5126,7 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.sd_slow_record = False
                 ctx.sd.update(probe="clean" if ctx.settings["card_speed"] == "fast" else ctx.sd["probe"])
                 apply_card_speed(ctx)
-                mounted = ctx.sd_state != "none"
+                mounted = ctx.sd_state not in ("none", "stuck")
             self.send_json(200, {"ok": True, "applied": "now" if mounted else "at_mount",
                                  "clock_khz": 40000 if mounted else None})
 
@@ -5119,9 +5145,16 @@ def make_handler(ctx: Context, quiet: bool):
                     # The chain in one step: the failing boot, then the
                     # restart it causes.
                     ctx.sd_slow_record = True
-                    ctx.sd.update(reboots=min(ctx.sd["reboots"] + 1, 3))
+                    # The transfer that failed last before the restart
+                    # (firmware `sdhealth`: RTC memory), and the ring's note.
+                    fault = {"op": "read", "cmd": 18, "sector": 40960, "count": 4,
+                             "err": "ESP_ERR_TIMEOUT", "code": 263, "khz": 40000}
+                    ctx.sd.update(reboots=min(ctx.sd["reboots"] + 1, 3), io_error=None, io_error_before=fault)
                     apply_card_speed(ctx)
                     ctx.restart("card_failure")
+                    ctx.restarts[0]["where"] = "read CMD18 sector 40960 x4 at 40000 kHz: ESP_ERR_TIMEOUT"
+                else:
+                    ctx.sd.update(io_error=None, io_error_before=None)
             self.send_json(200, {"ok": True, "rebooting": True})
 
         def h_manifest_put(self, path):
@@ -5725,9 +5758,10 @@ def parse_args():
     ap.add_argument("--panel-trial", type=float, default=60.0,
                     help="seconds a panel-timing trial runs before it reverts (the firmware's 60)")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
-    ap.add_argument("--sd", choices=["ok", "unreadable", "none", "slowed"], default="ok",
-                    help="the card: ok, unreadable (mounts, exFAT: nothing plays), none, or slowed "
-                         "(readable, set to fast, and already slowed to 20 MHz after errors)")
+    ap.add_argument("--sd", choices=["ok", "unreadable", "none", "slowed", "stuck"], default="ok",
+                    help="the card: ok, unreadable (mounts, exFAT: nothing plays), none, slowed "
+                         "(readable, set to fast, and already slowed to 20 MHz after errors), or stuck "
+                         "(no answer since a restart that kept its power: sd.stuck, the power advice)")
     ap.add_argument("--taken", default="other-display=192.0.2.42",
                     help="NAME=IP,... : display names other devices answer to (<name>.local); "
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")

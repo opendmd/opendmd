@@ -1172,7 +1172,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let snap = status_snapshot(&c.status);
         // Sized on the strings as escaped: a title of quotes doubles.
         let strings = json_string_len(&snap.path) + json_string_len(&snap.title) + json_string_len(&snap.manifest)
-            + json_string_len(&snap.next);
+            + json_string_len(&snap.next) + snap.sd_error.as_deref().map_or(0, json_string_len);
         let mut ev = crate::events::Event::new(EVENT_ROOM + strings)?;
         event_json(&snap, brightness, &mut ev);
         Some(ev)
@@ -2891,12 +2891,13 @@ fn event_json(s: &Status, brightness: u8, ev: &mut crate::events::Event) {
     );
     let _ = write!(
         ev,
-        r#""sd":{{"mounted":{},"readable":{},"attempts":{},"error":{},"formatting":{}}},"#,
+        r#""sd":{{"mounted":{},"readable":{},"attempts":{},"error":{},"formatting":{},"stuck":{}}},"#,
         s.sd_mounted,
         s.sd_usable(),
         s.sd_attempts,
         opt_json(s.sd_error.as_deref()),
         s.sd_formatting,
+        crate::sd::stuck(),
     );
     let _ = write!(
         ev,
@@ -3010,7 +3011,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let _ = write!(out, r#""connect":{},"#, crate::connect::status_json());
     let _ = write!(
         out,
-        r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{}"#,
+        r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{},"stuck":{},"check":{}"#,
         s.sd_mounted,
         s.sd_usable(),
         s.sd_capacity_bytes,
@@ -3019,6 +3020,8 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
+        crate::sd::stuck(),
+        crate::sd::check_json(),
     );
     // (The card's own part first, then the rest, each with its comma.)
     let _ = out.write_str(",");

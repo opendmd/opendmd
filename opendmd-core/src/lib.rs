@@ -58,6 +58,7 @@ pub mod restarts;
 pub mod scan;
 pub mod schedule;
 pub mod scheduler;
+pub mod sd_check;
 pub mod settings_file;
 pub mod sidecar;
 pub mod sky;

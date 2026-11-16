@@ -276,7 +276,14 @@ pub fn diag(site: &str) {
 /// A planned restart's entry ([`crate::restart`]).
 #[inline(never)]
 pub fn record(why: Reason) {
-    ring::push(&mut Rtc, Entry::new(why, Some(figures())));
+    let mut e = Entry::new(why, Some(figures()));
+    // A card-failure restart says which transfer failed last (`where`).
+    if why == Reason::CardFailure {
+        if let Some(note) = crate::sdhealth::fault_note() {
+            e.set_text(format_args!("{note}"));
+        }
+    }
+    ring::push(&mut Rtc, e);
 }
 
 /// The heartbeat's figures, for a crash that writes nothing.

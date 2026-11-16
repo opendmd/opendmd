@@ -19,14 +19,18 @@ use esp_idf_hal::gpio::{AnyIOPin, AnyInputPin, AnyOutputPin};
 use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::sd::spi::SdSpiHostDriver;
 use esp_idf_hal::sd::{SdCardConfiguration, SdCardDriver};
+use esp_idf_hal::gpio::Pin;
 use esp_idf_hal::spi::config::DriverConfig;
-use esp_idf_hal::spi::{Dma, SpiDriver, SPI3};
+use esp_idf_hal::spi::{Dma, SpiBusDriver, SpiDriver, SPI3};
+use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::fs::fatfs::Fatfs;
 use esp_idf_svc::io::vfs::MountedFatfs;
 use opendmd_core::engine::{ReadSeek, Source};
 use opendmd_core::layout;
+use opendmd_core::sd_check::{self, Check, Class};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::atomic::{AtomicU32, Ordering::{Relaxed, SeqCst}};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{Relaxed, SeqCst}};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::config;
@@ -47,6 +51,13 @@ type Card = SdCardDriver<Host>;
 /// mount 10 s later — and a retry must not inherit a bus in whatever state
 /// the failed attempt left it. Attempts after the first also give each
 /// command longer ([`config::SD_RETRY_CMD_TIMEOUT_MS`]).
+///
+/// **After a failed attempt** each one starts with the raw check
+/// (`opendmd_core::sd_check`, [`SdBus::check`]): the card at 400 kHz on
+/// the bare bus before the driver's init, so `sd.error` says *how* it
+/// failed (no answer at all, MISO held low, idle for ever) and `sd.check`
+/// what was seen. All of it on the boot task (CPU0), the only task that
+/// touches an unmounted card.
 pub struct SdBus {
     spi: SPI3,
     sck: AnyOutputPin,
@@ -54,6 +65,87 @@ pub struct SdBus {
     miso: AnyIOPin,
     cs: AnyOutputPin,
     attempts: u32,
+    /// Attempts failed in a row (0 once one gets through the card's init).
+    failed: u32,
+    /// Checks in a row that found the card silent.
+    silent: u32,
+}
+
+/// The last raw check, as `sd.check` (`null` before any).
+static CHECK: Mutex<String> = Mutex::new(String::new());
+/// The card has been silent for [`sd_check::SILENT_STREAK`] checks in a
+/// row since a restart that kept its power: `sd.stuck`.
+static STUCK: AtomicBool = AtomicBool::new(false);
+
+/// `sd.check`'s value: the last raw check (`null` before any).
+pub fn check_json() -> String {
+    let c = CHECK.lock().unwrap_or_else(|p| p.into_inner());
+    if c.is_empty() {
+        "null".to_string()
+    } else {
+        c.clone()
+    }
+}
+
+/// `sd.stuck`: the card needs its power cut (see [`sd_check::NOT_ANSWERING`]).
+pub fn stuck() -> bool {
+    STUCK.load(Relaxed)
+}
+
+/// A restart for the card's sake is under way ([`stop_transfers`]).
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// No new card writes for a transfer: an upload's next body read fails
+/// (`httpd::Upload::read`: its file is closed and removed, a 503 answered),
+/// a Connect send's next chunk write fails (its `.part` files go).
+pub fn restarting() -> bool {
+    RESTARTING.load(Relaxed)
+}
+
+/// Before a restart for the card's sake (`restart_for_card`): stop the
+/// uploads (files, OTA staging, the web app's pack) and Connect sends
+/// ([`restarting`]), and wait up to `timeout` for every transfer holding
+/// the card (`cache_builder::busy`) to end, its files closed. Then the
+/// restart takes the card's I/O lock (`cardspeed::hold_for_restart`).
+pub fn stop_transfers(timeout: std::time::Duration) -> bool {
+    RESTARTING.store(true, SeqCst);
+    let t = Instant::now();
+    while crate::cache_builder::transfer_in_flight() && t.elapsed() < timeout {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let done = !crate::cache_builder::transfer_in_flight();
+    log::info!(
+        "microSD: transfers {} before the restart ({} ms)",
+        if done { "stopped" } else { "still going" },
+        t.elapsed().as_millis()
+    );
+    done
+}
+
+/// This boot cut the card's power: a power-on or a brownout (as `main`'s
+/// `sdhealth::boot` treats them). A silent socket then is most likely empty.
+fn power_was_cut() -> bool {
+    use opendmd_core::restarts::Reset;
+    matches!(crate::restarts::reset_now(), Reset::PowerOn | Reset::Brownout)
+}
+
+/// The check's bus: the socket's SPI peripheral at 400 kHz, CS by hand.
+struct CheckWire<'a> {
+    bus: SpiBusDriver<'a, SpiDriver<'a>>,
+    cs: i32,
+}
+
+impl sd_check::Wire for CheckWire<'_> {
+    fn select(&mut self, on: bool) {
+        // SAFETY: the CS pin is the bus's (owned by `SdBus`), set as an output.
+        unsafe { esp_idf_sys::gpio_set_level(self.cs, u32::from(!on)) };
+    }
+    fn xfer(&mut self, buf: &mut [u8]) -> bool {
+        self.bus.transfer_in_place(buf).is_ok()
+    }
+    fn pause_ms(&mut self, ms: u32) {
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(ms)));
+    }
 }
 
 /// A mounted card. Dropping it unmounts, so keep it alive for the whole run.
@@ -101,6 +193,8 @@ impl SdBus {
             miso,
             cs,
             attempts: 0,
+            failed: 0,
+            silent: 0,
         }
     }
 
@@ -127,9 +221,25 @@ impl SdBus {
     pub fn mount(&mut self, speed_khz: u32, capped: bool) -> Result<SdCard> {
         self.attempts += 1;
         if take_simulated_failure() {
+            self.failed += 1;
             anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
         }
-        let card = self.init(speed_khz)?;
+        // After a failed attempt; with the budget spent (the card failed
+        // repeatedly) from the first: ~1 ms on a silent card.
+        let check = (self.failed > 0 || capped).then(|| self.check());
+        let card = match self.init(speed_khz) {
+            Ok(c) => c,
+            Err(e) => {
+                self.failed += 1;
+                return Err(match check {
+                    Some(c) => self.explain(&c, &e),
+                    None => e,
+                });
+            }
+        };
+        self.failed = 0;
+        self.silent = 0;
+        STUCK.store(false, Relaxed);
 
         let raw = card.card();
         let capacity_bytes = (raw.csd.capacity as u64) * (raw.csd.sector_size as u64);
@@ -163,8 +273,81 @@ impl SdBus {
         })
     }
 
+    /// The raw check (`opendmd_core::sd_check::run`) on a bus of its own,
+    /// torn down before the driver's init builds its own: ~1 ms for a card
+    /// that answers nothing, up to ~1.1 s for one idle for ever. Published
+    /// as `sd.check` and logged.
+    #[optimize(size)]
+    #[inline(never)]
+    fn check(&mut self) -> Check {
+        // SAFETY: as in `init`: no other driver on these exists now (a
+        // failed attempt's were dropped with it), and these are dropped
+        // before this returns.
+        let (spi, sck, mosi, miso, cs) = unsafe {
+            (
+                self.spi.clone_unchecked(),
+                self.sck.clone_unchecked(),
+                self.mosi.clone_unchecked(),
+                self.miso.clone_unchecked(),
+                self.cs.clone_unchecked(),
+            )
+        };
+        let (miso_pin, cs_pin) = (miso.pin(), cs.pin());
+        let t = Instant::now();
+        let found = (|| {
+            let driver = SpiDriver::new(spi, sck, mosi, Some(miso), &DriverConfig::default()).ok()?;
+            let bus = SpiBusDriver::new(
+                driver,
+                &esp_idf_hal::spi::config::Config::new().baudrate(400.kHz().into()),
+            )
+            .ok()?;
+            // SAFETY: the bus's own pins: CS an output driven high (the card
+            // deselected), MISO pulled up as in `init`.
+            unsafe {
+                esp_idf_sys::gpio_set_pull_mode(miso_pin, esp_idf_sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY);
+                esp_idf_sys::gpio_set_direction(cs_pin, esp_idf_sys::gpio_mode_t_GPIO_MODE_OUTPUT);
+                esp_idf_sys::gpio_set_level(cs_pin, 1);
+            }
+            Some(sd_check::run(&mut CheckWire { bus, cs: cs_pin }))
+        })()
+        .unwrap_or(Check {
+            bus_failed: true,
+            ..Check::default()
+        });
+        // SAFETY: CS back as the reset left it (the host's init sets it up).
+        unsafe { esp_idf_sys::gpio_reset_pin(cs_pin) };
+        let class = found.class();
+        self.silent = if class == Class::Silent { self.silent + 1 } else { 0 };
+        let poweron = power_was_cut();
+        let stuck = sd_check::stuck(class, self.silent, poweron);
+        STUCK.store(stuck, Relaxed);
+        let mut json = format!(
+            r#"{{"class":"{}","words":"{}","attempt":{},"silent_in_a_row":{},"stuck":{stuck},"ms":{},"#,
+            class.name(),
+            class.words(),
+            self.attempts,
+            self.silent,
+            t.elapsed().as_millis()
+        );
+        found.json_fields(&mut json);
+        json.push('}');
+        log::warn!("microSD check before attempt {}: {}: {json}", self.attempts, class.words());
+        *CHECK.lock().unwrap_or_else(|p| p.into_inner()) = json;
+        found
+    }
+
+    /// The mount error after a check: in words, the driver's error after them.
+    fn explain(&self, check: &Check, e: &anyhow::Error) -> anyhow::Error {
+        let poweron = power_was_cut();
+        anyhow::anyhow!(sd_check::mount_error(check.class(), self.silent, poweron, &format!("{e:#}")))
+    }
+
     /// The bus, the SD SPI host and the card's init sequence, built afresh
     /// (see the struct's doc); dropping the result tears all three down.
+    ///
+    /// MISO and CS are pulled up (as the updater does, `updater.c`): with the
+    /// card's DO released, or no card, MISO reads 1 rather than floating, and
+    /// CS stays high (deselected) whenever the pin is not driven.
     fn init(&mut self, speed_khz: u32) -> Result<Card> {
         // SAFETY: the peripheral and the pins are this struct's alone, and
         // the drivers built on them here are either kept (inside the
@@ -181,6 +364,7 @@ impl SdBus {
                 self.cs.clone_unchecked(),
             )
         };
+        let (miso_pin, cs_pin) = (miso.pin(), cs.pin());
         let driver = SpiDriver::new(
             spi,
             sck,
@@ -189,6 +373,8 @@ impl SdBus {
             &DriverConfig::default().dma(Dma::Auto(4096)),
         )
         .context("SPI bus init failed")?;
+        // SAFETY: the bus's MISO, configured just now.
+        unsafe { esp_idf_sys::gpio_set_pull_mode(miso_pin, esp_idf_sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY) };
         let host = SdSpiHostDriver::new(
             driver,
             Some(cs),
@@ -198,6 +384,9 @@ impl SdBus {
             None,
         )
         .context("SD SPI host init failed")?;
+        // SAFETY: CS, just made an output by the host's init (whose
+        // `gpio_config` left it without a pull).
+        unsafe { esp_idf_sys::gpio_set_pull_mode(cs_pin, esp_idf_sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY) };
 
         let mut cfg = SdCardConfiguration::new();
         cfg.speed_khz = speed_khz;
