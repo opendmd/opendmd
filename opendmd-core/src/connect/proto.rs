@@ -139,8 +139,13 @@ pub const TYPE_COMMAND: u8 = 0x01;
 pub const COMMAND_HEAD: usize = 1 + 8 + 64;
 /// A command body's longest, in bytes.
 pub const MAX_BODY: usize = 700;
-/// A text frame's longest, in bytes.
-pub const MAX_TEXT: usize = 1024;
+/// The longest text frame anyone reads that does not come from the panel
+/// (server to panel, controller to server): the panel's receive buffer.
+pub const MAX_TEXT_IN: usize = 1024;
+/// The longest text frame the panel sends (an `ack` with a full
+/// `controllers` result, `status`): what the server and controllers must
+/// take from it.
+pub const MAX_TEXT_OUT: usize = 2048;
 /// What a command signature covers before the body.
 pub const CMD_DOMAIN: &[u8] = b"opendmd-connect-v1 cmd\0";
 /// What an attach signature covers before `dev` and the nonce.
@@ -400,9 +405,10 @@ fn formula_stem_ok(s: &str) -> bool {
 }
 
 /// A path segment a remote path may hold: not empty, not `.`/`..` or any
-/// hidden name, no control or path-meaningful character.
+/// hidden name, none ending in `.` or a space (FAT drops those, so two
+/// spellings would name one file), no control or path-meaningful character.
 fn segment_ok(s: &str) -> bool {
-    !s.is_empty() && !s.starts_with('.') && !s.chars().any(|c| c.is_control() || matches!(c, '\\' | '?' | '#' | ':' | '*' | '<' | '>' | '|' | '"'))
+    !s.is_empty() && !s.starts_with('.') && !s.ends_with(['.', ' ']) && !s.chars().any(|c| c.is_control() || matches!(c, '\\' | '?' | '#' | ':' | '*' | '<' | '>' | '|' | '"'))
 }
 
 /// The longest remote play path, in bytes.
@@ -774,6 +780,9 @@ pub enum ServerMsg {
     /// `watch {on}`: whether a controller is looking.
     Watch(bool),
     /// A guest's `pair`, relayed; `g`: the guest's slot, echoed in `paired`.
+    /// `label` is as sent: its bytes go into the MAC check
+    /// ([`Window::check`](super::pair::Window::check)) and it is cleaned
+    /// only after that.
     Pair { g: u8, public: [u8; 32], label: String, mac: [u8; 32] },
     /// A type this version does not know: ignored.
     Unknown,
@@ -789,7 +798,7 @@ pub enum TextError {
 
 /// Read a text frame from the server.
 pub fn parse_server_text(text: &[u8]) -> Result<ServerMsg, TextError> {
-    if text.len() > MAX_TEXT {
+    if text.len() > MAX_TEXT_IN {
         return Err(TextError::TooBig);
     }
     let v = json::parse(text).map_err(|_| TextError::Malformed)?;
@@ -870,13 +879,13 @@ mod tests {
             "/gifs/../wifi.txt", "/gifs/a/../../x.gif", "/cache/a/xx/b.gif", "/gifs/.hidden/x.gif", "/gifs//x.gif",
             "/gifs/x.txt", "gifs/x.gif", "/gifs/.gif", "/gifs/a\\..\\b.gif", "@formula:~sent", "@formula:~sent?psb=AA",
             "@formula?psb=AAAA", "@formula:Fire", "@formula:", "/formulas/../x.psi", "/formulas/~sent.psi",
-            "@card:boot", "/gifs/x.gif?x=1", "/gifs/a\u{0}.gif", "/filelist.txt", "",
+            "/gifs/Arcade./x.gif", "/gifs/Arcade /x.gif", "/gifs/a/x.gif.", "@card:boot", "/gifs/x.gif?x=1", "/gifs/a\u{0}.gif", "/filelist.txt", "",
         ] {
             assert!(!remote_play_path_ok(bad), "{bad}");
         }
         assert!(!remote_play_path_ok(&format!("/gifs/{}.gif", "a".repeat(240))));
         assert!(remote_set_ok("") && remote_set_ok("consoles") && remote_set_ok("filelist.alt"));
-        for bad in ["../x", "a/b", ".tags", "a\\b", "x\n"] {
+        for bad in ["../x", "a/b", ".tags", "a\\b", "x\n", "consoles.", "consoles "] {
             assert!(!remote_set_ok(bad), "{bad}");
         }
         assert!(sent_name_ok("cat.gif") && !sent_name_ok("a/cat.gif") && !sent_name_ok(".gif") && !sent_name_ok("cat.png"));
@@ -904,7 +913,7 @@ mod tests {
         assert_eq!(parse_server_text(br#"{"t":"watch"}"#), Err(TextError::Malformed));
         assert_eq!(parse_server_text(br#"{"on":true}"#), Err(TextError::Malformed));
         assert_eq!(parse_server_text(b"ping"), Err(TextError::Malformed));
-        let big = format!(r#"{{"t":"watch","on":true,"p":"{}"}}"#, "x".repeat(MAX_TEXT));
+        let big = format!(r#"{{"t":"watch","on":true,"p":"{}"}}"#, "x".repeat(MAX_TEXT_IN));
         assert_eq!(parse_server_text(big.as_bytes()), Err(TextError::TooBig));
     }
 
@@ -915,9 +924,33 @@ mod tests {
         let v = json::parse(h.as_bytes()).unwrap();
         assert_eq!(v.get("t").and_then(Value::as_str), Some("hello"));
         assert_eq!(v.get("sess").and_then(Value::as_str), Some(hex(&sess).as_str()));
-        assert!(h.len() < MAX_TEXT);
+        assert!(h.len() < MAX_TEXT_IN);
         for m in [info("Den \"panel\""), pair_open(&[1; 10], 300), pair_close(&[1; 10]), paired(1, &[2; 8], &[3; 32]), paired_err(1, "bad-mac"), FORGET.into(), register_body(&[4; 32]), ack_ok(&[1; 8], 3, Some("[1,2]")), ack_err(&[1; 8], None, Refusal::BadSig)] {
             assert!(json::parse(m.as_bytes()).is_ok(), "{m}");
         }
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use crate::connect::keys::{Entry, KeyList};
+
+    /// Eight controllers with the worst labels JSON can make of 24 bytes
+    /// (every byte a `"`, written `\"`), the largest numbers JSON carries, in an `ack`:
+    /// inside what the panel may send, and over what it may receive (so
+    /// the two limits really differ).
+    #[test]
+    fn a_full_controllers_ack_fits_the_panels_text_limit() {
+        let mut keys = KeyList::new();
+        for s in 1..=8u8 {
+            let public = SigningKey::from_bytes(&[s; 32]).verifying_key().to_bytes();
+            keys.add(Entry { public, flags: 1, label: "\"".repeat(24), added: u32::MAX, added_by: Some([0xff; 8]) }).unwrap();
+        }
+        let r = keys.controllers_result(|_| Some(MAX_N));
+        let ack = ack_ok(&[0xff; 8], MAX_N, Some(&r));
+        assert!(json::parse(ack.as_bytes()).is_ok());
+        assert!(ack.len() <= MAX_TEXT_OUT, "{} > {}", ack.len(), MAX_TEXT_OUT);
+        assert!(ack.len() > MAX_TEXT_IN, "{}", ack.len());
     }
 }

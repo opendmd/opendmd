@@ -62,7 +62,10 @@ class Server:
         self.id_key = id_key or os.urandom(32)
         self.panels: dict[bytes, Record] = {}
         self.finds: dict[bytes, tuple[bytes, float]] = {}  # pair_id -> (dev, expiry)
-        # Test hooks: counts of what was refused, by reason.
+        # Test hooks: counts of what was refused, by reason; `rewrite_label`
+        # makes this a hostile relay that changes the label in a relayed
+        # `pair` or `add-req`.
+        self.rewrite_label: str | None = None
         self.refused: dict[str, int] = {}
 
     def refuse(self, why: str):
@@ -171,7 +174,7 @@ class Server:
         return ws
 
     async def from_panel(self, rec: Record, dev: bytes, ws, text: str):
-        if len(text.encode()) > odc.MAX_TEXT:
+        if len(text.encode()) > odc.MAX_TEXT_OUT:
             return
         try:
             m = odc.loads(text.encode())
@@ -375,13 +378,15 @@ class Server:
         try:
             async with asyncio.timeout(GUEST_LIMIT_S):
                 async for msg in ws:
-                    if msg.type != WSMsgType.TEXT or len(msg.data.encode()) > odc.MAX_TEXT:
+                    if msg.type != WSMsgType.TEXT or len(msg.data.encode()) > odc.MAX_TEXT_IN:
                         continue
                     try:
                         gm = odc.loads(msg.data.encode())
                     except odc.Bad:
                         continue
                     gm["g"] = g
+                    if self.rewrite_label is not None and "label" in gm:
+                        gm["label"] = self.rewrite_label
                     if gm.get("t") == "pair" and inviter is None and rec.panel is not None:
                         await rec.panel.send_str(odc.dumps(gm))
                     elif gm.get("t") == "add-req" and inviter is not None and not inviter.closed:

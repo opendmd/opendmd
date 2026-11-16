@@ -34,7 +34,7 @@ def main():
     v = json.loads(Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT).read_text())
     check(v["version"] == odc.VERSION and v["min_version"] == odc.MIN_VERSION, "version")
     lim = v["limits"]
-    for name, mine in [("max_text", odc.MAX_TEXT), ("max_body", odc.MAX_BODY), ("command_head", odc.COMMAND_HEAD), ("max_chunk", odc.MAX_CHUNK), ("max_file", odc.MAX_FILE), ("max_keys", odc.MAX_KEYS), ("max_label_bytes", odc.MAX_LABEL), ("max_n", odc.MAX_SAFE), ("rate_per_key", odc.RATE_PER_KEY), ("rate_per_panel", odc.RATE_PER_PANEL)]:
+    for name, mine in [("max_text_in", odc.MAX_TEXT_IN), ("max_text_out", odc.MAX_TEXT_OUT), ("max_body", odc.MAX_BODY), ("command_head", odc.COMMAND_HEAD), ("max_chunk", odc.MAX_CHUNK), ("max_file", odc.MAX_FILE), ("max_keys", odc.MAX_KEYS), ("max_label_bytes", odc.MAX_LABEL), ("max_n", odc.MAX_SAFE), ("rate_per_key", odc.RATE_PER_KEY), ("rate_per_panel", odc.RATE_PER_PANEL)]:
         check(lim[name] == mine, f"limit {name}")
     d = v["domains"]
     check(d["cmd"].encode() == odc.CMD_DOMAIN and d["attach"].encode() == odc.ATTACH_DOMAIN and d["dev_tag"].encode() == odc.DEV_TAG_DOMAIN, "domains")
@@ -96,18 +96,27 @@ def main():
     s = odc.b32(bytes.fromhex(pr["random"]), 100)
     check(s == pr["secret"] and odc.pair_id(s).hex() == pr["pair_id"], "pairing secret / id")
     gpub = bytes.fromhex(pr["pub"])
-    check(odc.pair_mac(s, dev, gpub).hex() == pr["mac"] and odc.paired_mac(s, gpub).hex() == pr["mac2"], "pairing MACs")
+    label = pr["label"].encode()
+    check(odc.pair_mac(s, dev, gpub, label).hex() == pr["mac"] and odc.paired_mac(s, dev, gpub).hex() == pr["mac2"], "pairing MACs")
+    check(odc.pair_mac(s, dev, gpub, b"C tablet").hex() == pr["mac_for_a_rewritten_label"], "the label is in the MAC")
+    pm = odc.loads(pr["message"].encode())
+    check(pm["label"].encode() == label and pm["mac"] == pr["mac"], "pair message")
     w = odc.Window(s, until=300)
     try:
-        w.check(dev, a_pub, bytes.fromhex(pr["mac"]), 0)
+        w.check(dev, a_pub, label, bytes.fromhex(pr["mac"]), 0)
         check(False, "a swapped key paired")
     except odc.Bad as e:
         check(str(e) == "bad-mac", "swapped key: bad-mac")
-    check(w.check(dev, gpub, bytes.fromhex(pr["mac"]), 0).hex() == pr["mac2"], "window pairs")
+    try:
+        w.check(dev, gpub, b"C tablet", bytes.fromhex(pr["mac"]), 0)
+        check(False, "a rewritten label paired")
+    except odc.Bad as e:
+        check(str(e) == "bad-mac", "rewritten label: bad-mac")
+    check(w.check(dev, gpub, label, bytes.fromhex(pr["mac"]), 0).hex() == pr["mac2"], "window pairs")
     iv = v["invite"]
     s2 = odc.b32(bytes.fromhex(iv["random"]), 128)
     check(s2 == iv["secret"] and odc.invite_id(s2).hex() == iv["invite_id"], "invite id")
-    check(odc.add_mac(s2, dev, gpub).hex() == iv["mac"] and odc.confirm_code(gpub) == iv["confirm"], "invite MAC / code")
+    check(odc.add_mac(s2, dev, gpub, iv["label"].encode()).hex() == iv["mac"] and odc.confirm_code(gpub) == iv["confirm"], "invite MAC / code")
     print("pairing and invites: ok")
 
     server_keys = {k: e.pub for k, e in keys.items()}

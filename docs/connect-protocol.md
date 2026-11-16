@@ -38,8 +38,11 @@ panel is never updated, wiped, reconfigured or restarted remotely.
 
 ### 1.1 Frames
 
-**Text frames** are one JSON object each, at most **1,024 bytes**, with a
-type `t`. A message of an unknown type is ignored; unknown fields are
+**Text frames** are one JSON object each, with a type `t`: at most
+**1,024 bytes** for any sent to the panel or by a controller (the panel's
+receive buffer), at most **2,048 bytes** for those the panel sends (an
+`ack` with a full `controllers` result is about 1.3 KB), which the server
+and controllers must take. A message of an unknown type is ignored; unknown fields are
 ignored.
 
 **Binary frames** start with one type byte:
@@ -125,7 +128,7 @@ one level only.
 
 Labels and names are cleaned before they are stored: control characters
 and the invisible ones that can disguise text (zero widths U+200B to
-U+200F, bidi controls U+202A to U+202E and U+2066 to U+2069, U+2060 to
+U+200F, line and paragraph separators U+2028 and U+2029, bidi controls U+202A to U+202E and U+2066 to U+2069, U+2060 to
 U+2064, U+00AD, U+FEFF, variation selectors, tags, Hangul fillers) are
 removed, then the text is trimmed; empty or too long after that is refused.
 
@@ -195,6 +198,9 @@ panel closes the window.
 - `v`: the connection's version. `dev`: the panel's id. `sess`: the
   panel's nonce for this connection (from `attached` or `panel`). `n`: this
   key's counter, 1 to 2^53 - 1, above the last one it used this session.
+  Tabs and pages of one browser share its key and can race, so a
+  controller uses `n` = max(last used + 1, `Date.now()` * 1024 + seq) and,
+  on `replay`, signs again once with a fresh `n`.
   `c`: the command. `a`: its arguments, an object (may be left out when
   there are none).
 - Member order and whitespace are free: the signature is over the bytes.
@@ -247,6 +253,13 @@ there is no queue.
 `n` is left out when it could not be read. The server delivers an `ack`
 to the sockets of key `k`.
 
+**Acks are not authenticated.** The panel does not sign them, so a
+hostile server can fake an `ok`, a `controllers` list or a `playlists`
+result, or drop a real one; it still cannot make the panel do anything.
+And a signed command the server withholds stays valid until that key's
+next command in the same session (or the session ends): the server can
+delay a command, never forge or repeat one. Both are accepted for P1.
+
 Errors: `bad-sig`, `unknown-key`, `stale-session`, `replay`,
 `not-allowed`, `bad-arg`, `busy`, `too-big`, `quota`, `no-card`, `rate`.
 
@@ -261,11 +274,11 @@ for anything else. At compile time no name in it may contain any of
 
 | `c` | Arguments | Rules | Becomes |
 |---|---|---|---|
-| `play` | `path` | a GIF under `/gifs/` ending `.gif`, at most 240 bytes, no empty, `.`-leading or `..` segment, no `\ ? # : * < > \| "` or control character; or `@formula:<stem>` or `/formulas/<stem>.psi` with `<stem>` of `[a-z0-9_-]`, 1 to 64, starting with a letter or digit. Never `/cache/`, an inline Formula, `~sent` or a virtual file | `PlayNow`, with the LAN's own play validation too |
+| `play` | `path` | a GIF under `/gifs/` ending `.gif`, at most 240 bytes, no empty, `.`-leading, `.`- or space-ending or `..` segment (FAT drops a trailing dot or space, so two spellings would name one file), no `\ ? # : * < > \| "` or control character; or `@formula:<stem>` or `/formulas/<stem>.psi` with `<stem>` of `[a-z0-9_-]`, 1 to 64, starting with a letter or digit. Never `/cache/`, an inline Formula, `~sent` or a virtual file | `PlayNow`, with the LAN's own play validation too |
 | `next`, `prev`, `pause` | none | | `Skip`, `Back`, `TogglePause` (`r`: `{paused}`) |
 | `brightness` | `v` | an integer, 0 to the panel's `max_brightness` | `ApplyConfig` |
-| `playlist` | `set` | `""` (the main list) or one name of at most 64 bytes: no `/`, `\`, `..`, control character or leading `.` | `ApplyConfig`; `ack` may say `pending` |
-| `playlists` | none | | `r`: the `/sets` listing |
+| `playlist` | `set` | `""` (the main list) or one name of at most 64 bytes: no `/`, `\`, `..`, control character, leading `.` or trailing `.` or space | `ApplyConfig`; `ack` may say `pending` |
+| `playlists` | none | | `r`: the `/sets` listing, bounded to fit the panel's 2,048-byte text limit |
 | `send` | `id, name, size, sha256, copy_size, copy_sha256, play` | section 8 | a transfer |
 | `send-cancel` | `id` | | |
 | `controllers` | none | | `r`: `[{k, label, f, added, added_by, last_s}]` |
@@ -290,14 +303,18 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
 2. The controller posts `pair_id` to `/v1/find` and gets `dev`.
 3. It makes its key pair, joins as a `guest` with `pair_id`, and sends
    `pair {pub, label, mac}` with
-   `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub`)
-   (`dev` and `pub` as raw bytes).
-4. The panel checks the MAC in constant time. A wrong one spends a try
+   `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub` ‖ label)
+   (`dev` and `pub` as raw bytes; the label last, as its UTF-8 bytes exactly
+   as sent after JSON unescaping: every other field has a fixed length). A
+   server that rewrites the label breaks the MAC.
+4. The panel checks the MAC in constant time, over the label as received,
+   and cleans the label (section 3) only after that. A wrong one spends a try
    (`paired {err:"bad-mac"}`); after the third, or after 5 minutes, the
    window is closed (`closed`, `expired`). On success it stores the key
    (flag `can_add`), shows "Remote control added" for 10 s, and only after
    the NVS write returned answers `paired {g, k, mac2}` with
-   `mac2` = HMAC-SHA256(`S`, `"ok"` ‖ `pub`), then `keys` and
+   `mac2` = HMAC-SHA256(`S`, `"opendmd paired v1"` ‖ `dev` ‖ `pub`), then
+   `keys` and
    `pair-close`.
 5. The controller checks `mac2`. A server that swaps in a key of its own
    can make neither MAC.
@@ -311,11 +328,17 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
    secret).
 2. The new browser joins as a guest with `invite_id` and sends
    `add-req {pub, label, mac}`, `mac` = HMAC-SHA256(secret,
-   `"opendmd add v1"` ‖ `dev` ‖ `pub`). The inviter checks it.
+   `"opendmd add v1"` ‖ `dev` ‖ `pub` ‖ label), the label as in 6.1. The
+   inviter checks it, then cleans the label.
 3. Both screens show the same 4 characters: the first 20 bits of
    SHA-256(`"opendmd confirm v1"` ‖ `pub`) in base32, upper case. The user
    confirms on the inviter, which signs `add-controller {pub, label}`.
-   That stops anyone who saw the link from adding themselves first.
+   That stops anyone who saw the link from adding themselves first. It does
+   not stop a link thief working with the server: the code is 20 bits, so
+   they could grind a key whose code matches (about 2^20 tries) and have
+   the server deliver it in place of the real guest's. Accepted for P1:
+   the link is shown only on a paired screen, and the panel lists every
+   key with who added it.
 4. On its `ack`, the inviter sends `add-ok {g, k}` to the guest. The new
    key has no `can_add`.
 
@@ -327,7 +350,8 @@ about 250 to 400 bytes: `now_playing {path, title, elapsed_ms, next,
 kept_s, seed, sent}`, `paused`, `brightness`, `max_brightness`, `set`,
 `context.state`, `transfer`, `fw`, `name`, `id`. Never heap, card or
 network internals. The server passes it to every attached controller and
-keeps none of it.
+keeps none of it. Like an `ack`, status is not authenticated: a hostile
+server can show a controller a false state, never change the panel's.
 
 ## 8. Sending a GIF
 
@@ -358,7 +382,7 @@ keeps none of it.
 
 | Limit | Value |
 |---|---|
-| Text frame | 1,024 bytes |
+| Text frame | 1,024 bytes to the panel and from controllers; 2,048 from the panel |
 | Command body | 700 bytes |
 | Chunk data | 1,024 bytes |
 | One file in a send | 524,288 bytes |
@@ -377,7 +401,7 @@ keeps none of it.
 made from fixed strings (never use one for anything real) and, for each,
 what every implementation must compute: the id and its tag, the register
 body, the key blob and `keys` message, attach signatures, pairing and
-invite MACs, the confirm code, version negotiation, acks, and 79 command
+invite MACs (with a label that needs escaping, and one rewritten), the confirm code, version negotiation, acks, and 81 command
 frames, each with what the panel answers (`expect`) and what the server's
 pre-check does (`server`). The cases cover the red list's single-frame
 attacks: replays, unsigned, tampered and re-serialised frames, wrong

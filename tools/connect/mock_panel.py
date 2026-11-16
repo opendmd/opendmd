@@ -103,7 +103,7 @@ class Panel:
         self.connected.clear()
 
     async def on_text(self, text: str):
-        if len(text.encode()) > odc.MAX_TEXT:
+        if len(text.encode()) > odc.MAX_TEXT_IN:
             return
         try:
             m = odc.loads(text.encode())
@@ -120,17 +120,19 @@ class Panel:
         g = m.get("g")
         pub = odc.unhex(m.get("pub"), 32)
         mac = odc.unhex(m.get("mac"), 32)
-        label = odc.clean_label(m.get("label", "")) if isinstance(m.get("label"), str) else None
-        if not odc.is_int(g) or pub is None or mac is None:
+        raw = m.get("label")
+        if not odc.is_int(g) or pub is None or mac is None or not isinstance(raw, str):
             return
         if self.window is None:
             await self.send({"t": "paired", "g": g, "err": "closed"})
             return
         try:
-            mac2 = self.window.check(self.dev, pub, mac, time.monotonic())
+            mac2 = self.window.check(self.dev, pub, raw.encode(), mac, time.monotonic())
         except odc.Bad as e:
             await self.send({"t": "paired", "g": g, "err": str(e)})
             return
+        # Cleaned only once the MAC, which covers it as sent, has checked.
+        label = odc.clean_label(raw)
         if label is None or not odc.usable_public_key(pub) or len(self.keys) >= odc.MAX_KEYS or odc.key_id(pub) in self.keys:
             await self.send({"t": "paired", "g": g, "err": "bad-arg"})
             return

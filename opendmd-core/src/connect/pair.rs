@@ -6,12 +6,13 @@
 //!   canonical lowercase text. Its ASCII bytes are the HMAC key.
 //! - `pair_id` = SHA-256(`"opendmd pair id v1"` ‖ `S`)\[..10\], what the
 //!   server sees (never `S`).
-//! - `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub`), from
-//!   the controller; `mac2` = HMAC-SHA256(`S`, `"ok"` ‖ `pub`), the panel's
+//! - `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub` ‖ label),
+//!   from the controller (the label's bytes as sent, last); `mac2` =
+//!   HMAC-SHA256(`S`, `"opendmd paired v1"` ‖ `dev` ‖ `pub`), the panel's
 //!   answer, sent only once the key is stored.
 //! - Invites: a 128-bit secret (26 base32 characters), `invite_id` =
 //!   SHA-256(`"opendmd invite id v1"` ‖ secret)\[..10\], `add-req`'s `mac` =
-//!   HMAC-SHA256(secret, `"opendmd add v1"` ‖ `dev` ‖ `pub`), and the
+//!   HMAC-SHA256(secret, `"opendmd add v1"` ‖ `dev` ‖ `pub` ‖ label), and the
 //!   4-character code both screens show, from SHA-256(`"opendmd confirm
 //!   v1"` ‖ `pub`).
 //!
@@ -28,7 +29,7 @@ pub const PAIR_TRIES: u8 = 3;
 
 const PAIR_ID_DOMAIN: &[u8] = b"opendmd pair id v1";
 const PAIR_MAC_DOMAIN: &[u8] = b"opendmd pair v1";
-const PAIRED_MAC_DOMAIN: &[u8] = b"ok";
+const PAIRED_MAC_DOMAIN: &[u8] = b"opendmd paired v1";
 const INVITE_ID_DOMAIN: &[u8] = b"opendmd invite id v1";
 const ADD_MAC_DOMAIN: &[u8] = b"opendmd add v1";
 const CONFIRM_DOMAIN: &[u8] = b"opendmd confirm v1";
@@ -77,16 +78,19 @@ pub fn invite_id(secret: &str) -> [u8; 10] {
     id10(INVITE_ID_DOMAIN, secret)
 }
 
-pub fn pair_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32]) -> [u8; 32] {
-    hmac_sha256(secret.as_bytes(), &[PAIR_MAC_DOMAIN, dev, public])
+/// `label`: its UTF-8 bytes exactly as sent (after JSON unescaping, before
+/// any cleaning), the last field: every other one has a fixed length.
+pub fn pair_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -> [u8; 32] {
+    hmac_sha256(secret.as_bytes(), &[PAIR_MAC_DOMAIN, dev, public, label])
 }
 
-pub fn paired_mac(secret: &str, public: &[u8; 32]) -> [u8; 32] {
-    hmac_sha256(secret.as_bytes(), &[PAIRED_MAC_DOMAIN, public])
+pub fn paired_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32]) -> [u8; 32] {
+    hmac_sha256(secret.as_bytes(), &[PAIRED_MAC_DOMAIN, dev, public])
 }
 
-pub fn add_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32]) -> [u8; 32] {
-    hmac_sha256(secret.as_bytes(), &[ADD_MAC_DOMAIN, dev, public])
+/// `label` as for [`pair_mac`].
+pub fn add_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -> [u8; 32] {
+    hmac_sha256(secret.as_bytes(), &[ADD_MAC_DOMAIN, dev, public, label])
 }
 
 /// The 4 characters both screens show while adding a device (uppercase
@@ -153,10 +157,11 @@ impl Window {
         self.open = false;
     }
 
-    /// Check a guest's `mac` over `pub` for this panel `dev`. On success
-    /// the window is used up and the answer's `mac2` returned; the caller
-    /// sends it only after the key is stored. A wrong MAC spends a try.
-    pub fn check(&mut self, dev: &[u8; 16], public: &[u8; 32], mac: &[u8; 32], now: Duration) -> Result<[u8; 32], PairError> {
+    /// Check a guest's `mac` over `pub` and `label` (its bytes as sent) for
+    /// this panel `dev`. On success the window is used up and the answer's
+    /// `mac2` returned; the caller cleans the label only now, and sends
+    /// `mac2` only after the key is stored. A wrong MAC spends a try.
+    pub fn check(&mut self, dev: &[u8; 16], public: &[u8; 32], label: &[u8], mac: &[u8; 32], now: Duration) -> Result<[u8; 32], PairError> {
         if !self.open {
             return Err(PairError::Closed);
         }
@@ -164,7 +169,7 @@ impl Window {
             self.open = false;
             return Err(PairError::Expired);
         }
-        let want = if self.invite { add_mac(&self.secret, dev, public) } else { pair_mac(&self.secret, dev, public) };
+        let want = if self.invite { add_mac(&self.secret, dev, public, label) } else { pair_mac(&self.secret, dev, public, label) };
         if !ct_eq(&want, mac) {
             self.tries = self.tries.saturating_sub(1);
             if self.tries == 0 {
@@ -173,7 +178,7 @@ impl Window {
             return Err(PairError::BadMac { left: self.tries });
         }
         self.open = false;
-        Ok(paired_mac(&self.secret, public))
+        Ok(paired_mac(&self.secret, dev, public))
     }
 }
 
@@ -183,6 +188,7 @@ mod tests {
 
     const DEV: [u8; 16] = [7; 16];
     const PUB: [u8; 32] = [9; 32];
+    const L: &[u8] = b"Den phone";
     const T0: Duration = Duration::from_secs(1000);
 
     fn secret() -> String {
@@ -206,10 +212,10 @@ mod tests {
     fn right_mac_pairs_once() {
         let s = secret();
         let mut w = Window::open(s.clone(), T0);
-        let mac2 = w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0).unwrap();
-        assert_eq!(mac2, paired_mac(&s, &PUB));
+        let mac2 = w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0).unwrap();
+        assert_eq!(mac2, paired_mac(&s, &DEV, &PUB));
         // One use.
-        assert_eq!(w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0), Err(PairError::Closed));
+        assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0), Err(PairError::Closed));
     }
 
     #[test]
@@ -217,11 +223,11 @@ mod tests {
         let s = secret();
         let mut w = Window::open(s.clone(), T0);
         let wrong = [0u8; 32];
-        assert_eq!(w.check(&DEV, &PUB, &wrong, T0), Err(PairError::BadMac { left: 2 }));
-        assert_eq!(w.check(&DEV, &PUB, &wrong, T0), Err(PairError::BadMac { left: 1 }));
-        assert_eq!(w.check(&DEV, &PUB, &wrong, T0), Err(PairError::BadMac { left: 0 }));
+        assert_eq!(w.check(&DEV, &PUB, L, &wrong, T0), Err(PairError::BadMac { left: 2 }));
+        assert_eq!(w.check(&DEV, &PUB, L, &wrong, T0), Err(PairError::BadMac { left: 1 }));
+        assert_eq!(w.check(&DEV, &PUB, L, &wrong, T0), Err(PairError::BadMac { left: 0 }));
         // Now even the right MAC is refused.
-        assert_eq!(w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0), Err(PairError::Closed));
+        assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0), Err(PairError::Closed));
     }
 
     #[test]
@@ -229,21 +235,37 @@ mod tests {
         let s = secret();
         let mut w = Window::open(s.clone(), T0);
         assert!(w.is_open(T0 + PAIR_TTL - Duration::from_millis(1)));
-        assert_eq!(w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0 + PAIR_TTL), Err(PairError::Expired));
-        assert_eq!(w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0), Err(PairError::Closed));
+        assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0 + PAIR_TTL), Err(PairError::Expired));
+        assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0), Err(PairError::Closed));
     }
 
     #[test]
     fn a_swapped_key_or_another_panel_fails() {
         let s = secret();
-        let mac = pair_mac(&s, &DEV, &PUB);
+        let mac = pair_mac(&s, &DEV, &PUB, L);
         let mut w = Window::open(s.clone(), T0);
         // The server swaps in its own key, keeping the guest's MAC.
-        assert!(matches!(w.check(&DEV, &[8; 32], &mac, T0), Err(PairError::BadMac { .. })));
+        assert!(matches!(w.check(&DEV, &[8; 32], L, &mac, T0), Err(PairError::BadMac { .. })));
         // The MAC was made for another panel.
-        assert!(matches!(w.check(&[6; 16], &PUB, &mac, T0), Err(PairError::BadMac { .. })));
+        assert!(matches!(w.check(&[6; 16], &PUB, L, &mac, T0), Err(PairError::BadMac { .. })));
         // An invite's MAC is not a pairing MAC.
-        assert!(matches!(w.check(&DEV, &PUB, &add_mac(&s, &DEV, &PUB), T0), Err(PairError::BadMac { left: 0 })));
+        assert!(matches!(w.check(&DEV, &PUB, L, &add_mac(&s, &DEV, &PUB, L), T0), Err(PairError::BadMac { left: 0 })));
+    }
+
+    #[test]
+    fn the_label_is_inside_the_mac() {
+        let s = secret();
+        let mac = pair_mac(&s, &DEV, &PUB, L);
+        let mut w = Window::open(s.clone(), T0);
+        // A server rewriting the label in a relayed `pair`.
+        assert!(matches!(w.check(&DEV, &PUB, b"Den phone ", &mac, T0), Err(PairError::BadMac { .. })));
+        assert!(matches!(w.check(&DEV, &PUB, b"Admin", &mac, T0), Err(PairError::BadMac { .. })));
+        assert!(w.check(&DEV, &PUB, L, &mac, T0).is_ok());
+        // And in a relayed `add-req`.
+        let i = invite_secret_from_random(&[2; 16]);
+        let mut w = Window::open_invite(i.clone(), T0);
+        assert!(w.check(&DEV, &PUB, b"x", &add_mac(&i, &DEV, &PUB, L), T0).is_err());
+        assert!(w.check(&DEV, &PUB, L, &add_mac(&i, &DEV, &PUB, L), T0).is_ok());
     }
 
     #[test]
@@ -251,7 +273,7 @@ mod tests {
         let s = invite_secret_from_random(&[1; 16]);
         let mut w = Window::open_invite(s.clone(), T0);
         assert_eq!(w.id(), invite_id(&s));
-        assert!(w.check(&DEV, &PUB, &pair_mac(&s, &DEV, &PUB), T0).is_err());
-        assert!(w.check(&DEV, &PUB, &add_mac(&s, &DEV, &PUB), T0).is_ok());
+        assert!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0).is_err());
+        assert!(w.check(&DEV, &PUB, L, &add_mac(&s, &DEV, &PUB, L), T0).is_ok());
     }
 }

@@ -559,6 +559,24 @@
     },
     {
       "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/Arcade./a.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e9d029df7079a4c2907b5bc7f5346d5b61a038d67e72f006484640657322e8b37f3e82f91e7fcab28bcd8e2683a32102bababd35d48f648a0360a87d5ceefd40a7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f4172636164652e2f612e676966227d7d",
+      "name": "path-trailing-dot",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/Arcade /a.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e7c87048b272ee01d35a4454b7d74b23c1c7daee30d2a6b4f91a118c9c48e583697fbac0ea429a3e60af9ea91631d1c2e0c694a390a0868189fb63bf7c03a750d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f417263616465202f612e676966227d7d",
+      "name": "path-trailing-space",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
       "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{}}",
       "expect": "bad-arg",
       "frame": "01ed5328324106ab4e1adf3028b551aa0dac0c40b46ade987bbefb8e017debf817f16f99bd14198e21a6866eee5621fabe9b3baa29d805694007cb2e0691a2f3be419fd2dac0e195097b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b7d7d",
@@ -821,13 +839,14 @@
     "invite_id": "opendmd invite id v1",
     "pair_id": "opendmd pair id v1",
     "pair_mac": "opendmd pair v1",
-    "paired_mac": "ok"
+    "paired_mac": "opendmd paired v1"
   },
   "invite": {
     "confirm": "3F6J",
     "invite_id": "96ed7e52e7b06c11e627",
+    "label": "C tablet \"é\"",
     "link": "https://opendmd.dev/c#add=5rjkoafkrbd37nkvy44xyhoffi.pyzwfqhfg373covcxhqgwg46ve",
-    "mac": "df4585618b0cee0b4951921d6ae2d4ac480aabfd77c9cf6e03767e80f0214640",
+    "mac": "ba3c3e302f8e1005ed8890d658a010313210adec92e3a53180bd65797ef55eb7",
     "pub": "817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a",
     "random": "7e3362c0e536ffb13aa2b9e06b1b9ea9",
     "secret": "pyzwfqhfg373covcxhqgwg46ve"
@@ -840,7 +859,8 @@
     "max_keys": 8,
     "max_label_bytes": 24,
     "max_n": 9007199254740991,
-    "max_text": 1024,
+    "max_text_in": 1024,
+    "max_text_out": 2048,
     "rate_per_key": 4,
     "rate_per_panel": 8
   },
@@ -915,10 +935,13 @@
     "upload"
   ],
   "pairing": {
+    "label": "C tablet \"é\"",
     "link": "https://opendmd.dev/connect/#pair=z5bltqg6537uvagizsvc",
-    "mac": "8a296c2c9d8a864623616856498140671d452bacb9b5edc41bff5a3bfe58dbef",
-    "mac2": "5f23d7c5a17f580ba26243631959d2baf4877748bba2315ddfa05aa51ce8fcec",
-    "mac_for_a_swapped_key": "58afc509a43db93dfd7adaaddf8deffdace3fee8bcfff975e718a786c74127e6",
+    "mac": "a710cd78940b618b745851978a3e5e65c7aa583ce38df874aaada9d7aabfe504",
+    "mac2": "e6e233763ce99f7f6cde28d81975f7b41fb571c24b6144f21e15a744a333c395",
+    "mac_for_a_rewritten_label": "e41894504dca1c08973927f7d967c599427a28795f3294bddc740f840b5f754b",
+    "mac_for_a_swapped_key": "70065068edb8ccc9e453f2c3f8e4e6a914e823149e03386041600fd834f114df",
+    "message": "{\"t\":\"pair\",\"pub\":\"817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a\",\"label\":\"C tablet \\\"é\\\"\",\"mac\":\"a710cd78940b618b745851978a3e5e65c7aa583ce38df874aaada9d7aabfe504\"}",
     "pair_id": "5dbf9764443f49c705a4",
     "pub": "817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a",
     "qr": "https://opendmd.dev/c#z5bltqg6537uvagizsvc",

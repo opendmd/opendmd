@@ -81,8 +81,8 @@ pub enum KeyError {
 }
 
 /// Clean a label or panel name: drop control characters and the invisible
-/// ones that can disguise text (zero widths, bidi controls, soft hyphen,
-/// BOM), trim, and refuse it if empty or longer than `max_bytes` UTF-8
+/// ones that can disguise text (zero widths, line and paragraph separators, bidi controls, soft
+/// hyphen, BOM), trim, and refuse it if empty or longer than `max_bytes` UTF-8
 /// bytes or `max_chars` characters after that.
 pub fn clean_text(s: &str, max_bytes: usize, max_chars: usize) -> Option<String> {
     let kept: String = s.chars().filter(|&c| !invisible(c)).collect();
@@ -94,7 +94,7 @@ fn invisible(c: char) -> bool {
     c.is_control()
         || matches!(c as u32,
             0x00AD | 0x034F | 0x061C | 0x115F | 0x1160 | 0x17B4 | 0x17B5 | 0x180E
-            | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+            | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
             | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 | 0xFFF0..=0xFFFB
             | 0xE0000..=0xE0FFF)
 }
@@ -285,8 +285,10 @@ mod tests {
         f.flags = 0x80;
         assert_eq!(l.add(f), Err(KeyError::BadKey));
         // A label is cleaned: invisible characters go.
-        let k = l.add(entry(4, " Ross\u{200b}'s\u{202e} phone ")).unwrap();
-        assert_eq!(l.find(&k).unwrap().label, "Ross's phone");
+        let k = l.add(entry(4, " Den\u{200b}\u{202e} phone ")).unwrap();
+        assert_eq!(l.find(&k).unwrap().label, "Den phone");
+        let k = l.add(entry(5, "line\u{2028}break\u{2029}")).unwrap();
+        assert_eq!(l.find(&k).unwrap().label, "linebreak");
     }
 
     #[test]

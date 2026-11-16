@@ -32,7 +32,8 @@ TYPE_COMMAND = 0x01
 TYPE_CHUNK = 0x02
 COMMAND_HEAD = 1 + 8 + 64
 MAX_BODY = 700
-MAX_TEXT = 1024
+MAX_TEXT_IN = 1024  # what anyone but the panel sends: the panel's receive buffer
+MAX_TEXT_OUT = 2048  # what the panel sends (a full controllers ack)
 MAX_CHUNK = 1024
 MAX_FILE = 512 * 1024
 MAX_KEYS = 8
@@ -53,7 +54,7 @@ ATTACH_DOMAIN = b"opendmd-connect-v1 attach\0"
 DEV_TAG_DOMAIN = b"opendmd-connect-v1 dev\0"
 PAIR_ID_DOMAIN = b"opendmd pair id v1"
 PAIR_MAC_DOMAIN = b"opendmd pair v1"
-PAIRED_MAC_DOMAIN = b"ok"
+PAIRED_MAC_DOMAIN = b"opendmd paired v1"
 INVITE_ID_DOMAIN = b"opendmd invite id v1"
 ADD_MAC_DOMAIN = b"opendmd add v1"
 CONFIRM_DOMAIN = b"opendmd confirm v1"
@@ -309,16 +310,17 @@ def invite_id(s: str) -> bytes:
     return sha256(INVITE_ID_DOMAIN, s.encode())[:10]
 
 
-def pair_mac(s: str, dev: bytes, pub: bytes) -> bytes:
-    return mac256(s.encode(), PAIR_MAC_DOMAIN, dev, pub)
+def pair_mac(s: str, dev: bytes, pub: bytes, label: bytes) -> bytes:
+    """label: its UTF-8 bytes as sent (after JSON unescaping, before cleaning), last."""
+    return mac256(s.encode(), PAIR_MAC_DOMAIN, dev, pub, label)
 
 
-def paired_mac(s: str, pub: bytes) -> bytes:
-    return mac256(s.encode(), PAIRED_MAC_DOMAIN, pub)
+def paired_mac(s: str, dev: bytes, pub: bytes) -> bytes:
+    return mac256(s.encode(), PAIRED_MAC_DOMAIN, dev, pub)
 
 
-def add_mac(s: str, dev: bytes, pub: bytes) -> bytes:
-    return mac256(s.encode(), ADD_MAC_DOMAIN, dev, pub)
+def add_mac(s: str, dev: bytes, pub: bytes, label: bytes) -> bytes:
+    return mac256(s.encode(), ADD_MAC_DOMAIN, dev, pub, label)
 
 
 def confirm_code(pub: bytes) -> str:
@@ -336,28 +338,28 @@ class Window:
     def id(self) -> bytes:
         return invite_id(self.secret) if self.invite else pair_id(self.secret)
 
-    def check(self, dev: bytes, pub: bytes, mac: bytes, now: float) -> bytes:
+    def check(self, dev: bytes, pub: bytes, label: bytes, mac: bytes, now: float) -> bytes:
         """mac2, or raises Bad('closed' / 'expired' / 'bad-mac')."""
         if not self.open:
             raise Bad("closed")
         if now >= self.until:
             self.open = False
             raise Bad("expired")
-        want = add_mac(self.secret, dev, pub) if self.invite else pair_mac(self.secret, dev, pub)
+        want = add_mac(self.secret, dev, pub, label) if self.invite else pair_mac(self.secret, dev, pub, label)
         if not hmac.compare_digest(want, mac):
             self.tries -= 1
             if self.tries <= 0:
                 self.open = False
             raise Bad("bad-mac")
         self.open = False
-        return paired_mac(self.secret, pub)
+        return paired_mac(self.secret, dev, pub)
 
 
 # --- Text rules ------------------------------------------------------------------
 
 _INVISIBLE = [
     (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
-    (0x180E, 0x180E), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x2064), (0x2066, 0x206F),
+    (0x180E, 0x180E), (0x200B, 0x200F), (0x2028, 0x202E), (0x2060, 0x2064), (0x2066, 0x206F),
     (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFFB),
     (0xE0000, 0xE0FFF),
 ]
@@ -384,7 +386,7 @@ def clean_label(s: str):
 
 
 def _segment_ok(s: str) -> bool:
-    return bool(s) and not s.startswith(".") and not any(_control(c) or c in '\\?#:*<>|"' for c in s)
+    return bool(s) and not s.startswith(".") and not s.endswith((".", " ")) and not any(_control(c) or c in '\\?#:*<>|"' for c in s)
 
 
 def _stem_ok(s: str) -> bool:

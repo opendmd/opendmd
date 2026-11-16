@@ -184,8 +184,11 @@ pub fn close_payload(code: u16, reason: &str) -> Vec<u8> {
     p
 }
 
-/// The longest text message the probe takes (the echo Worker's are tens
-/// of bytes).
+/// The longest text message the S0 probe's decoder takes (the echo
+/// Worker's are tens of bytes). Not protocol v1's limits: those are
+/// [`proto::MAX_TEXT_IN`](super::proto::MAX_TEXT_IN) and
+/// [`proto::MAX_TEXT_OUT`](super::proto::MAX_TEXT_OUT); F2 raises this to
+/// the first.
 pub const MAX_TEXT: usize = 256;
 
 /// What [`Decoder::feed`] hands on.

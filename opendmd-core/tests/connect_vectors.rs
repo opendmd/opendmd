@@ -171,6 +171,8 @@ fn cases(w: &World) -> Vec<Case> {
         ("path-relative", "gifs/a.gif"),
         ("path-backslash", "/gifs/a\\\\..\\\\b.gif"),
         ("path-hidden", "/gifs/.Trash/a.gif"),
+        ("path-trailing-dot", "/gifs/Arcade./a.gif"),
+        ("path-trailing-space", "/gifs/Arcade /a.gif"),
     ] {
         v.push(case(name, "", a(1, "play", &format!(r#""path":"{path}""#)), "bad-arg", "forward"));
     }
@@ -264,6 +266,9 @@ fn build() -> Value {
     let inv = pair::invite_secret_from_random(&i_random);
     let nonce: [u8; 16] = sha256(&[b"opendmd-connect throwaway challenge"])[..16].try_into().unwrap();
     let secret = sha256(&[b"opendmd-connect throwaway panel secret"]);
+    // A label with a quote and a non-ASCII letter: the MAC covers its UTF-8
+    // bytes after JSON unescaping, as sent, before any cleaning.
+    let label = "C tablet \"\u{e9}\"";
 
     let negotiation: Vec<Value> = [
         (vec!["odc1"], "accept:1"),
@@ -319,7 +324,8 @@ fn build() -> Value {
         "version": proto::VERSION,
         "min_version": proto::MIN_VERSION,
         "limits": {
-            "max_text": proto::MAX_TEXT,
+            "max_text_in": proto::MAX_TEXT_IN,
+            "max_text_out": proto::MAX_TEXT_OUT,
             "max_body": proto::MAX_BODY,
             "command_head": proto::COMMAND_HEAD,
             "max_chunk": opendmd_core::connect::xfer::MAX_CHUNK,
@@ -336,7 +342,7 @@ fn build() -> Value {
             "dev_tag": "opendmd-connect-v1 dev\u{0}",
             "pair_id": "opendmd pair id v1",
             "pair_mac": "opendmd pair v1",
-            "paired_mac": "ok",
+            "paired_mac": "opendmd paired v1",
             "invite_id": "opendmd invite id v1",
             "add_mac": "opendmd add v1",
             "confirm": "opendmd confirm v1",
@@ -380,9 +386,12 @@ fn build() -> Value {
             "secret": s,
             "pair_id": hex(&pair::pair_id(&s)),
             "pub": hex(&c_pub),
-            "mac": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub)),
-            "mac2": hex(&pair::paired_mac(&s, &c_pub)),
-            "mac_for_a_swapped_key": hex(&pair::pair_mac(&s, &w.dev.0, &a_pub)),
+            "label": label,
+            "mac": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
+            "mac2": hex(&pair::paired_mac(&s, &w.dev.0, &c_pub)),
+            "mac_for_a_swapped_key": hex(&pair::pair_mac(&s, &w.dev.0, &a_pub, label.as_bytes())),
+            "mac_for_a_rewritten_label": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub, b"C tablet")),
+            "message": proto_pair(&c_pub, label, &pair::pair_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
             "link": format!("https://opendmd.dev/connect/#pair={s}"),
             "qr": format!("https://opendmd.dev/c#{s}"),
         },
@@ -391,7 +400,8 @@ fn build() -> Value {
             "secret": inv,
             "invite_id": hex(&pair::invite_id(&inv)),
             "pub": hex(&c_pub),
-            "mac": hex(&pair::add_mac(&inv, &w.dev.0, &c_pub)),
+            "label": label,
+            "mac": hex(&pair::add_mac(&inv, &w.dev.0, &c_pub, label.as_bytes())),
             "confirm": pair::confirm_code(&c_pub),
             "link": format!("https://opendmd.dev/c#add={}.{}", w.dev.text(), inv),
         },
@@ -443,4 +453,9 @@ fn the_pinned_cases_hold() {
         assert_eq!(got, c["expect"].as_str().unwrap(), "{}", c["name"]);
     }
     assert_eq!(KeyList::decode(&unhex(pinned["panel"]["key_blob"].as_str().unwrap())).unwrap(), w.keys);
+}
+
+/// A guest's `pair` as it sends it.
+fn proto_pair(public: &[u8; 32], label: &str, mac: &[u8; 32]) -> String {
+    format!(r#"{{"t":"pair","pub":"{}","label":{},"mac":"{}"}}"#, hex(public), opendmd_core::connect::json::quote(label), hex(mac))
 }

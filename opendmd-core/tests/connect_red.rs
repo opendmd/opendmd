@@ -178,12 +178,14 @@ fn a_full_list_refuses_another_key() {
 
 #[test]
 fn oversize_text_is_refused() {
-    let big = format!(r#"{{"t":"watch","on":true,"pad":"{}"}}"#, "x".repeat(proto::MAX_TEXT));
+    let big = format!(r#"{{"t":"watch","on":true,"pad":"{}"}}"#, "x".repeat(proto::MAX_TEXT_IN));
     assert_eq!(proto::parse_server_text(big.as_bytes()), Err(TextError::TooBig));
     assert_eq!(proto::parse_server_text(br#"{"t":"watch","on":true,"on":false}"#), Err(TextError::Malformed));
 }
 
 // --- Pairing -------------------------------------------------------------------
+
+const LABEL: &[u8] = b"guest phone";
 
 fn pairing() -> (String, [u8; 16], [u8; 32]) {
     (pair::secret_from_random(&[0x42; 13]), panel().dev.0, key("guest").verifying_key().to_bytes())
@@ -195,21 +197,21 @@ fn pairing_with_a_wrong_mac_three_times_closes_the_window() {
     let t = Duration::from_secs(10);
     let mut w = Window::open(s.clone(), t);
     for left in [2, 1, 0] {
-        assert_eq!(w.check(&dev, &public, &[0; 32], t), Err(PairError::BadMac { left }));
+        assert_eq!(w.check(&dev, &public, LABEL, &[0; 32], t), Err(PairError::BadMac { left }));
     }
-    assert_eq!(w.check(&dev, &public, &pair::pair_mac(&s, &dev, &public), t), Err(PairError::Closed));
+    assert_eq!(w.check(&dev, &public, LABEL, &pair::pair_mac(&s, &dev, &public, LABEL), t), Err(PairError::Closed));
 }
 
 #[test]
 fn pairing_after_expiry_and_twice_is_refused() {
     let (s, dev, public) = pairing();
     let t = Duration::from_secs(10);
-    let mac = pair::pair_mac(&s, &dev, &public);
+    let mac = pair::pair_mac(&s, &dev, &public, LABEL);
     let mut late = Window::open(s.clone(), t);
-    assert_eq!(late.check(&dev, &public, &mac, t + PAIR_TTL), Err(PairError::Expired));
+    assert_eq!(late.check(&dev, &public, LABEL, &mac, t + PAIR_TTL), Err(PairError::Expired));
     let mut twice = Window::open(s, t);
-    assert!(twice.check(&dev, &public, &mac, t).is_ok());
-    assert_eq!(twice.check(&dev, &public, &mac, t), Err(PairError::Closed));
+    assert!(twice.check(&dev, &public, LABEL, &mac, t).is_ok());
+    assert_eq!(twice.check(&dev, &public, LABEL, &mac, t), Err(PairError::Closed));
 }
 
 #[test]
@@ -219,9 +221,9 @@ fn a_key_swapped_by_the_server_cannot_pair_or_fake_the_answer() {
     let theirs = key("server").verifying_key().to_bytes();
     let mut w = Window::open(s.clone(), t);
     // The guest's MAC with the server's key in its place.
-    assert!(matches!(w.check(&dev, &theirs, &pair::pair_mac(&s, &dev, &public), t), Err(PairError::BadMac { .. })));
+    assert!(matches!(w.check(&dev, &theirs, LABEL, &pair::pair_mac(&s, &dev, &public, LABEL), t), Err(PairError::BadMac { .. })));
     // And the panel's answer for the server's key is not the guest's.
-    assert_ne!(pair::paired_mac(&s, &theirs), pair::paired_mac(&s, &public));
+    assert_ne!(pair::paired_mac(&s, &dev, &theirs), pair::paired_mac(&s, &dev, &public));
 }
 
 // --- The server's checks ---------------------------------------------------------
@@ -294,4 +296,22 @@ fn a_send_over_quota_is_refused() {
         n += 1;
     }
     assert_eq!(n, xfer::QUOTA_BYTES / per);
+}
+
+#[test]
+fn a_label_rewritten_by_the_server_is_refused() {
+    let (s, dev, public) = pairing();
+    let t = Duration::from_secs(10);
+    // A relayed `pair` whose label the server changed: the MAC is over the
+    // label as the guest sent it.
+    let mut w = Window::open(s.clone(), t);
+    let mac = pair::pair_mac(&s, &dev, &public, LABEL);
+    assert!(matches!(w.check(&dev, &public, b"Owner (admin)", &mac, t), Err(PairError::BadMac { .. })));
+    assert!(w.check(&dev, &public, LABEL, &mac, t).is_ok());
+    // A relayed `add-req` likewise.
+    let inv = pair::invite_secret_from_random(&[0x24; 16]);
+    let mut w = Window::open_invite(inv.clone(), t);
+    let mac = pair::add_mac(&inv, &dev, &public, LABEL);
+    assert!(matches!(w.check(&dev, &public, b"guest phone\xe2\x80\x8b", &mac, t), Err(PairError::BadMac { .. })));
+    assert!(w.check(&dev, &public, LABEL, &mac, t).is_ok());
 }

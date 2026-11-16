@@ -22,6 +22,8 @@ pub const MAX_FILE: u32 = 512 * 1024;
 /// A chunk frame: type, transfer id, offset, data.
 pub const CHUNK_HEAD: usize = 1 + 4 + 4;
 pub const TYPE_CHUNK: u8 = 0x02;
+/// The most chunks of credit a panel grants at a time.
+pub const MAX_WINDOW: u32 = 64;
 /// How long a broken transfer can be resumed.
 pub const RESUME_FOR: Duration = Duration::from_secs(10 * 60);
 /// The panel's quota.
@@ -88,7 +90,7 @@ impl Transfer {
     /// Start a transfer for a validated `send`; `window`: chunks of credit
     /// at a time (2 on the classic, 4 or more on the S3).
     pub fn start(send: SendArgs, window: u32, now: Duration) -> Transfer {
-        let mut t = Transfer { send, offset: 0, upto: 0, window: window.max(1), gif: Sha256::new(), copy: Sha256::new(), touched: now };
+        let mut t = Transfer { send, offset: 0, upto: 0, window: window.clamp(1, MAX_WINDOW), gif: Sha256::new(), copy: Sha256::new(), touched: now };
         t.upto = t.grant();
         t
     }
@@ -104,7 +106,7 @@ impl Transfer {
     }
 
     fn grant(&self) -> u32 {
-        (self.offset + self.window * MAX_CHUNK as u32).min(self.total())
+        self.offset.saturating_add(self.window.saturating_mul(MAX_CHUNK as u32)).min(self.total())
     }
 
     /// The `credit` message for the current credit.

@@ -151,7 +151,7 @@ async def guest_pair(http, base, dev, secret, ctl: Controller, mac=None):
         return {"closed": await ctl.closed()}
     replies = []
     for m in mac if isinstance(mac, list) else [mac]:
-        m = m or odc.pair_mac(secret, found, ctl.pub)
+        m = m or odc.pair_mac(secret, found, ctl.pub, ctl.label.encode())
         await ws.send_str(odc.dumps({"t": "pair", "pub": ctl.pub.hex(), "label": ctl.label, "mac": m.hex()}))
         replies.append(await ctl.until("paired"))
     await ws.close()
@@ -187,7 +187,7 @@ async def main():
         res = await guest_pair(http, base, dev, secret, a)
         rep = res["replies"][0]
         ok(res["dev"] == dev and rep and rep.get("k") == a.k.hex(), "guest found the panel by pair_id and paired")
-        ok(rep and bytes.fromhex(rep["mac2"]) == odc.paired_mac(secret, a.pub), "the panel's mac2 proves it saw the secret")
+        ok(rep and bytes.fromhex(rep["mac2"]) == odc.paired_mac(secret, dev, a.pub), "the panel's mac2 proves it saw the secret")
         ok(panel.keys[a.k].flags == odc.FLAG_CAN_ADD, "a key paired on the panel may add others")
         res = await guest_pair(http, base, dev, secret, Controller(base, dev, "late"))
         ok(res.get("find") == 404, "red: a used pairing window is gone (find 404)")
@@ -205,8 +205,17 @@ async def main():
         secret3 = await panel.open_pairing()
         await asyncio.sleep(0.05)
         y, swapped = Controller(base, dev, "y"), Controller(base, dev, "swapped")
-        res = await guest_pair(http, base, dev, secret3, swapped, mac=[odc.pair_mac(secret3, dev, y.pub)])
+        res = await guest_pair(http, base, dev, secret3, swapped, mac=[odc.pair_mac(secret3, dev, y.pub, swapped.label.encode())])
         ok(res["replies"][0].get("err") == "bad-mac" and swapped.k not in panel.keys, "red: a key swapped in transit fails the MAC")
+
+        # A hostile relay rewriting the label in a relayed `pair`.
+        secret4 = await panel.open_pairing()
+        await asyncio.sleep(0.05)
+        server.rewrite_label = "Owner (admin)"
+        z = Controller(base, dev, "z phone")
+        res = await guest_pair(http, base, dev, secret4, z)
+        server.rewrite_label = None
+        ok(res["replies"][0].get("err") == "bad-mac" and z.k not in panel.keys, "red: a label rewritten by the server fails the pairing MAC")
 
         # --- Attach and commands ---------------------------------------------------
         at = await a.attach(http)
@@ -312,14 +321,26 @@ async def main():
         inv = odc.b32(os.urandom(16), 128)
         await a.ws.send_str(odc.dumps({"t": "invite-open", "invite_id": odc.invite_id(inv).hex(), "ttl": 300}))
         await asyncio.sleep(0.05)
+        server.rewrite_label = "Owner (admin)"
+        z = Controller(base, dev, "z laptop")
+        zws = await z.connect(http)
+        await z.until("challenge")
+        await zws.send_str(odc.dumps({"t": "guest", "invite_id": odc.invite_id(inv).hex()}))
+        await z.until("guest-ok")
+        await zws.send_str(odc.dumps({"t": "add-req", "pub": z.pub.hex(), "label": z.label, "mac": odc.add_mac(inv, dev, z.pub, z.label.encode()).hex()}))
+        zreq = await a.until("add-req")
+        server.rewrite_label = None
+        await zws.close()
+        ok(zreq and zreq["label"] == "Owner (admin)" and odc.add_mac(inv, dev, z.pub, zreq["label"].encode()) != bytes.fromhex(zreq["mac"]), "red: a label rewritten in a relayed add-req fails the inviter's MAC check")
+        await asyncio.sleep(0.05)
         b = Controller(base, dev, "B laptop")
         bws = await b.connect(http)
         await b.until("challenge")
         await bws.send_str(odc.dumps({"t": "guest", "invite_id": odc.invite_id(inv).hex()}))
         gok = await b.until("guest-ok")
-        await bws.send_str(odc.dumps({"t": "add-req", "pub": b.pub.hex(), "label": b.label, "mac": odc.add_mac(inv, dev, b.pub).hex()}))
+        await bws.send_str(odc.dumps({"t": "add-req", "pub": b.pub.hex(), "label": b.label, "mac": odc.add_mac(inv, dev, b.pub, b.label.encode()).hex()}))
         req = await a.until("add-req")
-        good = req and odc.add_mac(inv, dev, bytes.fromhex(req["pub"])) == bytes.fromhex(req["mac"])
+        good = req and odc.add_mac(inv, dev, bytes.fromhex(req["pub"]), req["label"].encode()) == bytes.fromhex(req["mac"])
         ok(gok and good, "add another device: the inviter checks the guest's MAC")
         ok(odc.confirm_code(bytes.fromhex(req["pub"])) == odc.confirm_code(b.pub), "both screens show the same 4-character code")
         r = await a.command("add-controller", {"pub": req["pub"], "label": req["label"]})
