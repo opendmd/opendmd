@@ -105,8 +105,22 @@ const IO_TIMEOUT: Duration = Duration::from_secs(1);
 pub const BLOCK_MAX: Duration = Duration::from_secs(8);
 /// A handshake not done this long after it began has failed.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long a lookup is waited for before it counts as failed.
-pub const DNS_WAIT: Duration = Duration::from_secs(20);
+/// How long a lookup is waited for before it counts as failed (lwIP's
+/// worst case, 3 servers × 7 s, and some): `opendmd_core::connect::dns`.
+pub use cx::dns::DNS_WAIT;
+
+/// [`DNS_WAIT`], or an emulator lane's shorter one (`PUT /api/connect`
+/// `{"test_dns_wait_ms": n}`, `connect-test` builds; 0: the usual).
+#[optimize(size)]
+#[inline(never)]
+pub fn dns_wait() -> Duration {
+    #[cfg(feature = "connect-test")]
+    match super::TEST_DNS_WAIT_MS.load(Relaxed) {
+        0 => {}
+        ms => return Duration::from_millis(u64::from(ms)),
+    }
+    DNS_WAIT
+}
 
 #[optimize(size)]
 #[inline(never)]
@@ -797,7 +811,8 @@ pub struct Dns {
     pub host: String,
     pub answer: Option<(Result<SocketAddr, String>, u32)>,
     pub started: Instant,
-    /// Counted failed already (it ran past [`DNS_WAIT`]).
+    /// Counted failed already (it ran past [`dns_wait`]): its late
+    /// answer counts for nothing more.
     pub given_up: bool,
 }
 

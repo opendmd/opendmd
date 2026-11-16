@@ -17,6 +17,7 @@
 //! The firmware's client is `firmware/src/connect/` (feature `connect`).
 
 pub mod codec;
+pub mod dns;
 pub mod gate;
 pub mod json;
 pub mod keys;

@@ -510,10 +510,19 @@ impl Backoff {
     /// random `u32`.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn failed(&mut self, rand: u32) -> Duration {
+        self.failed_up_to(rand, BACKOFF_CAP)
+    }
+
+    /// As [`failed`](Self::failed), the wait drawn from no more than
+    /// `cap` (still counted: a later failure of another kind backs off
+    /// from where this left it).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn failed_up_to(&mut self, rand: u32, cap: Duration) -> Duration {
         self.failures = self.failures.saturating_add(1);
         let full = BACKOFF_FIRST
             .saturating_mul(1u32 << (self.failures - 1).min(20))
-            .min(BACKOFF_CAP);
+            .min(BACKOFF_CAP)
+            .min(cap);
         let half = full / 2;
         half + Duration::from_millis(u64::from(rand) % (half.as_millis() as u64 + 1))
     }
@@ -1054,6 +1063,23 @@ mod tests {
         assert_eq!(b.failures(), 0);
         // 96 attempts a day at most at the cap (CONNECT.md 9.4).
         assert!(Duration::from_secs(86_400).as_secs() / (BACKOFF_CAP / 2).as_secs() <= 192);
+    }
+
+    #[test]
+    fn backoff_up_to_a_cap_stops_escalating_there() {
+        let cap = Duration::from_secs(30);
+        let mut b = Backoff::default();
+        for k in 0..12 {
+            let hi = b.clone().failed_up_to(u32::MAX, cap);
+            let d = b.failed_up_to(12345, cap);
+            assert!(d <= cap && hi <= cap, "failure {k}: {d:?}");
+        }
+        // Still counted: the next uncapped failure is at the full cap.
+        assert_eq!(b.failures(), 12);
+        assert!(b.failed(u32::MAX) >= BACKOFF_CAP / 2);
+        // Under the cap it is the usual doubling.
+        let (mut a, mut c) = (Backoff::default(), Backoff::default());
+        assert_eq!(a.failed_up_to(7, cap), c.failed(7));
     }
 
     #[test]

@@ -30,7 +30,10 @@ and /cache/Sent/ byte for byte, play once, the network worker's stack
 and heap read during it; a taken name gets the next; a 200 KB send
 resumed after the server drops the panel, by the same key); switch off;
 forget (a new identity); a restart (the identity kept, back after the
-hold).
+hold); the server's lookup (`dns_lookups`, alone with
+EMU_CONNECT_ONLY=dns): against a DNS responder in the namespace that
+drops answers or answers late, a given-up lookup is one failure, a stuck
+one is reported, DNS backoff stays under 30 s, a late address is used.
 Red, each refused by the panel itself (frames put straight onto the
 panel's socket, past the server's pre-check) and none reaching the player:
 replayed, stale-session, wrong-panel, tampered, unsigned-by-a-stranger,
@@ -144,6 +147,80 @@ def make_certs(d: Path, name: str = HOST):
 
 class Fail(Exception):
     pass
+
+
+# --- DNS: a responder where esp32sim's NAT relays the panel's queries ---------------
+DNS_WARN = re.compile(r"^W \((\d+)\) \S+: connect: dns: (.*)$")
+
+
+def host_resolver() -> str:
+    """The nameserver esp32sim relays DNS to (its `host_resolver`: the first
+    IPv4 one in /etc/resolv.conf, else 1.1.1.1). In the lane's namespace
+    nothing answers there unless this lane does."""
+    try:
+        for line in Path("/etc/resolv.conf").read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "nameserver" and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", parts[1]):
+                return parts[1]
+    except OSError:
+        pass
+    return "1.1.1.1"
+
+
+class SlowDns:
+    """A DNS responder for `connect.test` (A 10.0.2.2), by `mode`: `drop`
+    (no answer: lwIP's own timeout, ~7 emulated s for one server), `nth:N`
+    (only the Nth copy of a query is answered: lwIP sends at 0, 1, 2 and 4
+    emulated s, so N=4 answers at ~4 s, after a 1 s wait has given up),
+    `answer` (at once). Every other name: no answer (as before the lane
+    had a responder). Each query is recorded: (wall time, txid, copy)."""
+
+    def __init__(self):
+        self.mode = "drop"
+        self.queries: list[tuple[float, int, int]] = []
+        self.copies: dict[int, int] = {}
+        self.answered: list[tuple[float, int]] = []
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        pass
+
+    @staticmethod
+    def question(q: bytes):
+        if len(q) < 12:
+            return None
+        i, labels = 12, []
+        while i < len(q) and q[i] != 0:
+            n = q[i]
+            labels.append(q[i + 1:i + 1 + n].decode(errors="replace"))
+            i += 1 + n
+        end = i + 5
+        if end > len(q):
+            return None
+        return ".".join(labels).lower(), int.from_bytes(q[i + 1:i + 3], "big"), end
+
+    def datagram_received(self, q: bytes, addr):
+        qq = self.question(q)
+        if not qq or qq[0] != HOST or qq[1] != 1:
+            return
+        txid = int.from_bytes(q[:2], "big")
+        copy = self.copies.get(txid, 0) + 1
+        self.copies[txid] = copy
+        self.queries.append((time.time(), txid, copy))
+        mode = self.mode
+        if mode == "drop" or (mode.startswith("nth:") and copy != int(mode[4:])):
+            return
+        end = qq[2]
+        r = q[:2] + b"\x81\x80" + b"\x00\x01\x00\x01\x00\x00\x00\x00" + q[12:end]
+        r += b"\xc0\x0c\x00\x01\x00\x01" + (60).to_bytes(4, "big") + b"\x00\x04" + bytes([10, 0, 2, 2])
+        self.answered.append((time.time(), txid))
+        self.transport.sendto(r, addr)
 
 
 def lane_server():
@@ -340,6 +417,11 @@ class Lane:
                 await ctl.send(f)
                 n = odc.loads(f[odc.COMMAND_HEAD:])["n"]
                 return await ctl.until("ack", lambda m: m.get("n") == n, timeout=timeout)
+
+            if os.environ.get("EMU_CONNECT_ONLY") == "dns":
+                # A quicker lane for the lookup alone (not the gate's).
+                await self.dns_lookups()
+                return
 
             if os.environ.get("EMU_CONNECT_ONLY") == "sends":
                 # A quicker lane for the sends alone (not the gate's).
@@ -698,6 +780,81 @@ class Lane:
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
+        await self.dns_lookups()
+        self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart after the lookups", f"resets {self.emu.resets}")
+
+    # --- The server's lookup (opendmd_core::connect::dns) ------------------------------
+    async def dns_lookups(self):
+        """The image looks `connect.test` up (`test_lookup`: port 443, a
+        site of the mock server's own there) with a 1 s wait
+        (`test_dns_wait_ms`), against the lane's responder. Red, with no
+        answers: a given-up lookup is one failure (its late error is not a
+        second, the old double count), a lookup still running at the next
+        attempt is reported as stuck (never shown as "looking up the
+        server" past the wait), DNS failures back off no further than 30
+        s. Blue: a late answer is used (no new lookup), and the panel
+        opens within the cap once answers come."""
+        dns = self.srv.dns
+        # 1 s: the first retry (2.5-5 s later) always finds lwIP's ~7 s
+        # timeout still running, so the stuck path is met every run.
+        wait_s = 1.0
+        cap_s = 30.0
+        code, _ = await self.http("PUT", "/api/connect", {"test_lookup": True, "test_dns_wait_ms": int(wait_s * 1000)})
+        self.expect(code == 200, "dns: the lane's lookup hooks set", f"{code}")
+        await self.http("PUT", "/api/connect", {"enabled": False})
+        await self.wait("dns: switched off", lambda: self._info(lambda i: i.get("state") == "off" and self.panel_ws() is None), 300)
+        dns.mode = "drop"
+        mark = self.emu.mark()
+        q0 = len(dns.queries)
+        await self.http("PUT", "/api/connect", {"enabled": True})
+        long_looks: list[str] = []
+        states: set[str] = set()
+
+        async def enough():
+            st = await self.status()
+            c = st.get("connect") or {}
+            states.add(c.get("state"))
+            if c.get("state") == "looking up the server":
+                held = st.get("uptime_secs", 0) - c.get("since_s", 0)
+                if held > wait_s + 2:
+                    long_looks.append(f"{held} s at uptime {st.get('uptime_secs')}")
+            return len(self.emu.find(DNS_WARN, mark)) >= 8
+        await self.wait("dns: eight lookup failures with no answers", enough, 1500, every=1.0)
+        warns = [(int(m.group(1)), m.group(2)) for _, m in self.emu.find(DNS_WARN, mark)]
+        gave_up = [w for w in warns if "no answer within" in w[1]]
+        stuck = [w for w in warns if "is stuck" in w[1]]
+        other = [w for w in warns if w not in gave_up and w not in stuck]
+        self.report["dns_drop"] = {"warnings": warns, "queries": len(dns.queries) - q0, "states": sorted(s for s in states if s)}
+        self.expect(len(dns.queries) > q0 and gave_up, "dns: the panel asked the lane's responder, and gave up after the wait",
+                    f"{len(dns.queries) - q0} queries, {len(gave_up)} given up")
+        self.expect(not other, "dns: red: a given-up lookup's late error is not a second failure", f"{other[:3]}")
+        self.expect(stuck and not long_looks, "dns: red: a lookup still running at the next attempt is reported as stuck, never shown as looking up past the wait",
+                    f"{len(stuck)} stuck; looking up held {long_looks[:3]}")
+        gaps = [(b[0] - a[0]) / 1000 for a, b in zip(warns, warns[1:])]
+        self.expect(max(gaps) <= cap_s + wait_s + 2, "dns: red: DNS failures back off no further than 30 s",
+                    f"gaps {[round(g, 1) for g in gaps]} emulated s")
+
+        # Blue: only the 4th copy of a query answered (~4 emulated s, after
+        # the 1 s wait gave up): that late address is used, no new lookup.
+        dns.mode = "nth:4"
+        before = (self.rec().sess if self.rec() else None)
+        t_up = (await self.status()).get("uptime_secs", 0)
+        await self.open_session("dns: open from a late answer", before_sess=before, timeout=900)
+        up = (await self.status()).get("uptime_secs", 0)
+        last_answer = dns.answered[-1] if dns.answered else None
+        newer = [q for q in dns.queries if last_answer and q[0] > last_answer[0] and q[1] != last_answer[1]]
+        # Only a 4th copy is answered (lwIP sends it 3 s or more after
+        # the first): always after the 1 s wait gave that lookup up.
+        self.expect(last_answer is not None and dns.copies.get(last_answer[1]) >= 4 and not newer, "dns: a late answer (after the wait gave up) is used: open with no new lookup",
+                    f"answered txid {last_answer[1] if last_answer else None}, {len(newer)} queries after it")
+        # A late answer is one failure first: two capped waits at most.
+        self.expect(up - t_up <= 2 * (cap_s + wait_s) + 15, "dns: open within two capped waits once (late) answers come", f"{up - t_up} emulated s")
+        self.report["dns_late"] = {"open_after_s": up - t_up, "queries": len(dns.queries) - q0}
+
+        # Back to the image's own address.
+        dns.mode = "answer"
+        code, _ = await self.http("PUT", "/api/connect", {"test_lookup": False, "test_dns_wait_ms": 0})
+        self.expect(code == 200, "dns: the lookup hooks cleared", f"{code}")
 
     # --- GIF sends -------------------------------------------------------------------
     def _get_bytes(self, path, timeout=60.0):
@@ -1260,6 +1417,11 @@ async def serve_and_run(emu, logs, certs: Path) -> Lane:
 
     srv.start_tls = start_tls
     await start_tls()
+    # The lookup's lane (`dns_lookups`): the looked-up address's port 443,
+    # and the responder where esp32sim relays DNS.
+    await web.TCPSite(runner, "10.0.2.2", 443, ssl_context=ctx).start()
+    srv.dns = SlowDns()
+    await asyncio.get_running_loop().create_datagram_endpoint(lambda: srv.dns, local_addr=(host_resolver(), 53))
     await web.TCPSite(runner, "127.0.0.1", CTL_PORT).start()
     lane = Lane(emu, srv, logs)
     try:
@@ -1300,6 +1462,9 @@ def main():
     ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
     if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0 or subprocess.run([ip, "addr", "add", "10.0.2.2/32", "dev", "lo"]).returncode != 0:
         sys.exit("EMU_CONNECT_FAIL: cannot set up the namespace's loopback (lo up, 10.0.2.2)")
+    res = host_resolver()
+    if not res.startswith("127.") and subprocess.run([ip, "addr", "add", f"{res}/32", "dev", "lo"]).returncode != 0:
+        sys.exit(f"EMU_CONNECT_FAIL: cannot put the resolver's address {res} on the namespace's loopback")
     logs = EMU_DIR / "logs" / f"connect-{time.strftime('%Y%m%d-%H%M%S')}"
     logs.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)

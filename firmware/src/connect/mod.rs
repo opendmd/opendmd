@@ -448,6 +448,13 @@ pub(crate) static TEST_NO_CARD: AtomicBool = AtomicBool::new(false);
 /// ... and for the next send's card write failing (`{"test_fail_write":true}`).
 #[cfg(feature = "connect-test")]
 pub(crate) static TEST_FAIL_WRITE: AtomicBool = AtomicBool::new(false);
+/// ... and for the lookup's lane: look `HOST` up (port 443) even though the
+/// image names `ADDR` (`{"test_lookup":true}`), waiting this long for it
+/// (`{"test_dns_wait_ms":n}`, 0: the usual `DNS_WAIT`).
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_LOOKUP: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_DNS_WAIT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 // --- Signals from the rest of the firmware --------------------------------------
 

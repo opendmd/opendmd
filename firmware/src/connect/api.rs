@@ -75,20 +75,27 @@ fn put_body(body: &[u8]) -> Option<(Option<bool>, Option<String>)> {
     let Value::Object(ref m) = v else { return None };
     // An emulator image's lane: `test_no_card` stands in for a card taken
     // out, for sends only (`connect-test` builds; anywhere else a 400).
+    // `test_lookup`, `test_dns_wait_ms`: the lookup's lane (`TEST_LOOKUP`).
     #[cfg(feature = "connect-test")]
     {
+        use std::sync::atomic::Ordering::Relaxed;
         let mut tests = 0;
-        for (k, flag) in [("test_no_card", &super::TEST_NO_CARD), ("test_fail_write", &super::TEST_FAIL_WRITE)] {
+        for (k, flag) in [("test_no_card", &super::TEST_NO_CARD), ("test_fail_write", &super::TEST_FAIL_WRITE), ("test_lookup", &super::TEST_LOOKUP)] {
             if let Some(t) = v.get(k) {
-                flag.store(t.as_bool()?, std::sync::atomic::Ordering::Relaxed);
+                flag.store(t.as_bool()?, Relaxed);
                 tests += 1;
             }
+        }
+        if let Some(t) = v.get("test_dns_wait_ms") {
+            super::TEST_DNS_WAIT_MS.store(u32::try_from(t.as_int()?).ok()?, Relaxed);
+            tests += 1;
         }
         if tests > 0 && m.len() == tests {
             return Some((None, None));
         }
     }
-    let test = |k: &str| cfg!(feature = "connect-test") && (k == "test_no_card" || k == "test_fail_write");
+    const TESTS: [&str; 4] = ["test_no_card", "test_fail_write", "test_lookup", "test_dns_wait_ms"];
+    let test = |k: &str| cfg!(feature = "connect-test") && TESTS.contains(&k);
     if m.is_empty() || m.iter().any(|(k, _)| k != "enabled" && k != "name" && !test(k)) {
         return None;
     }
