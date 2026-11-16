@@ -512,6 +512,10 @@ class Lane:
             # hello is deleted): 404 at the upgrade, a new id, the
             # controllers kept.
             d = Controller(self.ctl_base, dev, "dropped")
+            # A fresh attach: this session's sess (several reconnects ago
+            # the controller's copy went stale).
+            await a.ws.close()
+            await a.attach(http)
             await asyncio.sleep(1)
             r = await cmd("add-controller", {"pub": d.pub.hex(), "label": "dropped"})
             self.expect(r and r.get("ok"), "a controller added before the id is lost", json.dumps(r))
