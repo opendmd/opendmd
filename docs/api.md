@@ -289,7 +289,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `wake_until` | while `/api/wake` holds the schedule off, `"HH:MM"` |
 | `schedule` | `{rule, set, until}`: the rule in force (by position), its playlist, its end |
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
-| `connect` | Remote control, in a build with it (`features` has `"connect"`): `{enabled, registered, state, since_s, opened, reconnects, resumed, handshake_ms, refused, too_old, watched, last_error, last_error_s}`, as `GET /api/connect` (see "Remote control") |
+| `connect` | Remote control, in a build with it (`features` has `"connect"`): `{enabled, registered, state, since_s, opened, reconnects, resumed, handshake_ms, refused, too_old, watched, last_error, last_error_s, waiting}`, as `GET /api/connect` (see "Remote control") |
 | `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, seen, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s; `seen`: s since the box last answered a poll (null: not since the address was set; both null in the events) |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `boot_formula` | null (no Formula as the start-up show this boot, or `boot_show` `off`), or `{"played": true}`, or `{"played": false, "error": why}` once the wordmark played in its place (`{"played": false}` alone while a card Formula is waited for) |
@@ -918,7 +918,8 @@ whether the panel shows its QR code), else `null`; its secret is never
 shown here (only `POST /api/connect/pair`'s caller gets the link). `state` is
 `off`, `waiting after boot`, `waiting for network`, `waiting for clock`,
 `waiting for quiet` (a LAN upload or heavy request in the last 10 s),
-`waiting for memory`, `registering`, `connecting`, `handshake`,
+`waiting for memory` (`waiting` says which condition is unmet, e.g.
+`internal heap 77 KB < 100 KB`; `null` in any other state), `registering`, `connecting`, `handshake`,
 `upgrading`, `open`, `backoff`, `refused: set Remote control up again`
 (`refused` true: the server does not know this panel; `POST
 /api/connect/forget` makes a new identity), `update needed` (`too_old`),
