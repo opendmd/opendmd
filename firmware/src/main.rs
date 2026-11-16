@@ -936,6 +936,16 @@ fn main() -> Result<()> {
     // What status named while the message is up (nothing plays then): put
     // back with the paused frame, if one is.
     let mut update_named: Option<(String, String)> = None;
+    // Remote control's screen (`Command::ConnectScreen`) and when it goes
+    // by itself (the pairing window's time, or "added"'s 10 s), shown on
+    // the update screen's path when no update is; `cx_redraw`: a new one
+    // replaced the one on the panel.
+    #[cfg(feature = "connect")]
+    let mut cx_screen: Option<(Box<connect::Screen>, Instant)> = None;
+    #[cfg(feature = "connect")]
+    let mut cx_redraw = false;
+    #[cfg(feature = "connect-test")]
+    let mut cx_logged: Option<(u32, u8, opendmd_core::look::Look)> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -1670,6 +1680,19 @@ fn main() -> Result<()> {
                     let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
                 }
                 #[cfg(feature = "connect")]
+                Command::ConnectScreen(screen) => {
+                    // (A window's QR code goes by itself a little after its
+                    // time, should the worker not say so.)
+                    cx_screen = screen.map(|s| {
+                        let for_ = match *s {
+                            connect::Screen::Pair(_) => connect::PAIR_TTL + Duration::from_secs(5),
+                            connect::Screen::Added(_) => connect::ADDED_FOR,
+                        };
+                        (s, Instant::now() + for_)
+                    });
+                    cx_redraw = true;
+                }
+                #[cfg(feature = "connect")]
                 Command::ConnectStore { what, reply } => {
                     if !reply.claim() {
                         continue;
@@ -1790,6 +1813,12 @@ fn main() -> Result<()> {
                 }
             }
         }
+        // A command may have drawn (a play, a look, a setting, the panel
+        // test) under Remote control's screen, which stays up: drawn again.
+        #[cfg(feature = "connect")]
+        if handled && show::connect_stage(update_shown) {
+            cx_redraw = true;
+        }
         if handled {
             use std::sync::atomic::Ordering::Relaxed;
             let took = uclock::since(cmd_t0);
@@ -1803,6 +1832,20 @@ fn main() -> Result<()> {
         // A firmware update's stage (one relaxed load); not over night
         // mode's dark panel.
         let update = if sched.off() { show::NO_UPDATE } else { show::update_stage() };
+        // Remote control's screen, when no update's is up.
+        #[cfg(feature = "connect")]
+        let update = {
+            if cx_screen.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
+                cx_screen = None;
+            }
+            match cx_screen.as_ref().map(|(s, _)| &**s) {
+                Some(s) if update == show::NO_UPDATE && !sched.off() => match s {
+                    connect::Screen::Pair(_) => show::CONNECT_PAIR,
+                    connect::Screen::Added(_) => show::CONNECT_ADDED,
+                },
+                _ => update,
+            }
+        };
         let updating = update != show::NO_UPDATE || update_shown != show::NO_UPDATE;
         if runner.in_sequence() && !sched.off() && ptest.is_none() && !updating {
             if let Some(e) = engine.as_mut() {
@@ -1852,6 +1895,24 @@ fn main() -> Result<()> {
             }
             let was_shown = update_shown;
             let had_saved = update_saved.is_some();
+            #[cfg(feature = "connect")]
+            let cx_draw = |c: &mut Canvas| match cx_screen.as_ref().map(|(s, _)| &**s) {
+                Some(connect::Screen::Pair(q)) => opendmd_core::connect::screen::pair(c, q),
+                Some(connect::Screen::Added(l)) => opendmd_core::connect::screen::added(c, l),
+                None => c.clear(),
+            };
+            #[cfg(feature = "connect")]
+            let other: Option<&dyn Fn(&mut Canvas)> = Some(&cx_draw);
+            #[cfg(not(feature = "connect"))]
+            let other: Option<&dyn Fn(&mut Canvas)> = None;
+            #[cfg(feature = "connect")]
+            let qr_bright = opendmd_core::connect::screen::PAIR_BRIGHTNESS.min(settings.max_brightness);
+            #[cfg(not(feature = "connect"))]
+            let qr_bright = 0;
+            #[cfg(feature = "connect")]
+            let redraw = std::mem::take(&mut cx_redraw);
+            #[cfg(not(feature = "connect"))]
+            let redraw = false;
             update_screen(
                 update,
                 &mut update_shown,
@@ -1861,7 +1922,26 @@ fn main() -> Result<()> {
                 &mut canvas,
                 &mut looks,
                 &settings,
+                other,
+                redraw,
+                sched.brightness(&settings),
+                qr_bright,
             );
+            // An emulator image says what the panel holds under Remote
+            // control's screen whenever it changes (its lane checks that
+            // commands never paint over the QR code).
+            #[cfg(feature = "connect-test")]
+            if show::connect_stage(update_shown) {
+                let crc = canvas_crc(&canvas);
+                let b = panel.brightness();
+                let look = panel.look();
+                if cx_logged != Some((crc, b, look)) {
+                    cx_logged = Some((crc, b, look));
+                    log::info!("remote control screen: canvas {crc:08x}, brightness {b}, look {look:?}");
+                }
+            } else {
+                cx_logged = None;
+            }
             if was_shown == show::NO_UPDATE && update_shown != show::NO_UPDATE {
                 let mut s = status.lock().unwrap();
                 update_named = Some((std::mem::take(&mut s.path), std::mem::take(&mut s.title)));
@@ -3866,9 +3946,19 @@ fn update_screen(
     canvas: &mut Canvas,
     looks: &mut formula_look::Looks,
     settings: &Settings,
+    other: Option<&dyn Fn(&mut Canvas)>,
+    redraw: bool,
+    bright: u8,
+    qr_bright: u8,
 ) {
-    if stage == *shown {
+    if stage == *shown && !(redraw && show::connect_stage(stage)) {
         return;
+    }
+    // Leaving the QR code's fixed level, whatever comes next (an update's
+    // screen, "added", playback): the setting's brightness back.
+    // (10: `show::CONNECT_PAIR`.)
+    if *shown == 10 && stage != 10 {
+        panel.set_brightness(bright);
     }
     if *shown == show::NO_UPDATE {
         if let Some(e) = engine {
@@ -3891,7 +3981,24 @@ fn update_screen(
             None => canvas.clear(),
         }
         looks.redraw();
-        log::info!("update screen: off (the update did not go through); playback resumes");
+        panel.set_brightness(bright);
+        if show::connect_stage(*shown) {
+            log::info!("remote control screen: off; playback resumes");
+        } else {
+            log::info!("update screen: off (the update did not go through); playback resumes");
+        }
+    } else if show::connect_stage(stage) {
+        match other {
+            Some(draw) => draw(canvas),
+            None => canvas.clear(),
+        }
+        // Untinted and unglowed at every draw (a look, a glow or the panel
+        // test set by a command under it), the QR code at a fixed mid
+        // level, "added" at the setting's. (10: `show::CONNECT_PAIR`.)
+        panel.set_display(Look::Colour, GlowLevel::Off);
+        panel.set_brightness(if stage == 10 { qr_bright } else { bright });
+        // (10: `show::CONNECT_PAIR`, a const of `connect` builds only.)
+        log::info!("remote control screen: {}", if stage == 10 { "pairing QR code" } else { "added" });
     } else {
         show::draw_update(canvas, stage);
         log::info!(
@@ -4004,3 +4111,9 @@ mod s3board;
 // file, as s3board.
 #[cfg(esp32s3)]
 mod s3panel;
+
+/// The picture's CRC-32 (an emulator image's Remote control screen check).
+#[cfg(feature = "connect-test")]
+fn canvas_crc(canvas: &Canvas) -> u32 {
+    opendmd_core::settings_file::crc32(canvas.as_bytes())
+}

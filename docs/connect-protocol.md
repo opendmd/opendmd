@@ -308,25 +308,40 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
 1. On the LAN, `POST /api/connect/pair` (the API key applies). The panel
    opens the window and sends `pair-open {pair_id, ttl}`, with
    `pair_id` = the first 10 bytes of SHA-256(`"opendmd pair id v1"` ‖ `S`).
-   The server sees `pair_id`, never `S`. The web app opens
-   `https://opendmd.dev/connect/#pair=<S>`; with `?qr=1` the panel also
-   shows a QR of `https://opendmd.dev/c#<S>` (42 bytes, version 3-L).
+   The server sees `pair_id`, never `S`. The route answers the link
+   `https://opendmd.dev/c#<S>` (`/c` hands the fragment to `/connect/`),
+   which the web app opens; with `?qr=1` the panel also shows it as a QR
+   code (42 bytes, version 3-L,
+   byte mode, the mask the standard's penalty rules pick:
+   `opendmd_core::connect::qr`), one LED a module: light modules lit, dark
+   ones off, on a lit quiet zone of one row above, two below and four
+   columns either side (`connect::screen`). The LAN link never depends on
+   the QR code.
 2. The controller posts `pair_id` to `/v1/find` and gets `dev`.
 3. It makes its key pair, joins as a `guest` with `pair_id`, and sends
    `pair {pub, label, mac}` with
    `mac` = HMAC-SHA256(`S`, `"opendmd pair v1"` ‖ `dev` ‖ `pub` ‖ label)
    (`dev` and `pub` as raw bytes; the label last, as its UTF-8 bytes exactly
    as sent after JSON unescaping: every other field has a fixed length). A
-   server that rewrites the label breaks the MAC.
+   server that rewrites the label breaks the MAC. The controller cleans
+   and bounds the label itself (section 3's rule, well-formed UTF-16 in a
+   browser) before it computes the MAC: a correct MAC uses the window up
+   before the panel cleans the label, and a label that does not survive
+   cleaning is then refused `bad-arg`, window spent.
 4. The panel checks the MAC in constant time, over the label as received,
    and cleans the label (section 3) only after that. A wrong one spends a try
    (`paired {err:"bad-mac"}`); after the third, or after 5 minutes, the
    window is closed (`closed`, `expired`). On success it stores the key
    (flag `can_add`), shows "Remote control added" for 10 s, and only after
-   the NVS write returned answers `paired {g, k, mac2}` with
-   `mac2` = HMAC-SHA256(`S`, `"opendmd paired v1"` ‖ `dev` ‖ `pub`), then
-   `keys` and
-   `pair-close`.
+   the NVS write returned sends `keys` (the new list, so the server knows
+   the key before the new controller attaches; if the panel's budget for
+   `keys` is spent, `keys` follows within the second instead) and answers
+   `paired {g, k, mac2}` with `mac2` = HMAC-SHA256(`S`,
+   `"opendmd paired v1"` ‖ `dev` ‖ `pub`), then `pair-close`. The panel sends `pair-close` the moment any window
+   dies: used, expired, out of tries, cancelled on the LAN, replaced by a
+   new one, Remote control switched off; and, after a reconnect, for a
+   window it announced that died meanwhile. A store that fails answers
+   `paired {err:"busy"}` (the window is used up: a new link is needed).
 5. The controller checks `mac2`. A server that swaps in a key of its own
    can make neither MAC.
 

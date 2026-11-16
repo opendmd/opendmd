@@ -28,6 +28,18 @@
 //! it without waking anything); two in a row unanswered end the session.
 //! Status goes only while the server says a controller watches: on change
 //! at most one every 2 s, and one every 30 s regardless.
+//!
+//! Pairing ([`Client::pairing`], after the turn, at the worker's top
+//! level: the MACs hash and the key store waits on the main task, neither
+//! of which may sit under the session's read path, where the stack is
+//! tightest): a guest's `pair` is queued by the read path (at most
+//! [`PAIR_QUEUE`]) and checked here against the open window; the key is
+//! stored, `keys` sent, `paired` answered, and `pair-close` said. A window
+//! that dies any other way (expired, three wrong MACs, cancelled or
+//! replaced on the LAN, switched off) is closed at the server the same
+//! turn; one announced before a reconnect that died meanwhile, at the next
+//! session's start. `pair-open` counts against the server's budget for
+//! `keys` and `info` (1 a second, a burst of 4).
 
 use super::dispatch::{Link, Pending};
 use super::measure::{cfg, cfg_gen, Cfg};
@@ -37,6 +49,7 @@ use crate::state::{free_heap, largest_free_block};
 #[cfg(any(feature = "connect-measure", feature = "connect-test"))]
 use esp_idf_sys as sys;
 use opendmd_core::connect::keys::{KeyId, KeyList};
+use opendmd_core::connect::qr::Qr;
 use opendmd_core::connect::proto::{self, Caps, Dev, ServerMsg, Session};
 use opendmd_core::connect::{self as cx, Backoff, Event, BACKOFF_CAP};
 use std::net::SocketAddr;
@@ -55,13 +68,14 @@ pub const HOLD_S: u64 = 180;
 /// After a crash boot.
 const CRASH_HOLD_S: u64 = 15 * 60;
 
+/// A build-time number (`OPENDMD_CONNECT_HOLD_S`, `_PAIR_TTL_S`).
 #[cfg(feature = "connect-test")]
-const fn parse_u64(v: &str) -> u64 {
+pub(super) const fn parse_u64(v: &str) -> u64 {
     let b = v.as_bytes();
     let mut n = 0u64;
     let mut k = 0;
     while k < b.len() {
-        assert!(b[k].is_ascii_digit(), "OPENDMD_CONNECT_HOLD_S: digits only");
+        assert!(b[k].is_ascii_digit(), "OPENDMD_CONNECT_*_S: digits only");
         n = n * 10 + (b[k] - b'0') as u64;
         k += 1;
     }
@@ -97,6 +111,28 @@ const TOO_OLD_WAIT: Duration = Duration::from_secs(24 * 3600);
 const REREGISTER_MAX: u32 = 3;
 /// The register answer's longest, head and body.
 const REGISTER_MAX: usize = 2048;
+/// Guests' `pair` messages held for the next top-level turn (the server
+/// lets two guests in at a time); more meanwhile are answered `busy`.
+pub(super) const PAIR_QUEUE: usize = 2;
+
+/// A guest's `pair`, as read: its slot, key, label (as sent) and MAC.
+pub(super) struct PairReq {
+    /// The window it came for (a `pair` for another one is `closed`).
+    pub seq: Option<u32>,
+    pub g: u8,
+    pub public: [u8; 32],
+    pub label: String,
+    pub mac: [u8; 32],
+}
+
+/// What the client last asked the main task to show.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Shown {
+    None,
+    /// The QR code of window `seq`.
+    Qr(u32),
+    Added,
+}
 
 #[optimize(size)]
 #[inline(never)]
@@ -183,8 +219,9 @@ pub struct Client {
     /// controller does either (a registration that never said `hello`,
     /// deleted): register anew.
     reregister: bool,
-    /// `keys` and `info` against the server's budget for them (1 a second,
-    /// a burst of 4): the next may go at this time; sends left in the burst.
+    /// `keys`, `info` and `pair-open` against the server's budget for them
+    /// (1 a second, a burst of 4): a bucket of `meta_burst` tokens, the
+    /// last refilled at `meta_at`.
     meta_at: Instant,
     meta_burst: u8,
     /// The open session's protocol state (its `sess`, the counters).
@@ -202,6 +239,24 @@ pub struct Client {
     pub(super) card_due: Option<Instant>,
     /// Each key's last accepted command this boot.
     pub(super) last_use: Vec<(KeyId, Instant)>,
+    /// Guests' `pair` messages for the next top-level turn.
+    pub(super) pair_reqs: Vec<PairReq>,
+    /// The window the server was told of (`pair-open`), by `pair_id`.
+    pub(super) announced: Option<[u8; 10]>,
+    /// A new session: say again what is open (and close what died).
+    pub(super) reannounce: bool,
+    /// The open window's number and `pair_id` (hashed once a window), and
+    /// its QR code once made.
+    pub(super) window: Option<(u32, [u8; 10], Option<Box<Qr>>)>,
+    /// `paired` answers waiting for `keys` to go first (the budget; at
+    /// most [`PAIR_QUEUE`]).
+    pub(super) paired_due: Vec<String>,
+    /// A pairing whose key store was refused `busy` (a LAN store at the
+    /// same moment): tried once more at the next turn before answering.
+    pub(super) pair_store: Option<super::pair::PairStore>,
+    /// "Remote control added" up until then, with the device's name.
+    pub(super) added: Option<(String, Instant)>,
+    pub(super) shown: Shown,
 }
 
 impl Client {
@@ -268,6 +323,14 @@ impl Client {
             config_rate: Vec::new(),
             card_due: None,
             last_use: Vec::new(),
+            pair_reqs: Vec::new(),
+            announced: None,
+            reannounce: false,
+            window: None,
+            paired_due: Vec::new(),
+            pair_store: None,
+            added: None,
+            shown: Shown::None,
         }
     }
 
@@ -292,7 +355,7 @@ impl Client {
             },
         };
         let w = at.map_or(Duration::from_secs(1), |t| t.saturating_duration_since(Instant::now()).clamp(busy, Duration::from_secs(1)));
-        if self.pending.is_some() {
+        if self.pending.is_some() || !self.paired_due.is_empty() || self.pair_store.is_some() {
             return w.min(Duration::from_millis(200));
         }
         // The card's copy is due: the next turn makes it.
@@ -307,6 +370,8 @@ impl Client {
     #[inline(never)]
     pub fn tick(&mut self, online: bool) {
         self.turn(online);
+        // Pairing, at the top level (never under the read path).
+        self.pairing();
         // The worker's stack margin, where something reads it (a measuring
         // build's telemetry, an emulator image's lane).
         #[cfg(any(feature = "connect-measure", feature = "connect-test"))]
@@ -364,6 +429,10 @@ impl Client {
         // harmless, never used again.)
         if std::mem::take(&mut self.forget) {
             // The old identity's last word; the next attempt registers anew.
+            // (Its window first, as at a switch-off.)
+            self.paired_due.clear();
+            self.pair_store = None;
+            let _ = self.announce(None);
             if let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) {
                 let _ = conn.text(proto::FORGET);
             }
@@ -373,6 +442,10 @@ impl Client {
         }
         if !on {
             if self.conn.is_some() {
+                // The window went with the switch: the server hears first.
+                self.paired_due.clear();
+                self.pair_store = None;
+                let _ = self.announce(None);
                 self.close(Cause::Forced, "switched off");
             }
             set_state("off");
@@ -1007,37 +1080,58 @@ impl Client {
         drop(hello);
         self.need_keys = true;
         self.need_info = true;
-        self.meta_burst = 2;
+        // `keys`, `info` and a window's `pair-open`: 3 of the server's 4
+        // (its bucket may not be full at a quick reconnect).
+        self.meta_burst = 3;
+        self.meta_at = Instant::now();
+        self.reannounce = true;
         self.sync_out()
+    }
+
+    /// One more of `keys`, `info`, `pair-open` within the server's budget
+    /// for them? After `hello` the burst; then one a second.
+    #[optimize(size)]
+    #[inline(never)]
+    pub(super) fn meta_ok(&mut self) -> bool {
+        // One token a second back, up to the server's burst of 4.
+        let now = Instant::now();
+        let back = now.saturating_duration_since(self.meta_at).as_secs().min(4) as u8;
+        if back > 0 {
+            self.meta_burst = (self.meta_burst + back).min(4);
+            self.meta_at = if self.meta_burst == 4 { now } else { self.meta_at + Duration::from_secs(u64::from(back)) };
+        }
+        if self.meta_burst == 0 {
+            return false;
+        }
+        self.meta_burst -= 1;
+        true
     }
 
     /// `keys` and `info` when they are due (after `hello`, after a change).
     #[optimize(size)]
     #[inline(never)]
-    fn sync_out(&mut self) -> Result<(), End> {
-        let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) else { return Ok(()) };
+    pub(super) fn sync_out(&mut self) -> Result<(), End> {
+        if !self.conn.as_ref().is_some_and(|c| c.phase == Phase::Open) {
+            return Ok(());
+        }
         // After `hello` both go at once (the burst); a change waits for the
         // second since the last one (several in a row: one `keys`, the last).
-        let may = |burst: &mut u8, at: &mut Instant| {
-            if *burst > 0 {
-                *burst -= 1;
-                true
-            } else if Instant::now() >= *at {
-                *at = Instant::now() + Duration::from_secs(1);
-                true
-            } else {
-                false
-            }
-        };
-        if self.need_keys && may(&mut self.meta_burst, &mut self.meta_at) {
+        if self.need_keys && self.meta_ok() {
             self.need_keys = false;
-            conn.text(&self.keys.keys_message())?;
+            let m = self.keys.keys_message();
+            self.conn.as_mut().expect("held").text(&m)?;
         }
-        if self.need_info && may(&mut self.meta_burst, &mut self.meta_at) {
+        // Pairings' answers once their keys are at the server.
+        if !self.need_keys {
+            for p in std::mem::take(&mut self.paired_due) {
+                self.conn.as_mut().expect("held").text(&p)?;
+            }
+        }
+        if self.need_info && self.meta_ok() {
             self.need_info = false;
             // The name a controller gave it, or the panel's hostname.
             let name = if self.name.is_empty() { self.link.settings.lock().unwrap().hostname.clone() } else { self.name.clone() };
-            conn.text(&proto::info(&name))?;
+            self.conn.as_mut().expect("held").text(&proto::info(&name))?;
         }
         Ok(())
     }
@@ -1147,10 +1241,15 @@ impl Client {
                 }
                 Ok(())
             }
-            // Pairing windows come with P1's F3: none is ever open here.
-            ServerMsg::Pair { g, .. } => {
+            // Checked at the top level (`pairing`): only queued here.
+            ServerMsg::Pair { g, public, label, mac } => {
+                if self.pair_reqs.len() < PAIR_QUEUE {
+                    let seq = shared(|s| s.pairing.as_ref().map(|p| p.seq)).flatten();
+                    self.pair_reqs.push(PairReq { seq, g, public, label, mac });
+                    return Ok(());
+                }
                 let conn = self.conn.as_mut().expect("held");
-                conn.text(&proto::paired_err(g, opendmd_core::connect::pair::PairError::Closed.code()))
+                conn.text(&proto::paired_err(g, "busy"))
             }
             ServerMsg::Unknown => Ok(()),
         }
@@ -1380,6 +1479,12 @@ impl Client {
         let Some(conn) = self.conn.take() else { return };
         self.save_card(true);
         self.sess = None;
+        // (A pairing's answer cannot follow its guest to another session.)
+        // (A key stored meanwhile stays: its device may attach without the
+        // answer; one not stored yet is not stored.)
+        self.pair_reqs.clear();
+        self.paired_due.clear();
+        self.pair_store = None;
         self.watched = false;
         lite(|l| l.watched = false);
         let Some(opened) = conn.opened else {

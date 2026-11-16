@@ -21,14 +21,24 @@ registration, `hello`, `keys`, `info`; a controller attaches, watches and
 gets status; play, next, previous, pause, brightness, playlist,
 playlists, controllers, name, add-controller; the LAN routes; the panel
 reconnecting after a server close; a refusal (4403) and a too-new close
-(4406) handled by policy; the server gone and back; switch off; forget
-(a new identity); a restart (the identity kept, back after the hold).
+(4406) handled by policy; the server gone and back; pairing (the LAN
+link's window with its QR code on the panel, a guest found by `pair_id`,
+the key stored with can_add, `keys` before `paired`, `mac2`, `pair-close`, "Remote control added", the new device's
+commands; a window cancelled on the LAN); switch off; forget (a new
+identity); a restart (the identity kept, back after the hold).
 Red, each refused by the panel itself (frames put straight onto the
 panel's socket, past the server's pre-check) and none reaching the player:
 replayed, stale-session, wrong-panel, tampered, unsigned-by-a-stranger,
 disallowed (update, delete, wifi, reboot, ...), bad paths and arguments,
 an over-long body, a one-level key adding another, a removed key, a flood
 (the panel's own rate), chunks and unknown frame types (no answer).
+Pairing's red: the pair route while off (409) and without the API key
+when one is set (401, whatever the body); three wrong MACs (closed, and
+`pair-close` at once); a window used once (the server forgets it; a
+`pair` put straight onto the panel's socket is `closed`); a label
+rewritten by the relay (`bad-mac`, the window kept for the right one); a
+window left to expire (the image's 90 s: `pair-close`, the QR code down,
+a late `pair` refused).
 
     uv run tools/connect/emu_lane.py --image <full.bin> --certs <dir> [--card sd.img]
     uv run tools/connect/emu_lane.py pubkey        # the image's test key
@@ -62,6 +72,12 @@ import nacl.signing  # noqa: E402
 import odc  # noqa: E402
 
 HOST = "connect.test"
+# The image's pairing window (Makefile EMU_CONNECT_PAIR_TTL_S).
+PAIR_TTL_S = int(os.environ.get("EMU_CONNECT_PAIR_TTL_S", "90"))
+SCREEN = re.compile(r"remote control screen: (pairing QR code|added|off)")
+CANVAS = re.compile(r"remote control screen: canvas ([0-9a-f]{8}), brightness (\d+), look (\w+)")
+PAIR_BRIGHTNESS = 96
+LANE_KEY = "emu-lane-api-key-0123"
 PORT = 8080
 CTL_PORT = 8787
 # Throwaway: a test key made from a fixed string, for emulator images only.
@@ -151,9 +167,11 @@ class Lane:
         self.report: dict = {}
 
     # --- the panel's LAN API --------------------------------------------------
-    def _http(self, method, path, body=None, timeout=30.0):
+    def _http(self, method, path, body=None, timeout=30.0, key=None):
         data = None if body is None else json.dumps(body).encode()
         headers = {"Content-Type": "application/json"} if body is not None else {}
+        if key:
+            headers["Authorization"] = "Bearer " + key
         if method != "GET" and data is None:
             data = b""
         req = urllib.request.Request(self.base + path, method=method, data=data, headers=headers)
@@ -173,8 +191,8 @@ class Lane:
                 time.sleep(2)
         return None, None
 
-    async def http(self, method, path, body=None):
-        return await asyncio.to_thread(self._http, method, path, body)
+    async def http(self, method, path, body=None, key=None):
+        return await asyncio.to_thread(self._http, method, path, body, 30.0, key)
 
     async def status(self):
         return (await self.http("GET", "/api/status"))[1] or {}
@@ -266,6 +284,8 @@ class Lane:
         await asyncio.sleep(10)
         self.expect(self.srv.registered == 0, "off: nothing sent to the server", f"{self.srv.registered} registrations")
         heap_off = st.get("heap") or {}
+        code, _ = await self.http("POST", "/api/connect/pair")
+        self.expect(code == 409, "red: POST /api/connect/pair while off: 409, no window", f"{code}")
 
         # Switched on over the LAN: at once (the hold is for boots).
         code, info = await self.http("PUT", "/api/connect", {"enabled": True})
@@ -533,6 +553,8 @@ class Lane:
             await self.wait("refused", lambda: self._info(lambda i: i.get("refused") is True), 300)
             st = await self.status()
             self.ok("4403: refused, Settings told to set up again", f"state {(st.get('connect') or {}).get('state')!r}")
+            code, _ = await self.http("POST", "/api/connect/pair")
+            self.expect(code == 409, "red: POST /api/connect/pair while refused: 409, no window", f"{code}")
             await asyncio.sleep(20)
             self.expect(self.panel_ws() is None, "4403: no attempt on the normal schedule", "")
             await self.http("PUT", "/api/connect", {"enabled": True})
@@ -552,6 +574,8 @@ class Lane:
             await self.srv.start_tls()
             await self.open_session("back once the server is", before_sess=rec.sess, timeout=1200)
             self.ok("server back: reconnected by itself")
+
+            await self.pairing(http, dev, a, tk)
 
             # The server lost the record. With controllers: a refusal like
             # 403, retried every 15 minutes, nothing erased (the owner may
@@ -599,10 +623,22 @@ class Lane:
             st_on = await self.status()
             self.report["heap_idle"] = {"off": st_off.get("heap"), "on_idle": st_on.get("heap")}
 
-            # Forget: the old identity says forget; a new one is made.
+            # Forget: the old identity says forget; a new one is made. An
+            # open window is closed at the server first.
             regs = self.srv.registered
+            await asyncio.sleep(1.5)
+            mark = len(self.srv.said)
+            fsecret, _ = await self.open_window()
+            fpid = odc.pair_id(fsecret).hex()
+            await self.panel_says("pair-open before the forget", "pair-open", mark, lambda m: m.get("pair_id") == fpid)
+            mark = len(self.srv.said)
             code, info = await self.http("POST", "/api/connect/forget")
             self.expect(code == 200, "POST /api/connect/forget", f"{code}")
+            await self.panel_says("forget said", "forget", mark)
+            said = self.srv.said[mark:]
+            ci = next((i for i, m in enumerate(said) if m.get("t") == "pair-close" and m.get("pair_id") == fpid), None)
+            fi = next((i for i, m in enumerate(said) if m.get("t") == "forget"), None)
+            self.expect(ci is not None and fi is not None and ci < fi, "forget: the open window's pair-close, then forget", f"pair-close at {ci}, forget at {fi}")
             await self.wait("a new identity", lambda: self._dev_changed(dev), 900)
             new_dev = next(iter(self.srv.panels))
             self.expect(dev not in self.srv.panels and self.srv.registered == regs + 1, "forget: the old record deleted, a new id registered", odc.dev_text(new_dev))
@@ -633,6 +669,204 @@ class Lane:
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
+
+    # --- pairing ------------------------------------------------------------------
+    async def open_window(self, qr=False, key=None):
+        """POST /api/connect/pair: (secret, the answer)."""
+        code, r = await self.http("POST", "/api/connect/pair" + ("?qr=1" if qr else ""), key=key)
+        if code != 200 or not r or not str(r.get("link", "")).startswith("https://opendmd.dev/c#"):
+            raise Fail(f"POST /api/connect/pair: {code} {r}")
+        return r["link"].split("/c#", 1)[1], r
+
+    async def guest(self, http, secret, ctl, macs=(None,), raw_label=None, timeout=60):
+        """A new browser pairing as a guest: find, guest, one `pair` a MAC
+        (None: the right one) and its `paired`."""
+        pid = odc.pair_id(secret)
+        async with http.post(f"{self.ctl_base}/v1/find", data=odc.dumps({"pair_id": pid.hex()})) as r:
+            if r.status != 200:
+                return {"find": r.status}
+            found = odc.parse_dev((await r.json())["dev"])
+        ws = await ctl.connect(http)
+        await ctl.until("challenge", timeout=30)
+        await ws.send_str(odc.dumps({"t": "guest", "pair_id": pid.hex()}))
+        if await ctl.until("guest-ok", timeout=30) is None:
+            return {"closed": await ctl.closed()}
+        label = ctl.label if raw_label is None else raw_label
+        replies = []
+        for m in macs:
+            m = m or odc.pair_mac(secret, found, ctl.pub, label.encode())
+            await ws.send_str(odc.dumps({"t": "pair", "pub": ctl.pub.hex(), "label": label, "mac": m.hex()}))
+            replies.append(await ctl.until("paired", timeout=timeout))
+        await ws.close()
+        return {"dev": found, "replies": replies}
+
+    async def inject_pair(self, secret, dev, ctl, g=99):
+        """A `pair` with the right MAC put straight onto the panel's socket
+        (past the server's window check): the panel's own answer."""
+        start = len(self.srv.said)
+        await self.panel_ws().send_str(odc.dumps({"t": "pair", "g": g, "pub": ctl.pub.hex(), "label": ctl.label, "mac": odc.pair_mac(secret, dev, ctl.pub, ctl.label.encode()).hex()}))
+        return await self.panel_says("the panel's answer to a pair put on its socket", "paired", start, lambda m: m.get("g") == g, timeout=120)
+
+    async def screen_says(self, what, mark, timeout=120):
+        async def seen():
+            hits = [m.group(1) for _, m in self.emu.find(SCREEN, mark)]
+            return what in hits
+        await self.wait(f"the panel's screen: {what}", seen, timeout, every=1)
+
+    async def pairing(self, http, dev, a, tk):
+        from roundtrip import Controller
+
+        rec = self.rec()
+        # Red: with an API key set, the pair route wants it like the rest.
+        code, _ = await self.http("PUT", "/api/config", {"api_key": LANE_KEY})
+        self.expect(code == 200, "an API key set", f"{code}")
+        try:
+            code, _ = await self.http("POST", "/api/connect/pair?qr=1")
+            self.expect(code == 401 and (await self.http("GET", "/api/connect", key=LANE_KEY))[1].get("pairing") is None,
+                        "red: POST /api/connect/pair without the API key: 401, no window", f"{code}")
+            secret, r = await self.open_window(key=LANE_KEY)
+            self.expect(r.get("expires_s") == PAIR_TTL_S, "POST /api/connect/pair with the API key: a link", f"expires_s {r.get('expires_s')}")
+            code, _ = await self.http("DELETE", "/api/connect/pair")
+            self.expect(code == 401, "red: DELETE /api/connect/pair without the API key: 401", f"{code}")
+            code, _ = await self.http("DELETE", "/api/connect/pair", key=LANE_KEY)
+            self.expect(code == 200, "DELETE /api/connect/pair with the key", f"{code}")
+        finally:
+            await self.http("PUT", "/api/config", {"api_key": ""}, key=LANE_KEY)
+        await asyncio.sleep(2)
+
+        # Blue: the LAN link with its QR code on the panel, paired.
+        mark, line = len(self.srv.said), self.emu.mark()
+        secret, r = await self.open_window(qr=True)
+        self.expect(len(secret) == 20 and r.get("qr") is True and r.get("online") is True, "POST /api/connect/pair?qr=1: a link, online", f"{r.get('link', '')[:40]}...")
+        pid = odc.pair_id(secret).hex()
+        await self.panel_says("pair-open for the window", "pair-open", mark, lambda m: m.get("pair_id") == pid)
+        await self.screen_says("pairing QR code", line)
+        # Red: commands while the QR code is up never paint over it, and its
+        # brightness stays the screen's own.
+        async def first_canvas():
+            hits = self.emu.find(CANVAS, line)
+            return hits[0][1].groups() if hits else None
+        crc0, b0, look0 = await self.wait("the QR screen's canvas line", first_canvas, 120, every=1)
+        cfg = (await self.http("GET", "/api/config"))[1] or {}
+        mx = cfg.get("max_brightness", 255)
+        self.expect(int(b0) == min(PAIR_BRIGHTNESS, mx), "the QR code at its fixed mid brightness", f"brightness {b0}")
+        st = await self.status()
+        path = (st.get("now_playing") or {}).get("next") or "@formula:starfield"
+        c_play, _ = await self.http("POST", "/api/play", {"path": path})
+        c_bright, _ = await self.http("PUT", "/api/config", {"brightness": min(200, mx), "look": "amber", "glow": "short"})
+        await asyncio.sleep(1.5)
+        c_play2, _ = await self.http("POST", "/api/play", {"path": "@formula:starfield"})
+        await asyncio.sleep(8)
+        seen = [m.groups() for _, m in self.emu.find(CANVAS, line)]
+        self.expect(look0 == "Colour" and all(c == crc0 and int(b) == int(b0) and lk == look0 for c, b, lk in seen) and (await self.connect_info()).get("pairing", {}).get("qr") is True,
+                    "red: a play, a brightness with a look and a glow, and a Formula while the QR code is up: the picture, its brightness and its untinted look unchanged",
+                    f"play {c_play}/{c_play2}, brightness {c_bright}; canvas lines {seen}")
+        await self.http("PUT", "/api/config", {"look": "colour", "glow": "off"})
+        info = await self.connect_info()
+        self.expect((info.get("pairing") or {}).get("qr") is True and secret not in json.dumps(info), "GET /api/connect: the window, its QR, never its secret", json.dumps(info.get("pairing")))
+        g1 = Controller(self.ctl_base, dev, "Den phone")
+        mark, line = len(self.srv.said), self.emu.mark()
+        res = await self.guest(http, secret, g1)
+        rep = (res.get("replies") or [None])[0]
+        self.expect(res.get("dev") == dev and rep and rep.get("k") == g1.k.hex(), "a guest found the panel by pair_id and paired", json.dumps(rep))
+        self.expect(bytes.fromhex(rep.get("mac2", "")) == odc.paired_mac(secret, dev, g1.pub), "paired's mac2: the secret, this panel and the key", "")
+        said = self.srv.said[mark:]
+        ki = next((i for i, m in enumerate(said) if m.get("t") == "keys" and any(e.get("k") == g1.k.hex() for e in m.get("keys", []))), None)
+        pi = next((i for i, m in enumerate(said) if m.get("t") == "paired" and m.get("k") == g1.k.hex()), None)
+        self.expect(ki is not None and pi is not None and ki < pi, "keys (with the new key) before paired", f"keys at {ki}, paired at {pi}")
+        await self.panel_says("pair-close after the pairing", "pair-close", mark, lambda m: m.get("pair_id") == pid)
+        self.ok("pair-close after the pairing")
+        self.expect(rec.keys.get(g1.k, (None, None))[1] == odc.FLAG_CAN_ADD, "the server has the new key, can_add", "")
+        await self.screen_says("added", line)
+        self.ok("the panel says Remote control added")
+        info = await self.connect_info()
+        ent = next((c for c in info.get("controllers", []) if c.get("k") == g1.k.hex()), {})
+        self.expect(ent.get("label") == "Den phone" and ent.get("f") == 1 and ent.get("added_by") is None and info.get("pairing") is None,
+                    "GET /api/connect: the device, labelled, paired on the panel; no window", json.dumps(ent))
+        at = await g1.attach(http)
+        self.expect(at and at.get("online"), "the paired device attaches", "")
+        r = await g1.command("controllers")
+        if r is None:
+            r = await g1.until("ack", timeout=60)
+        self.expect(r and r.get("ok"), "the paired device's command: ok", json.dumps(r)[:200])
+        await self.screen_says("off", line, timeout=180)
+        self.ok("the added screen goes by itself; playback resumes")
+
+        # Red: the window used once.
+        res = await self.guest(http, secret, Controller(self.ctl_base, dev, "late"))
+        self.expect(res.get("find") == 404, "red: a used window is gone at the server (find 404)", json.dumps(res))
+        got = await self.inject_pair(secret, dev, Controller(self.ctl_base, dev, "late2"))
+        self.expect(got.get("err") == "closed", "red: a used window's pair put on the panel's socket: closed", json.dumps(got))
+
+        # Red: three wrong MACs close it, and the server hears at once.
+        await asyncio.sleep(1.5)
+        mark = len(self.srv.said)
+        secret2, _ = await self.open_window()
+        pid2 = odc.pair_id(secret2).hex()
+        await self.panel_says("pair-open for the second window", "pair-open", mark, lambda m: m.get("pair_id") == pid2)
+        x = Controller(self.ctl_base, dev, "x")
+        mark = len(self.srv.said)
+        res = await self.guest(http, secret2, x, macs=[bytes(32)] * 3 + [None])
+        errs = [r.get("err") if r else None for r in res.get("replies", [])]
+        self.expect(errs == ["bad-mac", "bad-mac", "bad-mac", "closed"], "red: three wrong MACs, then even the right one: closed", f"{errs}")
+        said = self.srv.said[mark:]
+        close_at = next((i for i, m in enumerate(said) if m.get("t") == "pair-close" and m.get("pair_id") == pid2), None)
+        third = [i for i, m in enumerate(said) if m.get("t") == "paired" and m.get("err") == "bad-mac"]
+        self.expect(close_at is not None and len(third) == 3 and close_at > third[2], "red: pair-close as soon as the third wrong MAC closed it", f"pair-close at {close_at}, bad-macs at {third}")
+        self.expect(x.k not in rec.keys and (await self.connect_info()).get("pairing") is None, "red: no key stored, no window", "")
+
+        # Red: a label rewritten by the relay; the window stays for the right one.
+        await asyncio.sleep(1.5)
+        secret3, _ = await self.open_window()
+        await asyncio.sleep(2)
+        g2 = Controller(self.ctl_base, dev, "Kitchen tablet")
+        self.srv.rewrite_label = "Admin"
+        try:
+            res = await self.guest(http, secret3, g2)
+        finally:
+            self.srv.rewrite_label = None
+        errs = [r.get("err") if r else None for r in res.get("replies", [])]
+        self.expect(errs == ["bad-mac"] and g2.k not in rec.keys, "red: a label rewritten on the way: bad-mac, nothing stored", f"{errs}")
+        res = await self.guest(http, secret3, g2)
+        rep = (res.get("replies") or [None])[0]
+        self.expect(rep and rep.get("k") == g2.k.hex(), "...and the window, two tries left, pairs the untouched one", json.dumps(rep))
+
+        # A window cancelled on the LAN: pair-close, the QR code down.
+        await asyncio.sleep(1.5)
+        mark, line = len(self.srv.said), self.emu.mark()
+        secret4, _ = await self.open_window(qr=True)
+        pid4 = odc.pair_id(secret4).hex()
+        await self.panel_says("pair-open (to cancel)", "pair-open", mark, lambda m: m.get("pair_id") == pid4)
+        await self.screen_says("pairing QR code", line)
+        code, info = await self.http("DELETE", "/api/connect/pair")
+        self.expect(code == 200 and info.get("pairing") is None, "DELETE /api/connect/pair: no window", f"{code}")
+        await self.panel_says("pair-close after a LAN cancel", "pair-close", mark, lambda m: m.get("pair_id") == pid4)
+        await self.screen_says("off", line)
+        self.ok("cancelled on the LAN: pair-close, the QR code down")
+
+        # Red: a window left to expire.
+        await asyncio.sleep(1.5)
+        mark, line = len(self.srv.said), self.emu.mark()
+        secret5, _ = await self.open_window(qr=True)
+        pid5 = odc.pair_id(secret5).hex()
+        await self.panel_says("pair-open (to expire)", "pair-open", mark, lambda m: m.get("pair_id") == pid5 and m.get("ttl", 0) <= PAIR_TTL_S)
+        await self.screen_says("pairing QR code", line)
+        await self.panel_says("pair-close at expiry", "pair-close", mark, lambda m: m.get("pair_id") == pid5, timeout=PAIR_TTL_S * 6 + 120)
+        await self.screen_says("off", line)
+        self.expect((await self.connect_info()).get("pairing") is None, "red: expired: pair-close by itself, the QR code down, no window", "")
+        late = Controller(self.ctl_base, dev, "late3")
+        got = await self.inject_pair(secret5, dev, late)
+        self.expect(got.get("err") in ("expired", "closed") and late.k not in rec.keys, "red: a pair after expiry, put on the panel's socket: refused", json.dumps(got))
+
+        su = ((await self.status()).get("connect") or {}).get("stack_unused")
+        self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after pairing (MACs and key stores at the top level): >= 1 KB left", f"{su} B")
+        self.report["stack_unused_after_pairing"] = su
+        # The paired devices go again (the next steps count the list).
+        await g1.ws.close()
+        for k in (g1.k, g2.k):
+            code, _ = await self.http("DELETE", f"/api/connect/controllers/{k.hex()}")
+            self.expect(code == 200, f"the paired device {k.hex()[:6]} removed on the LAN", f"{code}")
+        await asyncio.sleep(2)
 
     async def _moved(self, o0):
         return ((await self.status()).get("now_playing") or {}).get("ordinal") != o0
@@ -701,8 +935,8 @@ def main():
     ap.add_argument("--certs", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--rom", type=Path)
-    ap.add_argument("--seconds", type=int, default=6000, help="emulated seconds at most")
-    ap.add_argument("--wall", type=int, default=10800, help="wall-clock limit (s)")
+    ap.add_argument("--seconds", type=int, default=7500, help="emulated seconds at most")
+    ap.add_argument("--wall", type=int, default=12600, help="wall-clock limit (s)")
     a = ap.parse_args()
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)

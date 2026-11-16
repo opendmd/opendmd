@@ -7,7 +7,7 @@
 // transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode), RePlayOS
 // (Follow RePlayOS, js/follow.js) and
 // Device (status, the playback cache, network — its own Save; a new name
-// is live at once —, panel timing js/panel.js, firmware and security
+// is live at once —, Remote control js/remote.js, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
 
 import { app, playlistLabel, setPath, NO_FORMULAS } from './state.js';
@@ -241,7 +241,14 @@ export async function mount(el) {
     replay: () => tab('replay', followCard().el),
     device: () => {
       const t = tab('device');
-      import('./device.js').then((m) => { dev = m.deviceTab(t, { f, save, banner, sched, thumbs, live: () => visible && open === 'device' }); });
+      import('./device.js').then((m) => {
+        dev = m.deviceTab(t, { f, save, banner, sched, thumbs, live: () => visible && open === 'device' });
+        // Remote control (js/remote.js), in a build with it, under Status.
+        if (app.status?.features?.includes('connect')) {
+          const b = h('div.grp', { id: 'rc' }); t.querySelector('#st-status')?.after(b);
+          import('./remote.js').then((r) => { rc = r.remoteCard(b); tick(); });
+        }
+      });
       return t;
     },
   };
@@ -249,7 +256,7 @@ export async function mount(el) {
   const panel = h('div');
   const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
   el.append(h('h1.ptitle', 'Settings'), banner, tabs, panel);
-  let open = '', visible = true, dev;
+  let open = '', visible = true, dev, rc;
   function go(k) {
     if (!BUILD[k]) k = 'play';
     for (const b of tabs.children) { b.classList.toggle('on', b.dataset.tab === k); b.ariaSelected = b.dataset.tab === k; }
@@ -263,6 +270,7 @@ export async function mount(el) {
   // Device's and RePlayOS's status, every 5 s while open (the app's scheduler).
   function tick() {
     for (const k of ['device', 'replay']) if (visible && open === k) app.watch(k, 5000); else app.unwatch(k);
+    rc?.(visible && open === 'device');
   }
 
   // A playlist change while the player is still reading one would queue

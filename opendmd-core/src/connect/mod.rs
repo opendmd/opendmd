@@ -8,6 +8,8 @@
 //!   text messages.
 //! - [`keys`]: the controller list and its NVS blob.
 //! - [`pair`]: pairing windows, MACs and invites.
+//! - [`qr`], [`screen`]: the pairing QR code (version 3-L) and the panel's
+//!   two pairing screens.
 //! - [`xfer`]: a GIF send's chunks, credit, hashes and quota.
 //! - [`codec`], [`json`]: hex, base32, HMAC; a strict JSON reader.
 //!
@@ -18,6 +20,8 @@ pub mod json;
 pub mod keys;
 pub mod pair;
 pub mod proto;
+pub mod qr;
+pub mod screen;
 pub mod ws;
 pub mod xfer;
 

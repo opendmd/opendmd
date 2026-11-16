@@ -387,6 +387,13 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   /api/play` of a Formula (or with `over`/`live`) a 501 `{"error":"Formulas
   aren’t in this firmware build"}`, a non-empty `look_formula` a 400 with
   it, and the playlist skips its Formula lines.
+- **Remote control** (`--connect`: a build with `connect`, `features` gains
+  `"connect"`; docs/api.md "Remote control"): `GET /api/connect`, `PUT
+  /api/connect` (`enabled`, `name`), `POST /api/connect/pair[?qr=1]` (a
+  5-minute window and its `https://opendmd.dev/c#<S>` link; a
+  409 while off), `DELETE /api/connect/pair`, `DELETE
+  /api/connect/controllers/<k>`, `POST /api/connect/forget`, in memory, with
+  two controllers to start with. No server: on, the state is `open` at once.
 - **Panel timing** (`opendmd_core::panel_timing`, docs/firmware.md): the
   config's `panel` (`clk_phase`, `latch_blanking` 1..4, `driver`,
   `i2s_speed` 8/16/20, `min_refresh` 30..240), `panel_now`, `panel_next`
@@ -534,7 +541,7 @@ API_KEY_RE = re.compile(r"[A-Za-z0-9._~-]{8,64}")
 JSON_ROUTES = {
     ("PUT", "/api/config"), ("PUT", "/api/schedule"), ("POST", "/api/wake"), ("POST", "/api/play"),
     ("POST", "/api/cache/failed"), ("POST", "/api/cache/forget"), ("POST", "/api/follow/test"),
-    ("POST", "/api/files/move"), ("POST", "/api/card/format"),
+    ("POST", "/api/files/move"), ("POST", "/api/card/format"), ("PUT", "/api/connect"),
 }
 FORMAT_SECS = 3.0                      # POST /api/card/format's simulated format
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
@@ -1285,7 +1292,40 @@ NO_FORMULAS = "Formulas aren’t in this firmware build"
 def features(ctx) -> list[str]:
     """`/api/status` and `/api/firmware` `features`: the optional parts the
     firmware compiles in (a default build: formulas and the JIT)."""
-    return ["formulas", "jit"] if getattr(ctx, "formulas", True) else []
+    f = ["formulas", "jit"] if getattr(ctx, "formulas", True) else []
+    return f + ["connect"] if getattr(ctx, "connect", None) is not None else f
+
+
+CX_INVISIBLE = re.compile("[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e"
+                          "\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]")
+CX_PAIR_S = 300
+
+
+def connect_state() -> dict:
+    """--connect's Remote control, as a panel that has two controllers."""
+    return {"enabled": False, "registered": True, "name": "", "pairing": None, "opened": 0, "since": time.monotonic(),
+            "controllers": [
+                {"k": "3f9a0c1d2e4b5a67", "label": "Ross's phone", "f": 1, "added": 1763200000, "added_by": None, "last_s": 40},
+                {"k": "a1b2c3d4e5f60718", "label": "Kitchen tablet", "f": 0, "added": 1763290000, "added_by": "3f9a0c1d2e4b5a67", "last_s": None}]}
+
+
+def connect_summary(cx: dict) -> dict:
+    now = time.monotonic()
+    p = cx["pairing"]
+    if p and (now >= p["until"]):
+        cx["pairing"] = p = None
+    on = cx["enabled"]
+    return {"enabled": on, "registered": cx["registered"], "state": "open" if on else "off", "since_s": int(now - cx["since"]),
+            "opened": cx["opened"], "reconnects": 0, "resumed": 0, "handshake_ms": 900 if cx["opened"] else None,
+            "refused": False, "too_old": False, "watched": False, "last_error": None, "last_error_s": 0}
+
+
+def connect_json(cx: dict) -> dict:
+    s = connect_summary(cx)
+    p = cx["pairing"]
+    return {"enabled": s["enabled"], "registered": cx["registered"], "name": cx["name"],
+            "controllers": [dict(c) for c in cx["controllers"]],
+            "pairing": {"expires_s": max(0, int(p["until"] - time.monotonic())), "qr": p["qr"]} if p else None, **s}
 
 
 def psb_info(b64: str) -> tuple[str, int] | None:
@@ -3442,6 +3482,10 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/card/format"), {"POST": self.h_card_format}),
                 (m_exact("/api/card/full-speed"), {"POST": self.h_card_full_speed}),
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
+                *([(m_exact("/api/connect"), {"GET": self.h_cx_get, "PUT": self.h_cx_put}),
+                   (m_exact("/api/connect/pair"), {"POST": self.h_cx_pair, "DELETE": self.h_cx_unpair}),
+                   (m_exact("/api/connect/forget"), {"POST": self.h_cx_forget}),
+                   (m_prefix("/api/connect/controllers/"), {"DELETE": self.h_cx_remove})] if getattr(ctx, "connect", None) is not None else []),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/play/formula"), {"POST": self.h_play_formula}),
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
@@ -3469,6 +3513,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
+                (m_exact("/mock/connect"), {"GET": self.h_mock_connect}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
                 (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
@@ -3594,6 +3639,26 @@ def make_handler(ctx: Context, quiet: bool):
         # (0: as fast as the machine goes); `&fail503=N` answers the next N
         # card-file GETs 503, `&fail500=N` 500, `&drop=N` closes them
         # unanswered (a browser may retry those by itself).
+        def h_mock_connect(self, path):
+            """--connect's test hooks: `online=0|1` (the panel connected to
+            the server), `dark=0|1` (night mode), `slow_get=<ms>` (GET
+            /api/connect answers that late), `link=1` (a device pairs: the
+            window used, a controller added)."""
+            q = self.path.partition("?")[2]
+            with ctx.lock:
+                cx = ctx.connect
+                if cx is None:
+                    self.send_error_json(404, "no --connect")
+                    return
+                for key in ("online", "dark", "slow_get"):
+                    v = query_param(q, key)
+                    if v is not None:
+                        cx[key] = int(v)
+                if query_param(q, "link") == "1":
+                    cx["pairing"] = None
+                    cx["controllers"].append({"k": "%016x" % random.getrandbits(64), "label": "New phone", "f": 1, "added": int(time.time()), "added_by": None, "last_s": None})
+                self.send_json(200, {k: cx.get(k) for k in ("online", "dark", "slow_get", "in_flight")})
+
         def h_mock_io(self, path):
             _, _, query = self.path.partition("?")
             io = ctx.io
@@ -3697,6 +3762,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "variant": ctx.variant,
                     "layout": OTA_CURRENT[ctx.variant],
                     "features": features(ctx),
+                    **({"connect": connect_summary(ctx.connect)} if getattr(ctx, "connect", None) is not None else {}),
                     "psi_abi": PSI_ABI if ctx.formulas else None,
                     "uptime_secs": int(time.monotonic() - player.boot_time),
                     "t_ms": int((time.monotonic() - player.boot_time) * 1000),
@@ -4378,6 +4444,90 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.schedule.wake(minutes)
                 wake_until = ctx.schedule.wake_until_str()
             self.send_json(200, {"ok": True, "minutes": minutes, "wake_until": wake_until})
+
+        # -- Remote control (--connect; firmware src/connect/api.rs) ---------------
+
+        def h_cx_get(self, path):
+            with ctx.lock:
+                body = connect_json(ctx.connect)
+                slow = ctx.connect.get("slow_get", 0)
+            # (An answer made now, sent late: a read in flight across a POST.)
+            if slow:
+                with ctx.lock:
+                    ctx.connect["in_flight"] = ctx.connect.get("in_flight", 0) + 1
+                time.sleep(slow / 1000)
+                with ctx.lock:
+                    ctx.connect["in_flight"] -= 1
+            self.send_json(200, body)
+
+        def h_cx_put(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError:
+                req = None
+            ok = isinstance(req, dict) and req and set(req) <= {"enabled", "name"} \
+                and ("enabled" not in req or type(req["enabled"]) is bool) and ("name" not in req or isinstance(req["name"], str))
+            name = None
+            if ok and "name" in req:
+                name = CX_INVISIBLE.sub("", req["name"]).strip()
+                ok = len(name) <= 32 and len(name.encode()) <= 128
+            if not ok:
+                self.send_error_json(400, 'the body is {"enabled": true|false} and/or {"name": "..."} (32 characters at most)')
+                return
+            with ctx.lock:
+                cx = ctx.connect
+                if "enabled" in req:
+                    if req["enabled"] and not cx["enabled"]:
+                        cx["opened"] += 1
+                    if not req["enabled"]:
+                        cx["pairing"] = None
+                    cx["enabled"] = req["enabled"]
+                    cx["since"] = time.monotonic()
+                if name is not None:
+                    cx["name"] = name
+                self.send_json(200, connect_json(cx))
+
+        def h_cx_pair(self, path):
+            qr = query_param(self.path.partition("?")[2], "qr") == "1"
+            self.drain()
+            with ctx.lock:
+                cx = ctx.connect
+                if not cx["enabled"]:
+                    self.send_error_json(409, "Remote control is off: switch it on first")
+                    return
+                secret = "".join(random.choice("abcdefghijklmnopqrstuvwxyz234567") for _ in range(20))
+                dark = bool(cx.get("dark", 0))
+                qr = qr and not dark
+                cx["pairing"] = {"until": time.monotonic() + CX_PAIR_S, "qr": qr, "secret": secret}
+                cx["registered"] = True
+                self.send_json(200, {"link": "https://opendmd.dev/c#" + secret, "expires_s": CX_PAIR_S, "qr": qr, "dark": dark,
+                                     "online": bool(cx.get("online", 1))})
+
+        def h_cx_unpair(self, path):
+            with ctx.lock:
+                ctx.connect["pairing"] = None
+                self.send_json(200, connect_json(ctx.connect))
+
+        def h_cx_forget(self, path):
+            self.drain()
+            with ctx.lock:
+                cx = ctx.connect
+                cx["controllers"], cx["pairing"] = [], None
+                self.send_json(200, connect_json(cx))
+
+        def h_cx_remove(self, path):
+            k = path[len("/api/connect/controllers/"):]
+            with ctx.lock:
+                cx = ctx.connect
+                left = [c for c in cx["controllers"] if c["k"] != k]
+                if len(left) == len(cx["controllers"]):
+                    self.send_error_json(404, "no such controller")
+                    return
+                cx["controllers"] = left
+                self.send_json(200, connect_json(cx))
 
         def h_follow_test(self, path):
             raw = self.json_body()
@@ -5578,6 +5728,8 @@ def parse_args():
     ap.add_argument("--no-formulas", action="store_true",
                     help="a firmware build without Formulas (features [], psi_abi null: /api/play of one a 501, "
                          "look_formula a 400, a playlist's Formula lines skipped)")
+    ap.add_argument("--connect", action="store_true",
+                    help="a build with Remote control (features gain \"connect\"; the /api/connect routes, in memory)")
     ap.add_argument("--power-safe", action="store_true",
                     help="an ESP32-S3 in power-safe (its brownout-loop guard): the panel not started, reset_note "
                          "the firmware's power-safe note (src/s3board.rs NOTE), scan null")
@@ -5664,6 +5816,7 @@ def main():
         ctx.panel_id = panel_id(mac)
         ctx.variant = args.variant
         ctx.formulas = not args.no_formulas
+        ctx.connect = connect_state() if args.connect else None
         ctx.power_safe = args.power_safe
         if args.no_formulas:
             ctx.player.rebuild_playlist()

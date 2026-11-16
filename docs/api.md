@@ -909,7 +909,10 @@ Connect identity. `name`: the name a controller gave it (`""`: its
 hostname is shown). `controllers`: `[{k, label, f, added, added_by,
 last_s}]`, `k` the key's id (16 hex digits), `f` 1 for a key paired on the
 panel (it may add others), `added` Unix seconds (0: no clock then),
-`added_by` the key that added it (`null`: paired on the panel). `state` is
+`added_by` the key that added it (`null`: paired on the panel).
+`pairing`: an open pairing window, `{"expires_s", "qr"}` (seconds left,
+whether the panel shows its QR code), else `null`; its secret is never
+shown here (only `POST /api/connect/pair`'s caller gets the link). `state` is
 `off`, `waiting after boot`, `waiting for network`, `waiting for clock`,
 `waiting for quiet` (a LAN upload or heavy request in the last 10 s),
 `waiting for memory`, `registering`, `connecting`, `handshake`,
@@ -924,12 +927,50 @@ times a day). The panel's secret is never shown.
 
 ### PUT /api/connect
 
-`{"enabled": bool}`. Saved; on starts at once (no hold after boot, no
-backoff, also after a refusal or two crashes). Reply: as `GET`.
+`{"enabled": bool}` and/or `{"name": "…"}`; anything else is a `400`
+(both are checked before either is saved).
+`enabled`: saved; on starts at once (no hold after boot, no backoff, also
+after a refusal or two crashes); off also closes any pairing window.
+`name`: the panel's name as controllers see it, up to 32 characters
+(invisible and control characters dropped, trimmed); `""` puts the
+hostname back. Reply: as `GET`.
 
 ```sh
 curl -s -X PUT $DMD/api/connect --json '{"enabled":true}'
+curl -s -X PUT $DMD/api/connect --json '{"name":"Den panel"}'
 ```
+
+### POST /api/connect/pair
+
+Open a pairing window: a fresh secret, good for one browser, 5 minutes and
+three tries (any window already open goes). Reply: `{"link",
+"expires_s", "qr", "dark", "online"}`, `link` being
+`https://opendmd.dev/c#<secret>`: open it in the browser to link (it
+pairs through the Connect server). `online`: the panel is connected to
+the server now; if not, the window is announced once it is, and the
+link only works from then. `?qr=1`: the panel also shows the same link
+as a QR code, at a fixed mid brightness, until the window is used,
+cancelled or over, then "Remote control added" for 10 s after a
+pairing. In night mode (`dark`: the panel is off for the night) no code
+is shown (`qr` false): use the link. `409` while Remote control is off,
+before the panel has its identity (a minute after switching it on), or
+while the server refuses it (`refused`, `too_old`). Sent with
+`Cache-Control: no-store`. The iPhone app pairs the same way, without
+the QR code.
+
+**Set an API key first.** A device paired here may control the panel
+and add others; on a network with no API key, anyone on the network
+could open a window and pair a device of their own. The API key applies
+to this route as to every other.
+
+```sh
+curl -s -X POST "$DMD/api/connect/pair?qr=1"
+```
+
+### DELETE /api/connect/pair
+
+Close the pairing window, if one is open (its QR code goes). Reply: as
+`GET`.
 
 ### DELETE /api/connect/controllers/&lt;k&gt;
 

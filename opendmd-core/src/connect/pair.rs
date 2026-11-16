@@ -146,7 +146,12 @@ impl Window {
     /// A panel's pairing window for `S`, open from `now`.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn open(secret: String, now: Duration) -> Window {
-        Window { secret, until: now + PAIR_TTL, tries: PAIR_TRIES, open: true, invite: false }
+        Window::open_for(secret, now, PAIR_TTL)
+    }
+    /// The same, open for `ttl` (an emulator image's shorter one).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn open_for(secret: String, now: Duration, ttl: Duration) -> Window {
+        Window { secret, until: now + ttl, tries: PAIR_TRIES, open: true, invite: false }
     }
     /// An inviting controller's window for an invite secret.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
@@ -169,6 +174,11 @@ impl Window {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_open(&self, now: Duration) -> bool {
         self.open && now < self.until
+    }
+    /// The time left, while open.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn left(&self, now: Duration) -> Option<Duration> {
+        self.is_open(now).then(|| self.until - now)
     }
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn close(&mut self) {
@@ -254,6 +264,8 @@ mod tests {
         let s = secret();
         let mut w = Window::open(s.clone(), T0);
         assert!(w.is_open(T0 + PAIR_TTL - Duration::from_millis(1)));
+        assert_eq!(w.left(T0 + Duration::from_secs(60)), Some(PAIR_TTL - Duration::from_secs(60)));
+        assert_eq!(w.left(T0 + PAIR_TTL), None);
         assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0 + PAIR_TTL), Err(PairError::Expired));
         assert_eq!(w.check(&DEV, &PUB, L, &pair_mac(&s, &DEV, &PUB, L), T0), Err(PairError::Closed));
     }
