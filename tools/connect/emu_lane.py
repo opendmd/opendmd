@@ -38,8 +38,10 @@ disallowed (update, delete, wifi, reboot, ...), bad paths and arguments,
 an over-long body, a one-level key adding another, a removed key, a flood
 (the panel's own rate), chunks and unknown frame types (no answer).
 Sends' red: another key's `send` for the held transfer (`busy`, put
-straight onto the panel's socket); bytes that miss the signed hash
-(`end` bad-arg, the `.part` gone); a chunk outside the credit (put on
+straight onto the panel's socket), another key's other transfer while one is held
+(`busy`); a landed send signed again (answered as landed, no second
+file); bytes that miss the signed hash
+(`err` bad-arg, the `.part` gone); a chunk outside the credit (put on
 the panel's socket: abandoned, bad-arg, gone); over 512 KB (`too-big`);
 no card (`no-card`); a LAN upload under way (`busy`); a cancel (its
 `.part` gone); the quota spent (`quota`); and every credit the panel
@@ -748,6 +750,7 @@ class Lane:
         rec = self.rec()
         # (A's counter past the red cases' injected frames, this session.)
         a.n = max(a.n, 10**11 + 1000)
+        b.n = max(b.n, 10**11 + 1000)
         caps = self.srv.caps
         self.expect(caps.get("send") is True and caps.get("win") == 2, "hello's caps: sends on, a window of 2 chunks (the classic)", json.dumps(caps))
         root = EMU_DIR / "card" / "root"
@@ -793,7 +796,7 @@ class Lane:
         st_send = await self.status()
         stop.set()
         await watcher
-        self.expect(end and end.get("end") == "ok" and end.get("path") == "/gifs/Sent/lane-sent.gif", "send: the last credit says ok, with the path", json.dumps(end))
+        self.expect(end and end.get("done") is True and end.get("name") == "lane-sent.gif" and end.get("upto") == len(gif) + len(copy), "send: the last credit says done, with the saved name, upto the total", json.dumps(end))
         bad_credit = [c for c in self.srv.credits if c[1] > c[2] + c[3] * odc.MAX_CHUNK]
         self.expect(not bad_credit and not self.srv.refused.get("credit-beyond-win") and all(c.get("k") == a.k.hex() for c in credits),
                     "send: every credit within caps.win of the bytes sent, for its key", f"{len(credits)} credits, {self.srv.forwarded} chunks forwarded")
@@ -815,6 +818,12 @@ class Lane:
         self.report["send"] = {"bytes": len(gif) + len(copy), "wall_s": round(wall, 1), "credits": len(credits), "stack_unused": su,
                                "heap_before": st0.get("heap"), "heap_after": st_send.get("heap"), "heap_free_min_during": min(heap_lows) if heap_lows else None}
         self.expect(await no_part(), "send: no .part left", "")
+        # Signed again after it landed (a lost `done`): answered as landed.
+        files0 = await self.sent_listing()
+        r = await send(a, send_args(tid, "lane-sent.gif", gif, copy, play=True))
+        d = await a.until("credit", lambda m: m.get("id") == tid and m.get("done"), timeout=60)
+        self.expect(r and (r.get("r") or {}).get("offset") == len(gif) + len(copy) and d and d.get("name") == "lane-sent.gif" and await self.sent_listing() == files0,
+                    "a landed send signed again: ack offset = total, its done again, no second file", f"{json.dumps(r)} {json.dumps(d)}")
 
         # The same name again: the next one, never an overwrite (no copy:
         # any stale copy for that name goes).
@@ -822,7 +831,7 @@ class Lane:
         tid += 1
         r = await send(a, send_args(tid, "lane-sent.gif", small))
         _, end, _ = await stream(a, tid, small, timeout=120)
-        self.expect(r and r.get("ok") and end and end.get("path") == "/gifs/Sent/lane-sent_2.gif", "send: a taken name gets the next one", json.dumps(end))
+        self.expect(r and r.get("ok") and end and end.get("name") == "lane-sent_2.gif", "send: a taken name gets the next one", json.dumps(end))
         code, got = await self.get_bytes("/gifs/Sent/lane-sent.gif")
         self.expect(code == 200 and got == gif, "...and the first is untouched", f"{len(got)} B")
 
@@ -864,7 +873,7 @@ class Lane:
         self.expect(r and r.get("ok") and (r.get("r") or {}).get("resumed") and isinstance(off, int) and 0 < off <= at, f"resume by the same key after the reconnect: from {off} B", json.dumps(r))
         _, end, _ = await stream(a, tid, big, start=off, timeout=180)
         code, got = await self.get_bytes("/gifs/Sent/lane-big.gif")
-        self.expect(end and end.get("end") == "ok" and code == 200 and got == big, "the resumed send landed whole, byte for byte", f"{len(got)} of {len(big)} B")
+        self.expect(end and end.get("done") and code == 200 and got == big, "the resumed send landed whole, byte for byte", f"{len(got)} of {len(big)} B")
         self.expect(not self.srv.refused.get("credit-beyond-win"), "no credit past caps.win, the resume's included", "")
 
         # Red: bytes that miss the signed hash; the .part goes.
@@ -872,15 +881,15 @@ class Lane:
         r = await send(a, dict(send_args(tid, "lane-bad.gif", small), sha256="00" * 32))
         _, end, _ = await stream(a, tid, small, timeout=120)
         ls = await self.sent_listing()
-        self.expect(r and r.get("ok") and end and end.get("end") == "bad-arg" and "lane-bad.gif" not in ls and await no_part(),
-                    "red: bytes that miss the signed hash: end bad-arg, nothing landed, the .part gone", json.dumps(end))
+        self.expect(r and r.get("ok") and end and end.get("err") == "bad-arg" and "lane-bad.gif" not in ls and await no_part(),
+                    "red: bytes that miss the signed hash: err bad-arg, nothing landed, the .part gone", json.dumps(end))
         # Red: a chunk outside the credit, put straight on the panel's socket.
         tid += 1
         r = await send(a, send_args(tid, "lane-outside.gif", big))
         c0 = await a.until("credit", lambda m: m.get("id") == tid, timeout=60)
         await self.inject(odc.chunk_frame(tid, c0["upto"], big[c0["upto"]:c0["upto"] + 512]))
-        end = await a.until("credit", lambda m: m.get("id") == tid and "end" in m, timeout=60)
-        self.expect(end and end.get("end") == "bad-arg" and await no_part(), "red: a chunk outside the credit: abandoned (bad-arg), the .part gone", json.dumps(end))
+        end = await a.until("credit", lambda m: m.get("id") == tid and "err" in m, timeout=60)
+        self.expect(end and end.get("err") == "bad-arg" and await no_part(), "red: a chunk outside the credit: abandoned (bad-arg), the .part gone", json.dumps(end))
         # Red: over 512 KB.
         tid += 1
         r = await send(a, send_args(tid, "lane-huge.gif", b"GIF89a") | {"size": 512 * 1024 + 1})
@@ -915,19 +924,28 @@ class Lane:
         r = await a.ack(f)
         await asyncio.sleep(2)
         self.expect(had and r and r.get("ok") and await no_part() and "lane-cancel.gif" not in await self.sent_listing(), "send-cancel: ok, its .part gone", json.dumps(r))
-        # The quota: 1 MB announced each (each replaces the last: no refund)
-        # until it is spent.
-        n_ok, last = 0, None
+        # Another key's other transfer while one is held: busy. The same
+        # key's next replaces its stalled one. Then the quota: 1 MB
+        # announced each, each replacing the last (charged when accepted,
+        # none refunded) until it is spent.
+        n_ok, last, busy_other = 0, None, None
+
+        async def cancel(t):
+            f = a.frame("send-cancel", {"id": t})
+            await a.send(f)
+            return await a.ack(f)
         for _ in range(12):
             tid += 1
             last = await send(a, {"id": tid, "name": "lane-q.gif", "size": 512 * 1024, "sha256": "11" * 32, "copy_size": 512 * 1024, "copy_sha256": "22" * 32})
             if not (last and last.get("ok")):
                 break
             n_ok += 1
+            if busy_other is None:
+                b.sess = bytes.fromhex(self.rec().sess)
+                busy_other = await send(b, send_args(tid + 1000, "lane-other.gif", small))
+        self.expect(busy_other and busy_other.get("err") == "busy", "red: another key's other transfer while one is held: busy", json.dumps(busy_other))
+        await cancel(tid - 1)
         self.expect(last and last.get("err") == "quota" and 1 <= n_ok <= 7, "the panel's 8 MB a day: spent, then quota (charged when accepted, none refunded)", f"{n_ok} accepted, then {json.dumps(last)}")
-        f = a.frame("send-cancel", {"id": tid - 1})
-        await a.send(f)
-        await a.ack(f)
         await asyncio.sleep(2)
         self.expect(await no_part(), "the quota's held send cancelled: no .part left", "")
         st = await self.status()

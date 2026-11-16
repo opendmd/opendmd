@@ -18,7 +18,7 @@ later runs. Each run sends a generated noise GIF (nothing third-party; with
 --copy, the panel's own prepared copy of an earlier run's GIF is fetched
 and sent along) and, while it goes, reads the panel's `/api/status` each
 second over the LAN: the free heap and its floor, late frames (`misses`),
-`transfer`. The report per run: KB/s, credits, the last credit's `end`, the
+`transfer`. The report per run: KB/s, credits, the last credit (`done` or `err`), the
 card file byte-equal (fetched back over the LAN), heap low, late frames
 added. D4 passes on the classic when the heap stays over the session
 gate's floor (20 KB outside LAN load) and no steady-state late frames are
@@ -173,8 +173,8 @@ async def main():
             stop.set()
             await w
             st = lan(base, "GET", "/api/status", key=a.api_key)
-            back = lan(base, "GET", "/gifs/Sent/" + urllib.request.quote(name), key=a.api_key) if end and end.get("end") == "ok" else b""
-            r = {"run": run, "bytes": len(gif) + len(copy), "ack": ack, "end": end, "path": (end or {}).get("path"), "credits": len(credits),
+            back = lan(base, "GET", "/gifs/Sent/" + urllib.request.quote(end["name"]), key=a.api_key) if end and end.get("done") else b""
+            r = {"run": run, "bytes": len(gif) + len(copy), "ack": ack, "end": end, "path": "/gifs/Sent/" + end["name"] if end and end.get("done") else None, "credits": len(credits),
                  "kb_s": round((len(gif) + len(copy)) / 1024 / wall, 1) if wall > 0 else None, "byte_equal": back == gif,
                  "heap_free_min": min((x[0] for x in lows if x[0]), default=None), "heap_floor": min((x[1] for x in lows if x[1]), default=None),
                  "late_frames_added": ((st.get("misses") or {}).get("steady") or 0) - (misses0 or 0)}

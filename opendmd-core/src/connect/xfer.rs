@@ -10,8 +10,8 @@
 //!
 //! [`Slot`] is the panel's one transfer and its rules for a `send`: who may
 //! resume it (only the key that started it, the same id, file and hashes,
-//! within [`RESUME_FOR`]), what a second `send` does (the same key: the old
-//! one is abandoned; another key: `busy`), and the quota (`size +
+//! within [`RESUME_FOR`]), what a second `send` does while one is held
+//! (`busy`, from any key, until `send-cancel` or 10 minutes untouched), and the quota (`size +
 //! copy_size` charged once, when a send is accepted; never again on a
 //! resume, never refunded). The card (the `.part` files, the rename, the
 //! play) is the firmware's (`firmware/src/connect/xfer.rs`).
@@ -228,14 +228,20 @@ impl Transfer {
         format!(r#"{{"t":"credit","id":{},"upto":{},"k":"{}"}}"#, self.send.id, self.upto, hex(k))
     }
 
-    /// The transfer's last `credit`: `end` `"ok"` with the GIF's card path,
-    /// or an error code (`bad-arg` for bytes that do not hash to the signed
-    /// `send` or are not a GIF, `busy` for a card that failed, `not-allowed`
-    /// for a key removed meanwhile); `upto` is left where it was.
+    /// The transfer's last `credit` when it landed: `done` and the file
+    /// name it was saved under (after any `_2`), `upto` the total.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn end_for(&self, k: &KeyId, end: &str, path: Option<&str>) -> String {
-        let path = path.map(|p| format!(r#","path":{}"#, quote(p))).unwrap_or_default();
-        format!(r#"{{"t":"credit","id":{},"upto":{},"k":"{}","end":{}{path}}}"#, self.send.id, self.upto, hex(k), quote(end))
+    pub fn done_for(&self, k: &KeyId, name: &str) -> String {
+        done_message(self.send.id, self.total(), k, name)
+    }
+
+    /// The transfer's last `credit` when it failed: `err` (`bad-arg` for
+    /// bytes that miss the signed hashes, are not a GIF or a prepared copy,
+    /// or a chunk outside the credit; `busy` for a card that failed;
+    /// `not-allowed` for a key removed meanwhile); `upto` where it was.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn err_for(&self, k: &KeyId, err: &str) -> String {
+        format!(r#"{{"t":"credit","id":{},"upto":{},"k":"{}","err":{}}}"#, self.send.id, self.upto, hex(k), quote(err))
     }
 
     /// The card write returned: more credit if any is left to give. `None`
@@ -347,14 +353,27 @@ pub struct Held {
 }
 
 /// What a `send` that [`Slot::check`] took is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
     /// The held transfer, signed again by its key (after a reconnect):
     /// credit from where it was, nothing charged.
     Resume,
-    /// A new transfer; `replaces`: the same key's other one goes (no
-    /// refund).
+    /// A new transfer; `replaces`: the same key's held (stalled) one goes,
+    /// no refund.
     Start { replaces: bool },
+    /// The same `send` as one that already landed (within [`RESUME_FOR`]):
+    /// answered as landed again (`r.offset` the total and its `done`
+    /// credit), never a second file, nothing charged.
+    Landed { total: u32, name: String },
+}
+
+/// The last transfer that landed: who sent it, what, under which name.
+#[derive(Debug, Clone)]
+pub struct Landed {
+    pub k: KeyId,
+    pub send: SendArgs,
+    pub name: String,
+    pub at: Duration,
 }
 
 /// The panel's one transfer, and its quota (P1-PLAN 2.8 and the F1
@@ -362,6 +381,7 @@ pub enum Plan {
 #[derive(Debug, Clone)]
 pub struct Slot {
     pub held: Option<Held>,
+    pub landed: Option<Landed>,
     pub quota: Quota,
     window: u32,
 }
@@ -370,7 +390,7 @@ impl Slot {
     /// `window`: the panel's `caps.win`, the most chunks of credit at once.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(window: u32) -> Slot {
-        Slot { held: None, quota: Quota::default(), window: window.clamp(1, MAX_WINDOW) }
+        Slot { held: None, landed: None, quota: Quota::default(), window: window.clamp(1, MAX_WINDOW) }
     }
 
     /// A held transfer untouched for [`RESUME_FOR`] goes: the caller removes
@@ -388,9 +408,12 @@ impl Slot {
     ///
     /// - the held transfer's id from its own key with the same arguments:
     ///   [`Plan::Resume`]; with others: `bad-arg`;
-    /// - the held transfer's id, or any other, from another key: `busy`
-    ///   (resume is only for the key that started it);
-    /// - another id from the same key: a new start that replaces it;
+    /// - the same `send` as the last one that landed, from its key, within
+    ///   [`RESUME_FOR`]: [`Plan::Landed`];
+    /// - anything while another key's transfer is held: `busy` (resume is
+    ///   only for the key that started it);
+    /// - another id from the held transfer's own key: a new start that
+    ///   replaces the stalled one (no refund);
     /// - a new start whose `size + copy_size` does not fit the quota:
     ///   `quota`.
     ///
@@ -398,6 +421,9 @@ impl Slot {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check(&mut self, k: &KeyId, s: &SendArgs, now: Duration) -> Result<(Plan, Option<Held>), Refusal> {
         let expired = self.expire(now);
+        if let Some(l) = self.landed.as_ref().filter(|l| l.k == *k && l.send == *s && now.saturating_sub(l.at) <= RESUME_FOR) {
+            return Ok((Plan::Landed { total: l.send.size + l.send.copy_size, name: l.name.clone() }, expired));
+        }
         let replaces = match &self.held {
             Some(h) if h.k != *k => return Err(Refusal::Busy),
             Some(h) if h.t.send.id == s.id => {
@@ -420,8 +446,8 @@ impl Slot {
     }
 
     /// Start a transfer (after [`Plan::Start`], once its first `.part` is
-    /// open): `size + copy_size` charged now, once. The one it replaces, to
-    /// clean up. `Err(quota)` if the quota no longer fits (nothing changed).
+    /// open): `size + copy_size` charged now, once. Any held one (a caller
+    /// that skipped `check`), to clean up. `Err(quota)` if the quota no longer fits (nothing changed).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn start(&mut self, k: KeyId, s: SendArgs, now: Duration) -> Result<Option<Held>, Refusal> {
         if !self.quota.charge(u64::from(s.size) + u64::from(s.copy_size), now) {
@@ -450,6 +476,13 @@ impl Slot {
         }
         None
     }
+}
+
+/// A landed transfer's last `credit` (also said again for a `send` signed
+/// again after it landed: [`Plan::Landed`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn done_message(id: u32, total: u32, k: &KeyId, name: &str) -> String {
+    format!(r#"{{"t":"credit","id":{id},"upto":{total},"k":"{}","done":true,"name":{}}}"#, hex(k), quote(name))
 }
 
 /// The next name to try when one is taken (the web app's `nextName`): the
@@ -676,8 +709,8 @@ mod tests {
         let gif = vec![1u8; 3000];
         let t = Transfer::start(send(&gif, &[]), 2, Duration::ZERO);
         assert_eq!(t.credit_for(&[0xab; 8]), r#"{"t":"credit","id":77,"upto":2048,"k":"abababababababab"}"#);
-        assert_eq!(t.end_for(&[1; 8], "ok", Some("/gifs/Sent/cat \"2\".gif")), r#"{"t":"credit","id":77,"upto":2048,"k":"0101010101010101","end":"ok","path":"/gifs/Sent/cat \"2\".gif"}"#);
-        assert_eq!(t.end_for(&[1; 8], "bad-arg", None), r#"{"t":"credit","id":77,"upto":2048,"k":"0101010101010101","end":"bad-arg"}"#);
+        assert_eq!(t.done_for(&[1; 8], "cat \"2\".gif"), r#"{"t":"credit","id":77,"upto":3000,"k":"0101010101010101","done":true,"name":"cat \"2\".gif"}"#);
+        assert_eq!(t.err_for(&[1; 8], "bad-arg"), r#"{"t":"credit","id":77,"upto":2048,"k":"0101010101010101","err":"bad-arg"}"#);
     }
 
     const A: KeyId = [0xa; 8];
@@ -706,11 +739,13 @@ mod tests {
         assert_eq!(slot.check(&A, &s, t0).unwrap().0, Plan::Resume);
         assert!(slot.resume(&s, t0 + Duration::from_secs(1)));
         assert_eq!(slot.quota.used(t0), used);
-        // The same key, another id: replaces (no refund).
+        // The same key, another id: replaces its stalled one (no refund).
         assert_eq!(slot.check(&A, &other, t0).unwrap().0, Plan::Start { replaces: true });
         let old = slot.start(A, other.clone(), t0).unwrap();
         assert_eq!(old.map(|h| h.t.send.id), Some(77));
         assert_eq!(slot.quota.used(t0), used * 2);
+        // A cancel names the held one by id, from its key.
+        assert!(slot.cancel(&A, 78).unwrap().is_some());
     }
 
     #[test]
@@ -757,10 +792,29 @@ mod tests {
             }
         }
         assert_eq!(u64::from(n), QUOTA_BYTES / (2 * u64::from(MAX_FILE)));
-        // A resume of the held one is never refused for the quota.
+        // A resume of a held one is never refused for the quota.
         let mut s = big.clone();
         s.id = n;
+        slot.held = Some(Held { t: Transfer::start(s.clone(), 2, t0), k: A });
         assert_eq!(slot.check(&A, &s, t0).unwrap().0, Plan::Resume);
+    }
+
+    #[test]
+    fn a_landed_send_signed_again_is_answered_as_landed() {
+        let gif = vec![3u8; 4000];
+        let s = send(&gif, &[]);
+        let mut slot = Slot::new(2);
+        let t0 = Duration::from_secs(10);
+        slot.start(A, s.clone(), t0).unwrap();
+        slot.held = None;
+        slot.landed = Some(Landed { k: A, send: s.clone(), name: "cat_2.gif".into(), at: t0 });
+        let used = slot.quota.used(t0);
+        assert_eq!(slot.check(&A, &s, t0 + Duration::from_secs(5)).unwrap().0, Plan::Landed { total: 4000, name: "cat_2.gif".into() });
+        assert_eq!(slot.quota.used(t0), used);
+        // Not for another key, nor past the window: a new transfer.
+        assert_eq!(slot.check(&B, &s, t0).unwrap().0, Plan::Start { replaces: false });
+        assert_eq!(slot.check(&A, &s, t0 + RESUME_FOR + Duration::from_secs(1)).unwrap().0, Plan::Start { replaces: false });
+        assert_eq!(done_message(77, 4000, &A, "cat_2.gif"), r#"{"t":"credit","id":77,"upto":4000,"k":"0a0a0a0a0a0a0a0a","done":true,"name":"cat_2.gif"}"#);
     }
 
     #[test]

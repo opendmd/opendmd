@@ -152,7 +152,7 @@ refused whole.
 | panel → server | `pair-open` / `pair-close` | `pair_id` (hex), `ttl` (seconds) |
 | panel → server | `status` | section 7; only while watched |
 | panel → server → one controller | `ack` | section 5.4 |
-| panel → server → one controller | `credit` | `id`, `upto`, `k` (the key that started the transfer); the last one also `end` (and `path`), section 8 |
+| panel → server → one controller | `credit` | `id`, `upto`, `k` (the key that started the transfer); the last one also `done` and `name`, or `err`, section 8 |
 | panel → server → one guest | `paired` | `g`, then `k` and `mac2`, or `err` |
 | panel → server | `forget` | the last message under an identity being dropped: the server deletes its record |
 | server → panel | `watch` | `on`: whether any controller is attached |
@@ -390,12 +390,14 @@ server can show a controller a false state, never change the panel's.
   (no prepared copy) to 524,288, with `copy_sha256` exactly when it is
   not 0; `play` a boolean (default false). A panel whose `hello` said
   `caps.send: false` answers `not-allowed`.
-- Its `ack` comes once the panel has opened the file: `r {offset}` (0 for
-  a new transfer), then the first `credit`. Refusals: `busy` (a LAN upload
-  or an update under way: the LAN always wins; another controller's
-  transfer held), `no-card`, `quota`, `bad-arg` (the held transfer's id
-  with other arguments).
-- The bytes follow as one stream, the GIF's then the copy's, in `0x02`
+- Its `ack` comes once the panel has opened the file: ok with `r {offset}`,
+  always (0 for a new transfer, else where a resume carries on from; a
+  resume also says `resumed: true`), then the first `credit`. Refusals:
+  `busy` (a LAN upload or an update under way: the LAN always wins; or
+  another key's transfer held), `no-card`, `quota`, `bad-arg` (the held
+  transfer's id with other arguments).
+- The bytes follow as one stream, the GIF's then the copy's (the copy as
+  the web app's `prepareGif` makes it; none past 256 colours), in `0x02`
   chunks of at most 1,024 bytes, strictly in order, and only inside the
   panel's last `credit {id, upto, k}`. The panel grants more only after the
   card write returned, and never more than `caps.win` chunks past what it
@@ -410,20 +412,29 @@ server can show a controller a false state, never change the panel's.
   cap of at most 9, `docs/cache-format.md`), renames the GIF into place,
   moves the copy to its place under `/cache/`, and plays the GIF once if
   `play` (then the playlist carries on). It lands in no playlist.
-- **The last `credit`** of a transfer carries `end`: `"ok"` with `path`
-  (the GIF's card path, its final name), or an error code: `bad-arg` (the
-  bytes miss the signed hashes, are not a GIF or the copy not a prepared
-  copy, or a chunk came outside the credit), `busy` (the card failed),
-  `not-allowed` (the starting key was removed). Either way the `.part`
-  files are gone. (Older controllers ignore the field.)
+- **The last `credit`** of a transfer says how it ended. Landed (after the
+  last card write and both hash checks): `{id, upto: <total>, k, done:
+  true, name}`, `name` the file name it was saved under in `/gifs/Sent/`
+  (after any `_2`). Failed: `{id, upto, k, err}`, `upto` (always an integer) where it was and
+  `err` a code: `bad-arg` (the bytes miss the signed hashes, are not a GIF
+  or the copy not a prepared copy, or a chunk came outside the credit),
+  `busy` (the card failed), `not-allowed` (the starting key was removed).
+  Either way the `.part` files are gone.
 - Resume: the panel keeps `{id, offset, hash state}` in RAM for 10 minutes
   after the last progress; the same `send` signed again by **the key that
   started it** (after a reconnect) gets `ack r {offset, resumed: true}` and
-  `credit` from the offset, nothing charged again. Another key's `send`
-  while it is held is `busy`; the same key's `send` with another id
-  abandons it and starts anew. `send-cancel {id}` from its key abandons
-  it (another key's: `not-allowed`; no such transfer: ok). `.part` files
-  are removed at boot.
+  `credit` from the offset, nothing charged again; a controller uses only
+  the credits that come after that ack. Another key's `send` while it is
+  held is `busy`; the same key's `send` for another transfer replaces its
+  stalled one (abandoned, no refund). The same `send` signed again after
+  its transfer **landed** (within the 10 minutes, from its key: a lost
+  `done`) answers ack ok `r {offset: <total>}` and its `done` credit again:
+  never a second file, nothing charged. `send-cancel {id}` from its key
+  abandons it, in any later session too (another key's: `not-allowed`; no
+  such transfer: ok). `.part` files are removed at boot.
+- `hello`'s `caps {send, win}` are the panel's own: `send` true only when
+  this panel takes sends (a build or a run-time switch can turn them off),
+  `win` the window above. The server passes them to controllers.
 - Quotas: 8 MB per rolling 24 h on the panel (`size + copy_size` charged
   when a send is accepted, never on a resume, never refunded), 16 MB and
   60 sends a day per panel at the server (`quota`).

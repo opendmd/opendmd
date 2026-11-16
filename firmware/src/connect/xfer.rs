@@ -14,7 +14,9 @@
 //!   `caps.win` chunks, 2 KB on the classic) and [`CMD_QUEUE`] commands.
 //! - **The rules** are the core's [`Slot`]: one transfer at a time; a
 //!   resume only for the key that started it, with the same id, file and
-//!   hashes, within 10 minutes; `size + copy_size` charged once when a send
+//!   hashes, within 10 minutes (one that already landed is answered as
+//!   landed again, never written twice); another key's `send` meanwhile
+//!   is `busy`, the same key's next replaces its stalled one; `size + copy_size` charged once when a send
 //!   is accepted (its first `.part` open), never again on a resume, never
 //!   refunded. Before them: sends switched off ([`super::sends_on`]:
 //!   `not-allowed`), a LAN upload or an update under way (`busy`: the LAN
@@ -30,8 +32,8 @@
 //!   `/gifs/Sent/<name>` (never over another: a taken name gets the web
 //!   app's next name), the copy moved to its place in `/cache/` (a stale
 //!   one there goes), the FAT index and the cache told, as a LAN upload
-//!   does; then played once (`play`). The last `credit` says how it ended
-//!   (`end`). `.part` files left by a restart go at the first turn with
+//!   does; then played once (`play`). The last `credit` says how it ended:
+//!   `done` with the saved `name`, or `err`. `.part` files left by a restart go at the first turn with
 //!   the card usable.
 //! - **A session that ends** drops what was queued and closes the file;
 //!   the transfer stays for a resume (the sender signs `send` again) until
@@ -43,7 +45,7 @@ use crate::config;
 use crate::stream;
 use opendmd_core::connect::keys::KeyId;
 use opendmd_core::connect::proto::{self, Accepted, Command as Remote, Refusal, SendArgs};
-use opendmd_core::connect::xfer::{self, parse_chunk, Held, Plan, Slot, XferError};
+use opendmd_core::connect::xfer::{self, parse_chunk, Held, Landed, Plan, Slot, XferError};
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 
@@ -85,6 +87,9 @@ pub(super) struct Xfer {
     pub credits: proto::Bucket,
     /// The `.part` files a restart left were removed.
     pub swept: bool,
+    /// A text to say right after the `ack` being answered (a landed
+    /// send's `done`, said again).
+    pub after_ack: Option<String>,
 }
 
 impl Xfer {
@@ -98,6 +103,7 @@ impl Xfer {
             credit_due: false,
             credits: proto::Bucket::new(CREDITS_PER_S, core_now()),
             swept: false,
+            after_ack: None,
         }
     }
 
@@ -217,6 +223,9 @@ impl Client {
                 XferIn::Cmd(acc) => {
                     let ack = self.xfer_cmd(acc);
                     self.say(&ack);
+                    if let Some(m) = self.xfer.after_ack.take() {
+                        self.say(&m);
+                    }
                     // The credit right behind its ack.
                     self.say_credit();
                 }
@@ -329,8 +338,14 @@ impl Client {
                 log::info!("connect: a send resumed at {off} B");
                 Ok(Some(format!(r#"{{"offset":{off},"resumed":true}}"#)))
             }
+            Plan::Landed { total, name } => {
+                // Signed again after it landed (its `done` was lost): the
+                // same answer, never a second file.
+                self.xfer.after_ack = Some(xfer::done_message(s.id, total, &k, &name));
+                Ok(Some(format!(r#"{{"offset":{total}}}"#)))
+            }
             Plan::Start { .. } => {
-                // The one it replaces stops writing first.
+                // The stalled one it replaces stops writing first.
                 self.xfer.out = None;
                 let (gif, _) = parts(&s);
                 let _ = fs::create_dir_all(SENT);
@@ -349,7 +364,7 @@ impl Client {
                 match self.xfer.slot.start(k, s, now) {
                     Ok(old) => {
                         if let Some(old) = old {
-                            log::info!("connect: a send replaced by its controller's next");
+                            log::info!("connect: a stalled send replaced by its controller's next");
                             self.abandon(old, None);
                         }
                     }
@@ -446,7 +461,7 @@ impl Client {
             let _ = fs::remove_file(&copy);
         }
         if let Some(e) = end {
-            let m = h.t.end_for(&h.k, e, None);
+            let m = h.t.err_for(&h.k, e);
             self.say(&m);
         }
     }
@@ -495,8 +510,9 @@ impl Client {
         }
         let _ = fs::remove_file(&copy_part);
         log::info!("connect: a send landed: {card} ({} B, copy {} B)", h.t.send.size, h.t.send.copy_size);
-        let m = h.t.end_for(&h.k, "ok", Some(&card));
+        let m = h.t.done_for(&h.k, &name);
         self.say(&m);
+        self.xfer.slot.landed = Some(Landed { k: h.k, send: h.t.send.clone(), name: name.clone(), at: core_now() });
         if h.t.send.play {
             // Once, as a LAN "Show on panel" (the same validation and play).
             match self.play(card) {

@@ -245,7 +245,7 @@ class Server:
                 x[2] = m["upto"]
                 if not x[0].closed:
                     await x[0].send_str(text)
-                if "end" in m:
+                if "done" in m or "err" in m:
                     rec.transfers.pop(m.get("id"), None)
         elif t == "status":
             await self.to_ctls(rec, m)

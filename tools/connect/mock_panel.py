@@ -9,7 +9,7 @@ command with odc.Session (the panel's rules), pairs a guest through a
 window it opens, acks, and sends status while watched; takes a GIF send
 by the panel's rules (credit within `caps.win`, resume only for the
 starting key, `size + copy_size` charged once, both hashes, the last
-`credit`'s `end`), keeping the files in memory (`landed`). A pretend
+`credit`'s `done` + `name`, or `err`), keeping the files in memory (`landed`). A pretend
 player underneath: no card, no display, no device.
 
     uv run tools/connect/mock_panel.py --server http://127.0.0.1:8787
@@ -59,6 +59,7 @@ class Panel:
         self.xfer: dict | None = None  # the held transfer
         self.quota_used = 0
         self.landed: dict[str, tuple[bytes, bytes]] = {}  # name -> (gif, copy)
+        self.last_landed = None  # (k, args, name, when)
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -151,12 +152,12 @@ class Panel:
         await self.send({"t": "pair-close", "pair_id": self.window.id().hex()})
         await self.send({"t": "paired", "g": g, "k": key.k.hex(), "mac2": mac2.hex()})
 
-    def credit(self, x, end=None, path=None) -> dict:
+    def credit(self, x, err=None, name=None) -> dict:
         m = {"t": "credit", "id": x["a"]["id"], "upto": x["upto"], "k": x["k"].hex()}
-        if end is not None:
-            m["end"] = end
-        if path is not None:
-            m["path"] = path
+        if err is not None:
+            m["err"] = err
+        if name is not None:
+            m["done"], m["name"] = True, name
         return m
 
     async def on_chunk(self, frame: bytes):
@@ -191,8 +192,9 @@ class Panel:
         while name.lower() in (n.lower() for n in self.landed):
             name = odc.next_name(name)
         self.landed[name] = (gif, copy)
+        self.last_landed = (x["k"], a, name, time.monotonic())
         path = f"/gifs/Sent/{name}"
-        await self.send(self.credit(x, "ok", path))
+        await self.send(self.credit(x, name=name))
         if a["play"]:
             self.path = path
 
@@ -212,6 +214,10 @@ class Panel:
                 x["upto"] = min(x["off"] + self.win * odc.MAX_CHUNK, a["size"] + a["copy_size"])
                 x["touched"] = now
                 return {"offset": x["off"], "resumed": True}, x
+        l = self.last_landed
+        if l is not None and l[0] == k and l[1] == a and now - l[3] <= odc.RESUME_S:
+            total = a["size"] + a["copy_size"]
+            return {"offset": total}, {"a": a, "k": k, "upto": total, "landed": l[2]}
         cost = a["size"] + a["copy_size"]
         if self.quota_used + cost > odc.QUOTA_BYTES:
             raise odc.Bad("quota")
@@ -266,7 +272,7 @@ class Panel:
                 await self.send(odc.Refusal(str(e), k, n).ack())
                 return
             await self.send(odc.ack_ok(k, n, r))
-            await self.send(self.credit(x))
+            await self.send(self.credit(x, name=x.get("landed")))
             return
         elif c == "send-cancel":
             if self.xfer is not None and self.xfer["a"]["id"] == a["id"]:

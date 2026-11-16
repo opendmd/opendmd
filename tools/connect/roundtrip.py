@@ -160,7 +160,7 @@ async def stream(ctl, tid: int, data: bytes, start: int = 0, stop: int | None = 
         if m is None:
             return credits, None, at
         credits.append(m)
-        if "end" in m:
+        if "done" in m or "err" in m:
             return credits, m, at
         upto = m["upto"]
 
@@ -394,14 +394,14 @@ async def main():
         r = await a.ack(f)
         ok(r and r.get("ok") and r.get("r") == {"offset": 0}, "send: ack ok, from offset 0")
         credits, end, _ = await stream(a, 41, gif + copy)
-        ok(end and end.get("end") == "ok" and end.get("path") == "/gifs/Sent/sent.gif" and panel.landed["sent.gif"] == (gif, copy), "send: landed byte for byte (GIF and copy), the last credit says ok")
+        ok(end and end.get("done") is True and end.get("name") == "sent.gif" and end.get("upto") == len(gif) + len(copy) and panel.landed["sent.gif"] == (gif, copy), "send: landed byte for byte (GIF and copy), the last credit says done, with the name")
         ok(all(c["k"] == a.k.hex() for c in credits) and not server.refused.get("credit-beyond-win"), f"send: every credit for its key, none past caps.win ({len(credits)} credits)")
         ok(panel.path == "/gifs/Sent/sent.gif" and panel.quota_used == len(gif) + len(copy), "send: played, size + copy_size charged")
         f = a.frame("send", send_args(42, "sent.gif", gif))
         await a.send(f)
         await a.ack(f)
         _, end, _ = await stream(a, 42, gif)
-        ok(end and end.get("path") == "/gifs/Sent/sent_2.gif", "send: a taken name gets the next one, never an overwrite")
+        ok(end and end.get("name") == "sent_2.gif", "send: a taken name gets the next one, never an overwrite")
         # Red: a chunk past the credit is dropped by the server.
         big = b"GIF89a" + os.urandom(9000)
         f = a.frame("send", send_args(43, "big.gif", big))
@@ -434,14 +434,31 @@ async def main():
         off = (r or {}).get("r", {}).get("offset")
         ok(r and r.get("ok") and r["r"].get("resumed") and off == panel.xfer["off"] and off > 0, f"resume after a reconnect: from {off}")
         _, end, _ = await stream(a, 43, big, start=off)
-        ok(end and end.get("end") == "ok" and panel.landed["big.gif"][0] == big and panel.quota_used == used, "resumed send landed whole, nothing charged again")
+        ok(end and end.get("done") and panel.landed["big.gif"][0] == big and panel.quota_used == used, "resumed send landed whole, nothing charged again")
         # Red: a wrong hash: refused at the end.
         bad = dict(send_args(44, "bad.gif", gif), sha256="00" * 32)
         f = a.frame("send", bad)
         await a.send(f)
         await a.ack(f)
         _, end, _ = await stream(a, 44, gif)
-        ok(end and end.get("end") == "bad-arg" and "bad.gif" not in panel.landed, "red: bytes that miss the signed hash: end bad-arg, nothing landed")
+        ok(end and end.get("err") == "bad-arg" and "bad.gif" not in panel.landed, "red: bytes that miss the signed hash: err bad-arg, nothing landed")
+        # A send signed again after it landed: answered as landed, no second file.
+        n_files, used = len(panel.landed), panel.quota_used
+        f = a.frame("send", send_args(43, "big.gif", big))
+        await a.send(f)
+        r = await a.ack(f)
+        m = await a.until("credit", lambda m: m.get("id") == 43 and m.get("done"))
+        ok(r and r.get("r") == {"offset": len(big)} and m and m.get("name") == "big.gif" and m.get("upto") == len(big) and len(panel.landed) == n_files and panel.quota_used == used,
+           "a landed send signed again: ack offset = total, its done again, no second file, nothing charged")
+        # The same key's next send replaces its own stalled one.
+        f = a.frame("send", send_args(46, "stall.gif", big))
+        await a.send(f)
+        await a.ack(f)
+        f = a.frame("send", send_args(47, "next.gif", gif))
+        await a.send(f)
+        r = await a.ack(f)
+        _, end, _ = await stream(a, 47, gif)
+        ok(r and r.get("ok") and end and end.get("name") == "next.gif", "the same key's next send replaces its stalled one")
         # Red: over the quota.
         panel.quota_used = odc.QUOTA_BYTES - 10
         f = a.frame("send", send_args(45, "q.gif", gif))
