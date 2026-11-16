@@ -1172,7 +1172,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let snap = status_snapshot(&c.status);
         // Sized on the strings as escaped: a title of quotes doubles.
         let strings = json_string_len(&snap.path) + json_string_len(&snap.title) + json_string_len(&snap.manifest)
-            + json_string_len(&snap.next);
+            + json_string_len(&snap.next) + snap.sd_error.as_deref().map_or(0, json_string_len);
         let mut ev = crate::events::Event::new(EVENT_ROOM + strings)?;
         event_json(&snap, brightness, &mut ev);
         Some(ev)

@@ -81,8 +81,10 @@ const EMPTY_PLAYLIST: &str = "The playlist is empty";
 const CARD_UNREADABLE: &str = "Card unreadable: format in app";
 /// ... and while it does.
 const CARD_FORMATTING: &str = "Formatting the card";
-/// ... and when it has stopped answering until its power goes (`sd.stuck`).
-const CARD_STUCK: &str = "Card stuck: unplug power 10 s";
+/// ... and when no card answers after a restart that kept its power: none
+/// in the socket, or one that has stopped answering until its power goes
+/// (`sd.stuck`).
+const CARD_STUCK: &str = "No card? Else unplug power 10 s";
 // The small font's 4 px advance: 32 characters fill the 128 px panel.
 const _: () = assert!(CARD_UNREADABLE.len() <= 32 && CARD_FORMATTING.len() <= 32 && CARD_STUCK.len() <= 32);
 /// How often the text is read from status.

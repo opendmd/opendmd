@@ -25,8 +25,11 @@
 //! reset can stay silent to every CMD0 until its power is removed (seen
 //! twice on a test board's passive SD module): no software retry
 //! helps, so after [`SILENT_STREAK`] silent checks in a row on a boot that
-//! was not a power-on, status says so ([`NOT_ANSWERING`]). After a power-on
-//! a silent card is most likely no card, which the old words still say.
+//! did not cut the card's power (not a power-on or a brownout), status says
+//! so ([`NOT_ANSWERING`]), worded for both cases: on the wire a wedged card
+//! and an empty socket (a card pulled from a running display) look the
+//! same. After a power-on a silent socket is most likely empty, which the
+//! old words still say.
 
 use core::fmt::Write as _;
 
@@ -36,11 +39,13 @@ pub const CMD0_TRIES: u8 = 3;
 /// ACMD41s at most, [`ACMD41_PAUSE_MS`] apart: the spec's 1 s.
 pub const ACMD41_MAX: u16 = 100;
 pub const ACMD41_PAUSE_MS: u32 = 10;
-/// Silent checks in a row before status says to cut the power.
-pub const SILENT_STREAK: u32 = 6;
-/// `sd.error` once [`SILENT_STREAK`] is reached (not after a power-on).
+/// Silent checks in a row before status says to cut the power (each
+/// check already sends [`CMD0_TRIES`] CMD0s).
+pub const SILENT_STREAK: u32 = 3;
+/// `sd.error` once [`SILENT_STREAK`] is reached (not after a power-on):
+/// for an empty socket and a card that has stopped answering alike.
 pub const NOT_ANSWERING: &str =
-    "The card isn't answering. Unplug the power for 10 seconds, then plug it back in.";
+    "No card found. If a card is in, unplug the power for 10 seconds, then plug it back in.";
 
 /// The bus the check runs on: full duplex, MSB first, mode 0.
 pub trait Wire {
@@ -310,7 +315,8 @@ impl core::fmt::Display for Hex<'_> {
 
 /// `sd.error` for a mount that failed after a check: [`NOT_ANSWERING`]
 /// once `silent` checks in a row reach [`SILENT_STREAK`] on a boot that was
-/// not a power-on, else the class in words, then the driver's error.
+/// not a power-on (`poweron`: or a brownout: the card's power was cut), else
+/// the class in words, then the driver's error.
 pub fn mount_error(class: Class, silent: u32, poweron: bool, driver: &str) -> String {
     if stuck(class, silent, poweron) {
         return NOT_ANSWERING.to_string();

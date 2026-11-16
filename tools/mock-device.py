@@ -313,8 +313,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `sd` is `{mounted: true, readable: false, error: "card not readable: …"}`
   and nothing plays (`now_playing.path` "", `entries` 0, `index_state`
   `unavailable`); `none`, no card (`mounted: false`, `sd.check` a silent
-  check); `stuck`, a card silent to every command since a restart that kept
-  its power (`sd.stuck` true, `sd.error` the advice to cut the power:
+  check); `stuck`, no answer to any command since a restart that kept its
+  power (no card, or one stuck: `sd.stuck` true, `sd.error` says to check
+  for a card and else to cut the power:
   firmware `opendmd_core::sd_check::NOT_ANSWERING`). Only `/api/status`,
   `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`/`log`
   follow it; the card copy is still served. `POST /api/card/format`
@@ -3198,14 +3199,14 @@ def apply_card_speed(ctx: "Context") -> None:
 SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
 
 
-SD_NOT_ANSWERING = "The card isn't answering. Unplug the power for 10 seconds, then plug it back in."
+SD_NOT_ANSWERING = "No card found. If a card is in, unplug the power for 10 seconds, then plug it back in."
 SD_SILENT_WORDS = "the card gives no answer at all (no card in the socket, or one that has stopped answering)"
 
 
 def sd_check_silent(attempt: int, in_a_row: int) -> dict:
     """`sd.check` for a card that answered nothing (firmware `sd.rs`)."""
     return {"class": "silent", "words": SD_SILENT_WORDS, "attempt": attempt,
-            "silent_in_a_row": in_a_row, "stuck": in_a_row >= 6, "ms": 2,
+            "silent_in_a_row": in_a_row, "stuck": in_a_row >= 3, "ms": 2,
             "miso_cs_high": "high", "miso_cs_low": "high", "cmd0": " ".join(["ff"] * 8),
             "cmd0_tries": 3, "cmd8": None, "acmd41": None}
 
@@ -3231,9 +3232,10 @@ def sd_fields(ctx: "Context") -> dict:
                     error=SD_SILENT_WORDS + "; no card, or card init failed: ESP_ERR_TIMEOUT",
                     check=sd_check_silent(2, 1))
     elif ctx.sd_state == "stuck":
-        # A card silent to every CMD0 since a restart that kept its power.
-        base.update(mounted=False, readable=False, capacity_bytes=0, card_id=None, attempts=8,
-                    error=SD_NOT_ANSWERING, stuck=True, check=sd_check_silent(8, 7))
+        # No answer to any CMD0 since a restart that kept its power (no card,
+        # or one that has stopped answering).
+        base.update(mounted=False, readable=False, capacity_bytes=0, card_id=None, attempts=4,
+                    error=SD_NOT_ANSWERING, stuck=True, check=sd_check_silent(4, 3))
     out = {**base, **ctx.sd}
     if ctx.sd_state in ("none", "stuck"):
         out["clock_khz"] = None
@@ -5749,7 +5751,7 @@ def parse_args():
     ap.add_argument("--sd", choices=["ok", "unreadable", "none", "slowed", "stuck"], default="ok",
                     help="the card: ok, unreadable (mounts, exFAT: nothing plays), none, slowed "
                          "(readable, set to fast, and already slowed to 20 MHz after errors), or stuck "
-                         "(silent since a restart that kept its power: sd.stuck, the power advice)")
+                         "(no answer since a restart that kept its power: sd.stuck, the power advice)")
     ap.add_argument("--taken", default="other-display=192.0.2.42",
                     help="NAME=IP,... : display names other devices answer to (<name>.local); "
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")

@@ -122,6 +122,13 @@ pub fn stop_transfers(timeout: std::time::Duration) -> bool {
     done
 }
 
+/// This boot cut the card's power: a power-on or a brownout (as `main`'s
+/// `sdhealth::boot` treats them). A silent socket then is most likely empty.
+fn power_was_cut() -> bool {
+    use opendmd_core::restarts::Reset;
+    matches!(crate::restarts::reset_now(), Reset::PowerOn | Reset::Brownout)
+}
+
 /// The check's bus: the socket's SPI peripheral at 400 kHz, CS by hand.
 struct CheckWire<'a> {
     bus: SpiBusDriver<'a, SpiDriver<'a>>,
@@ -217,7 +224,9 @@ impl SdBus {
             self.failed += 1;
             anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
         }
-        let check = (self.failed > 0).then(|| self.check());
+        // After a failed attempt; with the budget spent (the card failed
+        // repeatedly) from the first: ~1 ms on a silent card.
+        let check = (self.failed > 0 || capped).then(|| self.check());
         let card = match self.init(speed_khz) {
             Ok(c) => c,
             Err(e) => {
@@ -309,7 +318,7 @@ impl SdBus {
         unsafe { esp_idf_sys::gpio_reset_pin(cs_pin) };
         let class = found.class();
         self.silent = if class == Class::Silent { self.silent + 1 } else { 0 };
-        let poweron = crate::restarts::reset_now() == opendmd_core::restarts::Reset::PowerOn;
+        let poweron = power_was_cut();
         let stuck = sd_check::stuck(class, self.silent, poweron);
         STUCK.store(stuck, Relaxed);
         let mut json = format!(
@@ -329,7 +338,7 @@ impl SdBus {
 
     /// The mount error after a check: in words, the driver's error after them.
     fn explain(&self, check: &Check, e: &anyhow::Error) -> anyhow::Error {
-        let poweron = crate::restarts::reset_now() == opendmd_core::restarts::Reset::PowerOn;
+        let poweron = power_was_cut();
         anyhow::anyhow!(sd_check::mount_error(check.class(), self.silent, poweron, &format!("{e:#}")))
     }
 
