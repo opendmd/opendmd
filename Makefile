@@ -1527,9 +1527,8 @@ emu-s3-probe: emu-build
 #
 #   carrier     a normal device (the release feature set: web app, card,
 #               Formulas) on the bench WiFi, with all-psram's switches and
-#               the Connect probe compiled in but off
-#               (OPENDMD_CONNECT_ENABLED=0: POST
-#               /api/debug/connect/config?enabled=1 starts it); the card at
+#               the Connect probe compiled in but off (Remote control is
+#               off until switched on over the LAN, `cx_on`); the card at
 #               20 MHz (card_speed safe only on the S3), the panel clock the
 #               panel timing's i2s_speed exactly (8 MHz by default; 16, 20);
 #               the beam raced off GDMA's OUT_DSCR (NVS `scan_reg` dscr,
@@ -1587,7 +1586,6 @@ S3_FEATURES_jit := psi-probe
 # I/O on what should be a normal device.
 S3_FEATURES_carrier := $(S3_COMMON),psram-tls
 S3_SDK_carrier := $(S3_SDK_all-psram)
-S3_ENV_carrier := OPENDMD_CONNECT_ENABLED=0
 S3_FEATURES_carrier-connect := dev-credentials,bench,psram-tls,connect
 S3_SDK_carrier-connect := $(S3_SDK_carrier)
 # The app spare each image must leave: the release's 64 KB for phase 2's,

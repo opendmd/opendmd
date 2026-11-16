@@ -505,6 +505,9 @@ pub struct Lite {
     pub handshake_ms: Option<u32>,
     pub last_error: Option<String>,
     pub last_error_s: u32,
+    /// While "waiting for memory": the condition unmet ("internal heap
+    /// 77 KB < 100 KB"); `None` in any other state.
+    pub waiting: Option<String>,
     /// The server refused this panel's identity (4403, or an unknown id):
     /// Settings says to set Remote control up again.
     pub refused: bool,
@@ -526,6 +529,7 @@ pub static LITE: Mutex<Lite> = Mutex::new(Lite {
     handshake_ms: None,
     last_error: None,
     last_error_s: 0,
+    waiting: None,
     refused: false,
     too_old: false,
     watched: false,
@@ -550,14 +554,34 @@ fn uptime_s() -> u32 {
 pub(crate) fn set_state(s: &'static str) {
     lite(|l| {
         if l.state != s {
+            if s == WAITING_FOR_MEMORY {
+                log::info!("connect: waiting for memory");
+            }
             l.state = s;
             l.since_s = uptime_s();
+            l.waiting = None;
         }
     });
     tele(|t| {
         if t.state != s {
             t.state = s;
             t.since_s = uptime_s();
+        }
+    });
+}
+
+/// The state a handshake waits in for the heap gate.
+pub(crate) const WAITING_FOR_MEMORY: &str = "waiting for memory";
+
+/// What the heap gate found unmet, for `waiting` (replaced only when it
+/// reads differently).
+#[optimize(size)]
+#[inline(never)]
+pub(crate) fn set_waiting(unmet: opendmd_core::connect::gate::Unmet) {
+    let d = unmet.describe();
+    lite(|l| {
+        if l.waiting.as_deref() != Some(d.as_str()) {
+            l.waiting = Some(d);
         }
     });
 }
@@ -595,7 +619,7 @@ fn lite_fields() -> String {
     #[cfg(not(feature = "connect-test"))]
     let stack = "";
     format!(
-        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"watched":{},"last_error":{},"last_error_s":{}{stack}"#,
+        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"watched":{},"last_error":{},"last_error_s":{},"waiting":{}{stack}"#,
         json_string(l.state),
         l.since_s,
         l.opened,
@@ -607,6 +631,7 @@ fn lite_fields() -> String {
         l.watched,
         l.last_error.as_deref().map_or_else(|| "null".to_string(), json_string),
         l.last_error_s,
+        l.waiting.as_deref().map_or_else(|| "null".to_string(), json_string),
     )
 }
 

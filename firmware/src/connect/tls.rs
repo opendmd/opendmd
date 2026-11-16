@@ -144,7 +144,7 @@ pub static TLS_PEAK: AtomicI32 = AtomicI32::new(0);
 /// Of [`TLS_IN_USE`], the bytes in PSRAM (`psram-tls`, an ESP32-S3
 /// measurement build), and the allocations that wanted PSRAM and got
 /// internal RAM.
-#[cfg(all(esp32s3, feature = "psram-tls"))]
+#[cfg(all(esp32s3, feature = "psram-tls", feature = "connect-measure"))]
 pub static TLS_PSRAM: AtomicI32 = AtomicI32::new(0);
 #[cfg(all(esp32s3, feature = "psram-tls"))]
 pub static TLS_FELL_BACK: AtomicU32 = AtomicU32::new(0);
@@ -155,7 +155,7 @@ compile_error!("psram-tls is an ESP32-S3 measurement switch (VARIANT=s3)");
 #[cfg(all(esp32s3, feature = "psram-tls"))]
 const _: u32 = sys::CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC;
 
-#[cfg(all(esp32s3, feature = "psram-tls"))]
+#[cfg(all(esp32s3, feature = "psram-tls", feature = "connect-measure"))]
 #[optimize(size)]
 #[inline(never)]
 fn is_psram(p: *mut c_void) -> bool {
