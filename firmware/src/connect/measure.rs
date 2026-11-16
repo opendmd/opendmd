@@ -1,10 +1,11 @@
-//! Spike S0's measuring half (feature `connect-measure`, never in a
-//! shipping build; it goes with Connect P1's last branch): the `connect`
-//! telemetry in `/api/status`, mbedTLS's byte counts, and the test hooks
-//! `GET /api/debug/connect`, `POST /api/debug/connect/<what>` the device
-//! measurements drive (`tools/connect-s0/`): `config` (server, pings,
-//! tickets, the heap gates), `handshakes` (M4 full, M5 resumed), `ed25519`
-//! (M9), `stop`, `reconnect`, `reset`, `crash` (the crash guard's test).
+//! The device tests' measuring half (feature `connect-measure`, never in a
+//! shipping build: what is left of spike S0's after Connect P1's last
+//! branch, kept for device tests D1, D3 and D5): the `connect` telemetry in
+//! `/api/status`, mbedTLS's byte counts, and the test hooks
+//! `GET /api/debug/connect`, `POST /api/debug/connect/<what>` the scripts in
+//! `tools/connect-device/` drive: `config` (pings, tickets, the heap gates;
+//! never the server), `handshakes` (full or resumed, at an interval),
+//! `stop`, `reconnect`, `reset`.
 //!
 //! Without the feature only the [`Tele`] type is compiled (its closures
 //! are dead code) and [`tele`] runs nothing.
@@ -24,13 +25,11 @@ use {
 
 /// What the client runs with. Fixed in a shipping build
 /// ([`Cfg::defaults`]); a measuring build's `POST /api/debug/connect/config`
-/// changes it (RAM only).
+/// changes it (RAM only), but never the server: always the build's own.
 #[derive(Clone)]
 pub struct Cfg {
-    /// The build's own server (borrowed: a shipping build's turn makes no
-    /// string); a measuring build's config may give another (owned).
-    pub host: std::borrow::Cow<'static, str>,
-    pub addr: std::borrow::Cow<'static, str>,
+    pub host: &'static str,
+    pub addr: &'static str,
     pub ping_s: u32,
     pub tickets: bool,
     /// The heap a full handshake needs free (P1-PLAN 4.4), a resumed one,
@@ -52,8 +51,8 @@ impl Cfg {
         #[cfg(not(esp32s3))]
         let (full, resumed) = (48 * 1024, 44 * 1024);
         Cfg {
-            host: std::borrow::Cow::Borrowed(super::HOST),
-            addr: std::borrow::Cow::Borrowed(super::ADDR),
+            host: super::HOST,
+            addr: super::ADDR,
             ping_s: 90,
             tickets: true,
             gate_full: full,
@@ -69,8 +68,8 @@ impl Cfg {
     fn json(&self) -> String {
         format!(
             r#"{{"host":{},"addr":{},"ping_s":{},"tickets":{},"gate_full":{},"gate_resumed":{},"gate_largest":{},"quiet_s":{},"tls_in":{TLS_IN},"tls_out":{TLS_OUT}}}"#,
-            json_string(&self.host),
-            json_string(&self.addr),
+            json_string(self.host),
+            json_string(self.addr),
             self.ping_s,
             self.tickets,
             self.gate_full,
@@ -109,17 +108,13 @@ pub fn cfg_gen() -> u32 {
 
 #[derive(Clone, Copy)]
 pub enum Ask {
-    /// M4 (`resume` false: tickets off, every one a full handshake) and M5
-    /// (`resume` true: every one resumed from the last session).
+    /// Full handshakes (`resume` false: tickets off; D5, under LAN load)
+    /// or resumed ones (`resume` true: from the last session; D3).
     #[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
     Handshakes { n: u32, interval: std::time::Duration, resume: bool },
-    /// M9.
-    Ed25519 { n: u32 },
     Stop,
     Reconnect,
     Reset,
-    /// The crash guard's test: a panic on the worker.
-    Crash,
 }
 
 impl Ask {
@@ -129,17 +124,15 @@ impl Ask {
         match self {
             Ask::Handshakes { resume: false, .. } => "full handshakes",
             Ask::Handshakes { resume: true, .. } => "resumed handshakes",
-            Ask::Ed25519 { .. } => "ed25519",
             Ask::Stop => "stop",
             Ask::Reconnect => "reconnect",
             Ask::Reset => "reset",
-            Ask::Crash => "crash",
         }
     }
 }
 
-/// The waiting requests and their numbers (each POST's `ask`; a job and M9
-/// report the number that started them as `seq`). Up to [`ASK_MAX`] wait,
+/// The waiting requests and their numbers (each POST's `ask`; a job
+/// reports the number that started it as `seq`). Up to [`ASK_MAX`] wait,
 /// taken one a turn, in order; one more is a 409.
 #[cfg(feature = "connect-measure")]
 static ASK: Mutex<std::collections::VecDeque<(u32, Ask)>> = Mutex::new(std::collections::VecDeque::new());
@@ -179,19 +172,6 @@ pub fn take_ask() -> Option<(u32, Ask)> {
 }
 
 // --- Telemetry -------------------------------------------------------------------
-
-#[derive(Default, Clone)]
-pub struct M9 {
-    pub seq: u32,
-    pub n: u32,
-    pub of: u32,
-    pub min_us: u32,
-    pub max_us: u32,
-    pub sum_us: u64,
-    pub failed: u32,
-    pub stack_unused: u32,
-    pub done: bool,
-}
 
 pub struct Tele {
     pub state: &'static str,
@@ -250,7 +230,6 @@ pub struct Tele {
     pub job_done: u32,
     pub job_of: u32,
     pub job_failed: u32,
-    pub m9: Option<M9>,
     /// Signed commands: checked, accepted, refused; the slowest check.
     pub commands: u32,
     pub accepted: u32,
@@ -313,7 +292,6 @@ impl Tele {
             job_done: 0,
             job_of: 0,
             job_failed: 0,
-            m9: None,
             commands: 0,
             accepted: 0,
             refused: 0,
@@ -408,20 +386,6 @@ pub fn json() -> String {
             format!(r#"[{s},"{}",{code}]"#, cause.as_str())
         })
         .collect();
-    let m9 = t.m9.as_ref().map(|m| {
-        format!(
-            r#"{{"seq":{},"n":{},"of":{},"done":{},"min_us":{},"mean_us":{},"max_us":{},"failed":{},"stack_unused":{}}}"#,
-            m.seq,
-            m.n,
-            m.of,
-            m.done,
-            m.min_us,
-            if m.n > 0 { m.sum_us / u64::from(m.n) } else { 0 },
-            m.max_us,
-            m.failed,
-            m.stack_unused
-        )
-    });
     let (on, registered) = super::shared(|s| (s.on, s.identity.is_some())).unwrap_or((false, false));
     format!(
         concat!(
@@ -431,7 +395,7 @@ pub fn json() -> String {
             r#""causes":{{{}}},"gate_waits":{},"quiet_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
             r#""heap":{{"at_connect":{},"hs_low":{},"low":{},"low_largest":{},"open":{},"tls_hs_peak":{},"tls_hs_peak_max":{},"tls_open":{},"tls_in_use":{},"rust":{}{}}},"#,
             r#""stack_unused":{},"ping":{{"sent":{},"pongs":{},"missed":{},"rtt_ms":{},"rtt_max_ms":{}}},"rx":{},"tx":{},"root":{},"cert_flags":{},"#,
-            r#""job":{{"kind":"{}","seq":{},"done":{},"of":{},"failed":{}}},"m9":{},"commands":{{"n":{},"accepted":{},"refused":{},"check_max_us":{}}},"errors":{},{}}}"#
+            r#""job":{{"kind":"{}","seq":{},"done":{},"of":{},"failed":{}}},"commands":{{"n":{},"accepted":{},"refused":{},"check_max_us":{}}},"errors":{},{}}}"#
         ),
         on,
         registered,
@@ -441,7 +405,7 @@ pub fn json() -> String {
             u32::MAX => "null".to_string(),
             v => v.to_string(),
         },
-        json_string(&c.host),
+        json_string(c.host),
         c.tickets,
         c.ping_s,
         TLS_IN,
@@ -489,7 +453,6 @@ pub fn json() -> String {
         t.job_done,
         t.job_of,
         t.job_failed,
-        opt(m9),
         t.commands,
         t.accepted,
         t.refused,
@@ -531,11 +494,8 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
     match what {
         "config" => {
             let mut c = cfg();
-            if let Some(v) = query_param(q, "host") {
-                c.host = v.into();
-            }
-            if let Some(v) = query_param(q, "addr") {
-                c.addr = v.into();
+            if query_param(q, "host").is_some() || query_param(q, "addr").is_some() {
+                return Err("host, addr: a measuring build talks to its own server only".into());
             }
             c.ping_s = ranged(num(q, "ping_s", u64::from(c.ping_s))?, 1, 3600, "ping_s")? as u32;
             c.tickets = num(q, "tickets", u8::from(c.tickets))? != 0;
@@ -555,18 +515,10 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             let seq = ask(Ask::Handshakes { n, interval: Duration::from_millis(ms), resume })?;
             Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n},"interval_ms":{ms},"resume":{resume}}}"#))
         }
-        "ed25519" => {
-            let n = ranged(num(q, "n", 100)?, 1, 10_000, "n")? as u32;
-            let seq = ask(Ask::Ed25519 { n })?;
-            Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n}}}"#))
-        }
         "stop" => queued(Ask::Stop),
         "reconnect" => queued(Ask::Reconnect),
         "reset" => queued(Ask::Reset),
-        // The crash guard's test (the emulator lane): the worker panics at
-        // its next turn; the boot after it holds Remote control 15 minutes.
-        "crash" => queued(Ask::Crash),
-        _ => Err(format!("{what}: config, handshakes, ed25519, stop, reconnect, reset or crash")),
+        _ => Err(format!("{what}: config, handshakes, stop, reconnect or reset")),
     }
 }
 

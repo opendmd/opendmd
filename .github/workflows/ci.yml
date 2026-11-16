@@ -24,7 +24,11 @@ name: CI
 #             updater (idf.py), the web app's pack, every size, stack and
 #             build-path check, the third-party notices against what was
 #             linked (tools/notices.py), and the signed bundle. The same build as
-#             release.yml, so the two share the firmware caches.
+#             release.yml, so the two share the firmware caches (a beta
+#             version: with Remote control, the Makefile's FW_BETA_FEATURES).
+#
+# The pinned TLS roots' check against the live Connect server runs weekly
+# in connect-roots.yml, not here (make test checks the pins offline).
 #
 # Everything that can be is cached (~/.espressif, the esp toolchain, every
 # target dir, uv, wasm-pack, Playwright's Chromium). The first firmware run installs ESP-IDF

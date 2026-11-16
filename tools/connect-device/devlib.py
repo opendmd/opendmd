@@ -1,11 +1,21 @@
-"""OpenDMD Connect spike S0: what the M scripts share (CONNECT.md section 10).
+"""OpenDMD Connect's device tests: what the scripts share.
 
-Each M script (m2.py ... m10.py, run with `uv run`) talks to one panel over
-its LAN HTTP API only: `GET /api/status` for the telemetry (the console link
-is unreliable), and, on a `connect-probe` build, the debug hooks under
-`/api/debug/connect`. Nothing here contacts anything else.
+Spike S0's M scripts (opendmd-notes CONNECT.md section 10), kept for the
+device tests that are still to run (P1-PLAN 8.8): D1 (m2.py, the baseline
+with Remote control off; m3.py and m7.py, the idle session), D3 (m5.py,
+resumed handshakes) and D5 (m6.py, full handshakes under LAN load). D4's
+sends are tools/connect/d4_send.py; D2, D6 and D7 need no script. **Run them
+only with the owner's OK, on the spare first.**
 
-Every run writes a directory (default `connect-s0-results/<m>-<UTC time>/`)
+Each script (run with `uv run`) talks to one panel over its LAN HTTP API
+only: `GET /api/status` for the telemetry (the console link is
+unreliable), and, on a `connect-measure` build (`make fw-release
+FW_RELEASE_FEATURES=connect-measure DIST=... FW_RELEASE_TARGET_DIR=...`),
+the debug hooks under `/api/debug/connect`. The panel's session goes to the
+build's own server (connect.opendmd.dev); nothing here contacts anything
+else.
+
+Every run writes a directory (default `connect-device-results/<m>-<UTC time>/`)
 holding `samples.csv` (one row per status read, flattened), `samples.jsonl`
 (the raw `connect` objects and a few others), and `summary.json` (the phase
 statistics and each gate with its value and verdict), and prints the same
@@ -67,7 +77,7 @@ class Panel:
         self.timeout = timeout
 
     def _req(self, method: str, path: str):
-        req = urllib.request.Request(self.base + path, method=method, headers={"User-Agent": "opendmd-connect-s0"})
+        req = urllib.request.Request(self.base + path, method=method, headers={"User-Agent": "opendmd-connect-device"})
         if self.key:
             req.add_header("Authorization", f"Bearer {self.key}")
         if method != "GET":
@@ -109,7 +119,7 @@ class Panel:
             self.base + "/api/play",
             method="POST",
             data=json.dumps({"path": path}).encode(),
-            headers={"Content-Type": "application/json", "User-Agent": "opendmd-connect-s0"},
+            headers={"Content-Type": "application/json", "User-Agent": "opendmd-connect-device"},
         )
         if self.key:
             req.add_header("Authorization", f"Bearer {self.key}")
@@ -162,8 +172,6 @@ def flatten(st: dict) -> dict:
             row[f"connect.ping.{k}"] = get(c, f"ping.{k}")
         row["connect.job.done"] = get(c, "job.done")
         row["connect.job.kind"] = get(c, "job.kind")
-        row["connect.m10.state"] = get(c, "m10.state")
-        row["connect.m10.bytes"] = get(c, "m10.bytes")
         row["connect.last_error"] = c.get("last_error")
     return row
 
@@ -388,7 +396,7 @@ def parser(desc: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=desc)
     ap.add_argument("ip", help="the panel's address (e.g. 192.0.2.178)")
     ap.add_argument("--key", help="the panel's API key, if one is set")
-    ap.add_argument("--out", default="connect-s0-results", help="results directory (default ./connect-s0-results)")
+    ap.add_argument("--out", default="connect-device-results", help="results directory (default ./connect-device-results)")
     ap.add_argument("--sample-s", type=float, default=5.0, help="seconds between status reads (default 5)")
     return ap
 
@@ -447,7 +455,9 @@ def reset_probe(run: "Run"):
 def need_probe(st: dict) -> dict:
     c = st.get("connect")
     if not isinstance(c, dict):
-        sys.exit("this panel's /api/status has no `connect`: it is not a connect-probe build")
+        sys.exit("this panel's /api/status has no `connect`: it is not a connect-measure build")
+    if "job" not in c:
+        sys.exit("this panel's `connect` has no measuring fields: it is not a connect-measure build (a beta has Remote control without them)")
     return c
 
 

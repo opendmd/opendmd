@@ -1,0 +1,61 @@
+name: Connect roots
+
+# Weekly: do the TLS roots the firmware pins for Remote control
+# (firmware/src/connect/tls.rs `ROOTS`, the DER files in
+# firmware/connect-roots/) still trust connect.opendmd.dev's live chain, with
+# the panel's one cipher suite, and is none of them near its expiry?
+# (tools/connect/roots_check.py; `make connect-roots-check` runs the same by
+# hand.) If Cloudflare moves the hostname to a CA that is not pinned, every
+# panel in the field loses Remote control until it is updated: this run
+# fails, and its log says what to do. A pinned root with less than two years
+# left is a warning; the live chain's root with less than one, a failure.
+#
+# Read-only: one TLS handshake and one GET /v1/health. No secrets, no
+# write permission, nothing published.
+
+on:
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connect-roots
+  cancel-in-progress: true
+
+jobs:
+  roots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: The pinned roots against connect.opendmd.dev's live chain
+        run: |
+          set -euo pipefail
+          openssl version
+          if ! uv run --quiet tools/connect/roots_check.py --host connect.opendmd.dev | tee "$RUNNER_TEMP/roots.txt"; then
+            {
+              echo "## Connect roots check FAILED"
+              echo
+              echo "The firmware's pinned roots no longer trust connect.opendmd.dev's live chain (or one is close to expiry)."
+              echo "Panels in the field lose Remote control when the chain stops validating. The log's last lines say what to do."
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/roots.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "## Connect roots check passed"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/roots.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

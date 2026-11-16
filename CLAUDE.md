@@ -59,6 +59,7 @@ make pack ARGS="convert <card copy> --verify"   # prepare a card's cache/
 make psi-check F=my.psi           # check a Formula: errors, cost estimates, a contact sheet
 make blocklist-check              # no route or asset of the web app may look like a tracker to ad blockers
 make connect-mock                 # Connect v1 on localhost: the mock server, mock panel and controllers, the red list over the wire
+make connect-roots-check          # the firmware's pinned TLS roots against connect.opendmd.dev's live chain (CI runs it weekly)
 make fw-build    # ESP32 firmware (bench build)
 make fw-clippy   # clippy -D warnings, firmware feature sets
 make fw-flash PORT=/dev/ttyUSB0   # bench build + web app + flash + monitor

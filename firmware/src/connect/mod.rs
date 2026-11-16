@@ -27,8 +27,8 @@
 //! (the session's state, gates, backoff, registration), [`dispatch`]
 //! (signed commands to the player), [`pair`] (pairing windows, the QR
 //! code and the screens), [`api`] (the LAN routes), and
-//! `measure` (only with `connect-measure`: spike S0's telemetry and test
-//! hooks, never in a shipping build).
+//! `measure` (only with `connect-measure`: the device tests' telemetry and
+//! test hooks, never in a shipping build).
 //!
 //! **Pairing** (`docs/connect-protocol.md` 6.1): `POST /api/connect/pair`
 //! opens a window ([`Pairing`]: a fresh secret, 5 minutes, one use, three
