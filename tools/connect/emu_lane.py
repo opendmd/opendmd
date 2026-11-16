@@ -505,6 +505,8 @@ class Lane:
                 got = await self.injected_ack(f"{label}'s brightness", odc.sign_command(c_.sk, odc.command_body(dev, sess_now, 1, "brightness", {"v": 30})), c_.k)
                 code, _ = await self.http("DELETE", f"/api/connect/controllers/{c_.k.hex()}")
                 return got, code
+            # (A's counter past the red cases' injected ones, this session.)
+            a.n = max(a.n, 10**12 + 100)
             outs = []
             for i in range(14):
                 got, code = await churn(f"churn{i}")
