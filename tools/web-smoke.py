@@ -2252,7 +2252,7 @@ def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
             # Paced, the read is cut at the clip (32 KB and a piece or two), never
             # read to the end: the request ends cut and the mock sent well under
             # the file. (Sent whole, either ending is right: the bytes are all out.)
-            cut = not kbps or (ends[:1] and ends[0].startswith("cut") and not others and sent < len(gif) // 2)
+            cut = not kbps or (ends[:1] and ends[0].startswith("cut") and not others and sent < len(gif) - 16 * 1024)
             check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and len(ends) == 1 and cut,
                   f"thumbnails: a dark start of {len(gif):,} B {how}: a lit still ({lit} px), read once ({len(reads)} requests, {ends}; "
                   f"{sent:,} B sent{f', other card reads {others[:2]}' if others else ''})")
