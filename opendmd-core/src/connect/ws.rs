@@ -133,6 +133,35 @@ pub fn post_request(host: &str, path: &str, body: &str) -> String {
     )
 }
 
+/// How much of an HTTP response has arrived in `buf`, read with at most
+/// `max` bytes in all (head and body).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Response {
+    /// Not all here yet.
+    Partial,
+    /// The head ends at `end`; the body is `buf[end..end + len]`.
+    Complete { end: usize, len: usize },
+    /// Over `max`, or a `Content-Length` that cannot fit it (a huge one
+    /// would otherwise wrap `end + len` on a 32-bit target).
+    TooLong,
+}
+
+/// Where `buf` stands as an HTTP response of at most `max` bytes, with a
+/// `Content-Length`. (A response with none ends when the connection does:
+/// the caller then takes `buf[end..]`.)
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn response(buf: &[u8], max: usize) -> Response {
+    if buf.len() > max {
+        return Response::TooLong;
+    }
+    let Some(end) = head_end(buf) else { return Response::Partial };
+    match content_length(&buf[..end]) {
+        Some(len) if len > max || end.checked_add(len).is_none_or(|t| t > max) => Response::TooLong,
+        Some(len) if buf.len() >= end + len => Response::Complete { end, len },
+        _ => Response::Partial,
+    }
+}
+
 /// The status code of a response head, if its first line has one.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn http_status(head: &[u8]) -> Option<u16> {
@@ -819,6 +848,19 @@ mod tests {
             assert_eq!(http_status(bad), None, "{bad:?}");
         }
         assert_eq!(content_length(b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n"), None);
+        // A body bounded by the caller's limit; a huge Content-Length is
+        // refused, never added to the head's end (it would wrap on 32 bits).
+        let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        assert_eq!(response(ok, 2048), Response::Complete { end: ok.len() - 2, len: 2 });
+        assert_eq!(response(&ok[..ok.len() - 1], 2048), Response::Partial);
+        assert_eq!(response(b"HTTP/1.1 200 OK\r\n", 2048), Response::Partial);
+        for huge in ["4294967295", "4294967290", "18446744073709551615", "2049"] {
+            let h = format!("HTTP/1.1 200 OK\r\nContent-Length: {huge}\r\n\r\n");
+            assert_eq!(response(h.as_bytes(), 2048), Response::TooLong, "{huge}");
+        }
+        assert_eq!(response(&[b'x'; 2049], 2048), Response::TooLong);
+        // No Content-Length: complete only when the connection ends.
+        assert_eq!(response(b"HTTP/1.1 200 OK\r\n\r\n{}", 2048), Response::Partial);
     }
 
     /// The server's frame (unmasked).
