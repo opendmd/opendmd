@@ -192,18 +192,30 @@ pub fn note_written(full: &str) {
     };
     let Ok((fs, geo)) = volume() else { return };
     let Ok(path) = std::ffi::CString::new(format!("0:{card}")) else { return };
+    // The FIL (its sector buffer: ~0.5 KB) on the heap, taken fallibly:
+    // Remote control's sends call this from the network worker, whose
+    // stack has ~1 KB to spare.
+    let layout = std::alloc::Layout::new::<sys::FIL>();
     // SAFETY: a zeroed FIL f_open fills and f_close leaves; `dir_ptr` points
     // into the volume's window (the entry's slot in its sector) and is read
-    // before the FIL is closed.
+    // before the FIL is closed; the block is freed with its own layout.
     let loc = unsafe {
-        let mut f: sys::FIL = std::mem::zeroed();
-        if sys::f_open(&mut f, path.as_ptr(), sys::FA_READ as u8) != sys::FRESULT_FR_OK {
+        let f = std::alloc::alloc_zeroed(layout).cast::<sys::FIL>();
+        if f.is_null() {
             return;
         }
-        let slot = ((f.dir_ptr as usize).wrapping_sub(std::ptr::addr_of!((*fs).win) as usize) / 32) & 15;
-        let rel = f.dir_sect.wrapping_sub(geo.database);
-        sys::f_close(&mut f);
-        fatdir::loc(rel, slot)
+        let opened = sys::f_open(f, path.as_ptr(), sys::FA_READ as u8) == sys::FRESULT_FR_OK;
+        let loc = opened.then(|| {
+            let slot = (((*f).dir_ptr as usize).wrapping_sub(std::ptr::addr_of!((*fs).win) as usize) / 32) & 15;
+            let rel = (*f).dir_sect.wrapping_sub(geo.database);
+            sys::f_close(f);
+            fatdir::loc(rel, slot)
+        });
+        std::alloc::dealloc(f.cast(), layout);
+        match loc {
+            Some(l) => l,
+            None => return,
+        }
     };
     push_delta(fatdir::hash(card.as_bytes()), loc);
     note_name(card, true);

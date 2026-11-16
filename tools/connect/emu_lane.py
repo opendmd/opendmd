@@ -751,6 +751,9 @@ class Lane:
         # (A's counter past the red cases' injected frames, this session.)
         a.n = max(a.n, 10**11 + 1000)
         b.n = max(b.n, 10**11 + 1000)
+        # (Acks for the red cases' injected frames, some with no `n`, are
+        # still in the controllers' inboxes: none of them is a send's.)
+        a.inbox, b.inbox = [], []
         caps = self.srv.caps
         self.expect(caps.get("send") is True and caps.get("win") == 2, "hello's caps: sends on, a window of 2 chunks (the classic)", json.dumps(caps))
         root = EMU_DIR / "card" / "root"
@@ -762,6 +765,13 @@ class Lane:
             for c in name.encode():
                 h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF
             return f"{h & 0xFF:02x}"
+
+        async def cmd_n(ctl, c, args=None, timeout=120):
+            # Matched by `n` exactly: acks with no `n` (the red cases') are
+            # someone else's.
+            f = ctl.frame(c, args)
+            await ctl.send(f)
+            return await ctl.until("ack", lambda m: m.get("n") == odc.loads(f[odc.COMMAND_HEAD:])["n"], timeout=timeout)
 
         async def send(ctl, args, timeout=120):
             f = ctl.frame("send", args)
@@ -786,6 +796,10 @@ class Lane:
                 await asyncio.sleep(1)
         stop = asyncio.Event()
         watcher = asyncio.create_task(watch_heap(stop))
+        if (await self.status()).get("paused"):
+            # (The red cases left the player paused: a play waits for it.)
+            await cmd_n(a, "pause")
+            await asyncio.sleep(1.5)
         st0 = await self.status()
         mark_send = self.emu.mark()
         r = await send(a, send_args(tid, "lane-sent.gif", gif, copy, play=True))
@@ -919,9 +933,7 @@ class Lane:
         await stream(a, tid, big, upto=c0["upto"], stop=8 * 1024, timeout=120)
         await asyncio.sleep(3)
         had = any(n.startswith("lane-cancel.gif.") for n in await self.sent_listing())
-        f = a.frame("send-cancel", {"id": tid})
-        await a.send(f)
-        r = await a.ack(f)
+        r = await cmd_n(a, "send-cancel", {"id": tid})
         await asyncio.sleep(2)
         self.expect(had and r and r.get("ok") and await no_part() and "lane-cancel.gif" not in await self.sent_listing(), "send-cancel: ok, its .part gone", json.dumps(r))
         # Another key's other transfer while one is held: busy. The same
@@ -931,9 +943,7 @@ class Lane:
         n_ok, last, busy_other = 0, None, None
 
         async def cancel(t):
-            f = a.frame("send-cancel", {"id": t})
-            await a.send(f)
-            return await a.ack(f)
+            return await cmd_n(a, "send-cancel", {"id": t})
         for _ in range(12):
             tid += 1
             last = await send(a, {"id": tid, "name": "lane-q.gif", "size": 512 * 1024, "sha256": "11" * 32, "copy_size": 512 * 1024, "copy_sha256": "22" * 32})
