@@ -1,7 +1,8 @@
 //! OpenDMD Connect: remote control through a relay (`docs/connect-protocol.md`).
 //!
-//! - [`ws`]: the session half from spike S0 (RFC 6455 framing, the upgrade,
-//!   backoff, the measuring streams); re-exported here as it was.
+//! - [`ws`]: the session half from spike S0 (RFC 6455 framing, the upgrade
+//!   and its subprotocols, the register request, backoff, the measuring
+//!   streams); re-exported here as it was.
 //! - [`proto`]: protocol v1: versions, the Connect id, the signed command
 //!   envelope, sessions, counters and rates, the remote allow-list, the
 //!   text messages.
@@ -10,7 +11,7 @@
 //! - [`xfer`]: a GIF send's chunks, credit, hashes and quota.
 //! - [`codec`], [`json`]: hex, base32, HMAC; a strict JSON reader.
 //!
-//! Host-only for now: the firmware wires it in later (P1-PLAN F2).
+//! The firmware's client is `firmware/src/connect/` (feature `connect`).
 
 pub mod codec;
 pub mod json;

@@ -88,23 +88,30 @@ psi = ["opendmd-core/psi", "opendmd-core/psi-compiler"]
 # its first frame; `formula_jit` in /api/config turns it off. In every
 # build; `--no-default-features --features psi` builds without.
 jit = ["formulas", "opendmd-core/psi-jit"]
-# OpenDMD Connect's spike S0 (src/connect_probe.rs): a TLS WebSocket
-# client probe in the network worker, its test hooks under
-# /api/debug/connect and `connect` in /api/status. A measurement build
-# only, never a release: the Makefile layers firmware/sdkconfig.connect-probe
-# on whenever it is on (dynamic TLS buffers, session tickets, the
-# trusted-certificate callback, one more socket), so the build without it
-# is today's, bit for bit. `make fw-release FW_RELEASE_FEATURES=connect-probe`.
-connect-probe = ["connect-core", "connect-measure"]
-# The probe's two halves (M1 is measured on `connect-core` alone):
-# - `connect-core`: the session itself (TLS, the WebSocket client, the
-#   pinned roots, backoff, DNS, the crash guard), starting by itself after
-#   the hold, to the build-time host;
-# - `connect-measure`: what only measuring needs (the `connect` telemetry,
-#   the /api/debug/connect hooks, M9, M10, the mbedTLS byte counters, the
-#   handshake histograms).
-connect-core = ["opendmd-core/connect"]
-connect-measure = ["connect-core"]
+# OpenDMD Connect (src/connect/, docs/connect-protocol.md): Remote control
+# through the Connect server, an outbound TLS WebSocket in the network
+# worker, the LAN routes under /api/connect and `connect` in /api/status.
+# Off in release builds until P1's acceptance checks pass; the setting
+# (`cx_on`) is off by default for good. The Makefile layers
+# firmware/sdkconfig.connect on whenever a connect feature is on (dynamic
+# TLS buffers, session tickets, the trusted-certificate callback, one more
+# socket), so the build without it is today's, bit for bit.
+# `make fw-release FW_RELEASE_FEATURES=connect DIST=... FW_RELEASE_TARGET_DIR=...`.
+connect = ["opendmd-core/connect"]
+# Spike S0's measuring half (src/connect/measure.rs: the telemetry, the
+# /api/debug/connect hooks, M4/M5 handshake jobs, M9, mbedTLS's byte
+# counts), never in a shipping build; `connect-probe` is the old name for
+# both, `connect-core` for the client alone (the S3 images and the
+# measurement scripts name them).
+connect-measure = ["connect"]
+connect-probe = ["connect-measure"]
+connect-core = ["connect"]
+# The emulator lane's image only (`make emu-image-connect`): lets the build
+# take OPENDMD_CONNECT_HOST, _ADDR, _HOLD_S, _TEST_ROOT and _TEST_KEY (a
+# local server, a test root, a test controller key whose seed is public).
+# build.rs refuses those variables in any build without it, and the
+# release recipe refuses them outright.
+connect-test = ["connect"]
 # ESP32-S3 measurement switches (S3 port phase 1, `make fw-s3-image`;
 # refused on the classic): mbedTLS's allocations from PSRAM (the Connect
 # probe's allocator, with sdkconfig's MBEDTLS_EXTERNAL_MEM_ALLOC for IDF's

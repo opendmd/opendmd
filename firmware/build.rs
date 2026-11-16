@@ -90,15 +90,25 @@ fn main() {
     // The embedded setup page, rendered then gzipped.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
 
-    // The Connect probe (`connect-probe`, spike S0) only: the build's date,
-    // its clock floor before SNTP (`SOURCE_DATE_EPOCH` if set), and an
-    // emulator image's local test CA (`OPENDMD_CONNECT_TEST_ROOT`, a DER
-    // file: `make emu-image-connect`), pinned beside the real roots.
+    // Connect (`connect`) only: the build's date, its clock floor before
+    // SNTP (`SOURCE_DATE_EPOCH` if set), and an emulator image's local test
+    // CA (`OPENDMD_CONNECT_TEST_ROOT`, a DER file: `make emu-image-connect`),
+    // pinned beside the real roots, with its test controller key
+    // (`OPENDMD_CONNECT_TEST_KEY`, read in src/connect/ under the same cfg).
     println!("cargo::rustc-check-cfg=cfg(connect_test_root)");
     println!("cargo:rerun-if-env-changed=OPENDMD_CONNECT_TEST_ROOT");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-    println!("cargo:rerun-if-changed=sdkconfig.connect-probe");
-    if std::env::var_os("CARGO_FEATURE_CONNECT_CORE").is_some() {
+    println!("cargo:rerun-if-env-changed=OPENDMD_CONNECT_TEST_KEY");
+    println!("cargo:rerun-if-changed=sdkconfig.connect");
+    // Those variables point a build at another server, root or key: only an
+    // emulator image (feature `connect-test`) may take them.
+    for k in ["OPENDMD_CONNECT_HOST", "OPENDMD_CONNECT_ADDR", "OPENDMD_CONNECT_HOLD_S", "OPENDMD_CONNECT_TEST_ROOT", "OPENDMD_CONNECT_TEST_KEY", "OPENDMD_CONNECT_PATH", "OPENDMD_CONNECT_TOKEN", "OPENDMD_CONNECT_ENABLED"] {
+        println!("cargo:rerun-if-env-changed={k}");
+        if std::env::var_os(k).is_some_and(|v| !v.is_empty()) && std::env::var_os("CARGO_FEATURE_CONNECT_TEST").is_none() {
+            panic!("{k} is set: it is for the emulator lane's image only (feature connect-test); unset it");
+        }
+    }
+    if std::env::var_os("CARGO_FEATURE_CONNECT").is_some() {
         let now = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

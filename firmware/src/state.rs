@@ -41,10 +41,12 @@ pub const FEATURES: &[&str] = &[
     "formulas",
     #[cfg(feature = "jit")]
     "jit",
-    #[cfg(feature = "connect-core")]
-    "connect-core",
+    #[cfg(feature = "connect")]
+    "connect",
     #[cfg(feature = "connect-measure")]
-    "connect-probe",
+    "connect-measure",
+    #[cfg(feature = "connect-test")]
+    "connect-test",
 ];
 
 /// [`FEATURES`] as a JSON array.
@@ -652,6 +654,10 @@ pub enum Command {
         /// The request named `boot_formula` (the same, for the start-up
         /// show's Formula).
         boot_named: bool,
+        /// Only `settings.set` is asked (Remote control's playlist): the
+        /// rest is this task's own settings as they are when it is taken,
+        /// so nothing queued before it is overwritten.
+        only_set: bool,
         reply: Reply,
     },
     /// Rebuild the engine and its on-card index — a fresh streaming pass over
@@ -709,4 +715,15 @@ pub enum Command {
     /// a game started, its context index is ready, back to normal). No
     /// reply; see `follow::Runner`.
     Follow(crate::follow::Event),
+    /// Remote control's flash write (the switch, the identity, the
+    /// controller list, the name: `connect::Store`), made here because
+    /// NVS is the main task's. Answered `Ok` once written.
+    #[cfg(feature = "connect")]
+    ConnectStore { what: Box<crate::connect::Store>, reply: Reply },
+    /// Remote control's brightness: only that field, applied onto this
+    /// task's own settings (never a copy of all of them, which a LAN change
+    /// made meanwhile would lose); live at once, saved once commands stop
+    /// (`REMOTE_SAVE_AFTER`). (A playlist is `ApplyConfig` with `only_set`.)
+    #[cfg(feature = "connect")]
+    RemoteConfig { brightness: u8, reply: Reply },
 }

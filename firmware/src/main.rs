@@ -48,8 +48,8 @@ mod cardspeed;
 mod chan;
 mod clock;
 mod config;
-#[cfg(feature = "connect-core")]
-mod connect_probe;
+#[cfg(feature = "connect")]
+mod connect;
 mod diag;
 mod dns_server;
 mod events;
@@ -785,6 +785,9 @@ fn main() -> Result<()> {
     // Settings changed while a Formula played, not yet in NVS
     // (`save_settings`), and whether a Formula is what plays.
     let mut unsaved = false;
+    // Remote control's last unsaved brightness (`Command::RemoteConfig`).
+    #[cfg(feature = "connect")]
+    let mut remote_dirty: Option<Instant> = None;
     let mut formula_on = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
@@ -872,6 +875,9 @@ fn main() -> Result<()> {
     // Dropped once the card is handed over: the channel's few hundred bytes
     // are not kept for the life of the run.
     let mut boot_rx = Some(boot_rx);
+    // Remote control's stored state, before the network worker can start.
+    #[cfg(feature = "connect")]
+    connect::init(nvs_config.connect_load());
     let boot_ctx = Arc::new(Ctx {
         status: status.clone(),
         settings: shared_settings.clone(),
@@ -931,9 +937,6 @@ fn main() -> Result<()> {
     // back with the paused frame, if one is.
     let mut update_named: Option<(String, String)> = None;
 
-    // The CRC-32 of the sent Formula's bytes last held (`PlayNow`'s, made
-    // on CPU0): `now_playing.sent` for the start that plays them.
-    let mut sent_crc = 0u32;
     loop {
         // 0. Safe start: extended once when the network comes up, then the
         //    saved ceiling takes over.
@@ -948,6 +951,14 @@ fn main() -> Result<()> {
             panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
         }
 
+        // Remote control's brightness, saved once its commands stop (a drag
+        // is many: one NVS write, not one each).
+        #[cfg(feature = "connect")]
+        if remote_dirty.is_some_and(|t: Instant| t.elapsed() >= config::REMOTE_SAVE_AFTER) {
+            remote_dirty = None;
+            unsaved = true;
+            SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+        }
         // Settings kept back while a Formula played: written once none does.
         if unsaved && (!formula_on || sched.off()) {
             flush_settings(&mut nvs_config, &settings, &mut unsaved);
@@ -1030,9 +1041,11 @@ fn main() -> Result<()> {
                     if !reply.claim() {
                         continue;
                     }
-                    if let Some((psb, crc)) = psb {
-                        opendmd_core::synth::set_sent(Some(psb));
-                        sent_crc = crc;
+                    // The bytes and their CRC-32 (made by the handler, on
+                    // CPU0) are held together: `now_playing.sent` reads the
+                    // CRC from there (`synth::sent_crc`).
+                    if psb.is_some() {
+                        opendmd_core::synth::set_sent(psb);
                     }
                     // A Formula in place: (the frame ms it starts at, asked).
                     let mut in_place = None;
@@ -1088,7 +1101,7 @@ fn main() -> Result<()> {
                                         s.title = np.title.into();
                                         // (A live edit of the sent one: its new bytes.)
                                         if opendmd_core::synth::is_sent(&path) {
-                                            s.sent = Some((np.ordinal, sent_crc));
+                                            s.sent = opendmd_core::synth::sent_crc().map(|crc| (np.ordinal, crc));
                                         }
                                     }
                                 }
@@ -1115,7 +1128,7 @@ fn main() -> Result<()> {
                             // The sent one, held (just now, or still from
                             // its last send): which bytes this start plays.
                             if opendmd_core::synth::is_sent(&path) {
-                                s.sent = ordinal.map(|o| (o, sent_crc));
+                                s.sent = ordinal.zip(opendmd_core::synth::sent_crc());
                             }
                         }
                         r
@@ -1170,8 +1183,17 @@ fn main() -> Result<()> {
                     panel: panel_op,
                     look_named,
                     boot_named,
+                    only_set,
                     reply,
                 } => {
+                    // Only the playlist asked (Remote control): this task's
+                    // own settings now, with it (a copy, on the display
+                    // core: a playlist change is rare and rebuilds anyway).
+                    if only_set {
+                        let set = std::mem::take(&mut next.set);
+                        *next = settings.clone();
+                        next.set = set;
+                    }
                     // A look the request did not name is this task's own
                     // (the sender's copy may predate its Formula's delete).
                     if !look_named && next.look_formula != settings.look_formula {
@@ -1628,6 +1650,35 @@ fn main() -> Result<()> {
                     let _ = reply.send(Ok(Applied::unchanged(
                         engine.as_ref().map_or(0, |e| e.catalog_len()),
                     )));
+                }
+                #[cfg(feature = "connect")]
+                Command::RemoteConfig { brightness: v, reply } => {
+                    if !reply.claim() {
+                        continue;
+                    }
+                    if v > settings.max_brightness {
+                        let _ = reply.send(Err("brightness over the ceiling".into()));
+                        continue;
+                    }
+                    settings.brightness = v;
+                    if !sched.off() && ptest.is_none() {
+                        panel.set_brightness(sched.brightness(&settings));
+                    }
+                    remote_dirty = Some(Instant::now());
+                    // A planned restart meanwhile writes them first.
+                    SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+                    let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
+                }
+                #[cfg(feature = "connect")]
+                Command::ConnectStore { what, reply } => {
+                    if !reply.claim() {
+                        continue;
+                    }
+                    let r = nvs_config
+                        .connect_store(&what)
+                        .map(|()| Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len())))
+                        .map_err(|e| format!("saving Remote control: {e:#}"));
+                    let _ = reply.send(r);
                 }
                 Command::Follow(event) => {
                     let was_context = runner.context().is_some();

@@ -753,6 +753,64 @@ impl Config {
     }
 }
 
+// Remote control's keys (`connect`): the switch, the identity, the
+// controller list's blob and the name. Written only by the main task
+// (`Command::ConnectStore`).
+#[cfg(feature = "connect")]
+const KEY_CX_ON: &str = "cx_on";
+#[cfg(feature = "connect")]
+const KEY_CX_DEV: &str = "cx_dev";
+#[cfg(feature = "connect")]
+const KEY_CX_SEC: &str = "cx_sec";
+#[cfg(feature = "connect")]
+const KEY_CX_KEYS: &str = "cx_keys";
+#[cfg(feature = "connect")]
+const KEY_CX_NAME: &str = "cx_name";
+
+#[cfg(feature = "connect")]
+impl Config {
+    /// What NVS holds for Remote control (absent or damaged: nothing).
+    #[optimize(size)]
+    #[inline(never)]
+    pub fn connect_load(&self) -> crate::connect::Stored {
+        let mut dev = [0u8; 16];
+        let mut sec = [0u8; 32];
+        let mut keys = vec![0u8; opendmd_core::connect::keys::MAX_BLOB];
+        let on = matches!(self.nvs.get_u8(KEY_CX_ON), Ok(Some(1)));
+        let dev = matches!(self.nvs.get_blob(KEY_CX_DEV, &mut dev), Ok(Some(b)) if b.len() == 16).then_some(dev);
+        let sec = matches!(self.nvs.get_blob(KEY_CX_SEC, &mut sec), Ok(Some(b)) if b.len() == 32).then_some(sec);
+        let keys = match self.nvs.get_blob(KEY_CX_KEYS, &mut keys) {
+            Ok(Some(b)) => Some(b.to_vec()),
+            _ => None,
+        };
+        crate::connect::Stored { on, identity: dev.zip(sec), keys, name: self.get_string(KEY_CX_NAME) }
+    }
+
+    /// One of Remote control's writes.
+    #[optimize(size)]
+    #[inline(never)]
+    pub fn connect_store(&mut self, what: &crate::connect::Store) -> anyhow::Result<()> {
+        use crate::connect::Store;
+        match what {
+            Store::On(on) => self.nvs.set_u8(KEY_CX_ON, u8::from(*on))?,
+            Store::Identity { dev, secret, keys } => {
+                // The secret first: one without an id reads as no identity.
+                self.nvs.set_blob(KEY_CX_SEC, secret)?;
+                self.nvs.set_blob(KEY_CX_KEYS, keys)?;
+                self.nvs.set_blob(KEY_CX_DEV, dev)?;
+            }
+            Store::Keys(keys) => self.nvs.set_blob(KEY_CX_KEYS, keys)?,
+            Store::Name(name) => self.nvs.set_str(KEY_CX_NAME, name)?,
+            Store::Forget => {
+                for k in [KEY_CX_DEV, KEY_CX_SEC, KEY_CX_KEYS] {
+                    self.nvs.remove(k)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 // The ESP32-S3 board's keys (`s3board`: `scan_reg`, and the power-safe
 // lane's `ps_test`): last in the file, so the classic's lines stay put.
 #[cfg(esp32s3)]

@@ -3653,14 +3653,15 @@ mod tests {
         const V2: &str = include_str!("../../opendmd-web/experiments/road-v2/road-v2.psi");
         let psb = psi::build(V2).unwrap();
         assert!(path_of(&psb, "").len() > crate::synth::MAX_FORMULA_PATH);
-        crate::synth::set_sent(Some(psb.clone()));
+        crate::synth::set_sent(Some((psb.clone(), 1)));
+        assert_eq!(crate::synth::sent_crc(), Some(1));
         let rest = &crate::synth::SENT[crate::synth::FORMULA.len()..];
         let q = resolve(&format!("{rest}?a=0.5&fps=25")).unwrap();
         assert_eq!(q.bytes(), &psb[..]);
         assert_eq!((q.sliders[0], q.delay_ms), (Some(1 << 15), Some(40)));
         let mut fx = PsiFx::from_query(rest).unwrap();
         // A live edit: in place, from the bytes held now.
-        crate::synth::set_sent(Some(psi::build("gray(px / 128)").unwrap()));
+        crate::synth::set_sent(Some((psi::build("gray(px / 128)").unwrap(), 2)));
         fx.retune_from(rest, Retune::Edit).unwrap();
         assert!(crate::synth::title(crate::synth::SENT).is_some());
         assert!(
@@ -3668,7 +3669,9 @@ mod tests {
                 && !crate::synth::is_sent("@formula:~sentx")
         );
         // Let go once the panel moves on: a 404 that says so.
+        assert_eq!(crate::synth::sent_crc(), Some(2));
         crate::synth::set_sent(None);
+        assert_eq!(crate::synth::sent_crc(), None);
         let e = io_error(PsiFx::from_query(rest).err().unwrap());
         assert_eq!(
             (e.kind(), e.to_string()),

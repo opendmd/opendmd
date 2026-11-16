@@ -15,6 +15,7 @@ This document is the reference. The implementations are:
 | `opendmd-core/src/connect/` (feature `connect`) | the panel's checks and the controller's encoding, in Rust (`proto.rs`, `keys.rs`, `pair.rs`, `xfer.rs`, `codec.rs`, `json.rs`; `ws.rs` is the WebSocket client) |
 | `opendmd-core/tests/connect-vectors.json` | the shared test vectors: every implementation checks itself against them |
 | `tools/connect/` | an independent Python implementation (`odc.py`), a mock server and a mock panel, and the round trip (`make connect-mock`) |
+| `firmware/src/connect/` (feature `connect`) | the panel's client: TLS, registration, the session policy, the commands carried out (`make emu-connect` runs it in the emulator against the mock server) |
 
 The firmware's client, the Worker and the web controller are built on this
 version; none of it changes the LAN API, which stays the only full tier. A
@@ -161,6 +162,16 @@ refused whole.
 The server hashes `hello.secret` and compares it with the stored hash;
 else it closes 4403 and the panel waits 15 minutes (Settings says to set
 Remote control up again). A newer panel connection replaces an older one.
+
+An id the server does not know at the upgrade (HTTP 404) is handled by
+whether anyone could know it. A panel with no controllers (a registration
+that never said `hello` within 10 minutes is deleted) registers again by
+itself, at most three times a day. A panel with controllers treats it as
+a refusal, like 4403: retried every 15 minutes, nothing erased, so a
+server that lost its records (a bad key deploy, lost storage) cannot wipe
+pairings; the owner chooses Forget on the LAN to start again. A panel that forgets its
+identity sends `forget` if it is online; offline, the old record stays at
+the server, never used.
 
 ### 4.2 Controller and server
 

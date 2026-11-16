@@ -315,6 +315,11 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         );
     }
 
+    // An update is under way (past the refusals a bad request gets):
+    // Remote control closes and holds off until the restart.
+    #[cfg(feature = "connect")]
+    crate::connect::hold_for_update();
+
     // The header, and its signature, before anything touches the card.
     let mut head = [0u8; HEADER_LEN];
     let mut have = 0;

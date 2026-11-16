@@ -1,13 +1,16 @@
-//! OpenDMD Connect, spike S0: the host-testable half of the firmware's
-//! measurement probe (`firmware/src/connect_probe.rs`, feature
-//! `connect-probe`). No protocol and no pairing: what a bare WebSocket
-//! client over TLS needs, written so the host can test it.
+//! OpenDMD Connect: the host-testable half of the firmware's WebSocket
+//! client over TLS (`firmware/src/connect/`, feature `connect`), first
+//! written for spike S0's probe. No protocol here (that is
+//! [`proto`](super::proto)): what a bare WebSocket client and its one HTTPS
+//! request need, written so the host can test it.
 //!
 //! - [`Decoder`], [`encode_frame`]: RFC 6455 framing, client side (our
 //!   frames masked, the server's not), streaming: a binary message is
 //!   handed on in pieces as it arrives and never held whole.
-//! - [`upgrade_request`], [`check_upgrade`]: the HTTP/1.1 upgrade and its
-//!   `Sec-WebSocket-Accept` check ([`sha1`], [`base64`]).
+//! - [`upgrade_request`], [`check_upgrade`]: the HTTP/1.1 upgrade, its
+//!   subprotocols and its `Sec-WebSocket-Accept` check ([`sha1`],
+//!   [`base64`]); [`post_request`], [`http_status`], [`content_length`]:
+//!   the one plain request the panel makes (`POST /v1/register`).
 //! - [`Backoff`]: 5 s doubling to 15 minutes with jitter; 0-30 s before the
 //!   first retry after a session that ran (CONNECT.md 5.3, 9.4).
 //! - [`Hist`]: handshake times in fixed millisecond buckets, p50/p95.
@@ -28,6 +31,7 @@ use std::time::Duration;
 
 /// SHA-1 of `data` (RFC 3174). Only for `Sec-WebSocket-Accept`, where
 /// RFC 6455 fixes it; never for anything that needs collision resistance.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
     let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -51,6 +55,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
     out
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sha1_block(h: &mut [u32; 5], block: &[u8; 64]) {
     let mut w = [0u32; 80];
     for t in 0..16 {
@@ -80,6 +85,7 @@ fn sha1_block(h: &mut [u32; 5], block: &[u8; 64]) {
 }
 
 /// Standard base64 with padding.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn base64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -94,6 +100,7 @@ pub fn base64(data: &[u8]) -> String {
 }
 
 /// What the server must answer in `Sec-WebSocket-Accept` for `key`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ws_accept(key: &str) -> String {
     let mut s = Vec::with_capacity(key.len() + 36);
     s.extend_from_slice(key.as_bytes());
@@ -103,12 +110,82 @@ pub fn ws_accept(key: &str) -> String {
 
 // --- The upgrade ---------------------------------------------------------
 
+/// What the client says it is (no version, no device detail).
+pub const USER_AGENT: &str = "opendmd-connect";
+
 /// The upgrade request for `path` (with its query) on `host`; `key` is the
-/// base64 of 16 random bytes.
-pub fn upgrade_request(host: &str, path: &str, key: &str) -> String {
+/// base64 of 16 random bytes; `protocols` the `Sec-WebSocket-Protocol`
+/// list (`""`: none), e.g. `odc1, d.<dev>`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn upgrade_request(host: &str, path: &str, key: &str, protocols: &str) -> String {
+    let proto = if protocols.is_empty() { String::new() } else { format!("Sec-WebSocket-Protocol: {protocols}\r\n") };
     format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: opendmd-connect-s0\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{proto}User-Agent: {USER_AGENT}\r\n\r\n"
     )
+}
+
+/// A `POST` of a JSON `body` to `path` on `host`, closing after the answer.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn post_request(host: &str, path: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nUser-Agent: {USER_AGENT}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// How much of an HTTP response has arrived in `buf`, read with at most
+/// `max` bytes in all (head and body).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Response {
+    /// Not all here yet.
+    Partial,
+    /// The head ends at `end`; the body is `buf[end..end + len]`.
+    Complete { end: usize, len: usize },
+    /// Over `max`, or a `Content-Length` that cannot fit it (a huge one
+    /// would otherwise wrap `end + len` on a 32-bit target).
+    TooLong,
+}
+
+/// Where `buf` stands as an HTTP response of at most `max` bytes, with a
+/// `Content-Length`. (A response with none ends when the connection does:
+/// the caller then takes `buf[end..]`.)
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn response(buf: &[u8], max: usize) -> Response {
+    if buf.len() > max {
+        return Response::TooLong;
+    }
+    let Some(end) = head_end(buf) else { return Response::Partial };
+    match content_length(&buf[..end]) {
+        Some(len) if len > max || end.checked_add(len).is_none_or(|t| t > max) => Response::TooLong,
+        Some(len) if buf.len() >= end + len => Response::Complete { end, len },
+        _ => Response::Partial,
+    }
+}
+
+/// The status code of a response head, if its first line has one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn http_status(head: &[u8]) -> Option<u16> {
+    let line = head.split(|&b| b == b'\r').next()?;
+    let code = line.split(|&b| b == b' ').nth(1)?;
+    if code.len() != 3 || !code.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(code).ok()?.parse().ok()
+}
+
+/// A response head's header `name` (case ignored), trimmed.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.split("\r\n").skip(1).find_map(|l| {
+        let (n, v) = l.split_once(':')?;
+        n.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+/// A response head's `Content-Length`, if it has one that reads.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn content_length(head: &[u8]) -> Option<usize> {
+    header(std::str::from_utf8(head).ok()?, "content-length")?.parse().ok()
 }
 
 /// The most of a response's head the probe reads.
@@ -116,14 +193,17 @@ pub const MAX_UPGRADE_HEAD: usize = 2048;
 
 /// Where the head of an HTTP response ends in `buf` (the index just past
 /// its blank line), if it does yet.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn head_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|k| k + 4)
 }
 
 /// Check a response head: `101`, `Upgrade: websocket`, and the accept key
-/// for `key`. `Err` says what was wrong, with the status line for anything
-/// but 101.
-pub fn check_upgrade(head: &[u8], key: &str) -> Result<(), String> {
+/// for `key`; `Ok` carries the `Sec-WebSocket-Protocol` the server chose
+/// (`None`: none). `Err` says what was wrong, with the status line for
+/// anything but 101.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn check_upgrade(head: &[u8], key: &str) -> Result<Option<String>, String> {
     let text = std::str::from_utf8(head).map_err(|_| "upgrade answer is not text".to_string())?;
     let mut lines = text.split("\r\n");
     let status = lines.next().unwrap_or("");
@@ -131,21 +211,23 @@ pub fn check_upgrade(head: &[u8], key: &str) -> Result<(), String> {
     if code != "101" {
         return Err(format!("upgrade refused: {}", status.chars().take(48).collect::<String>()));
     }
-    let (mut upgrade, mut accept) = (false, None);
+    let (mut upgrade, mut accept, mut proto) = (false, None, None);
     for l in lines {
         let Some((name, value)) = l.split_once(':') else { continue };
-        let value = value.trim();
+        let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("upgrade") && value.eq_ignore_ascii_case("websocket") {
             upgrade = true;
         } else if name.eq_ignore_ascii_case("sec-websocket-accept") {
             accept = Some(value);
+        } else if name.eq_ignore_ascii_case("sec-websocket-protocol") {
+            proto = Some(value.to_string());
         }
     }
     if !upgrade {
         return Err("upgrade answer has no Upgrade: websocket".into());
     }
     match accept {
-        Some(a) if a == ws_accept(key) => Ok(()),
+        Some(a) if a == ws_accept(key) => Ok(proto),
         Some(_) => Err("Sec-WebSocket-Accept does not match".into()),
         None => Err("upgrade answer has no Sec-WebSocket-Accept".into()),
     }
@@ -161,6 +243,7 @@ pub const OP_PING: u8 = 0x9;
 pub const OP_PONG: u8 = 0xA;
 
 /// Append one masked client frame (FIN set) to `out`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode_frame(opcode: u8, payload: &[u8], mask: [u8; 4], out: &mut Vec<u8>) {
     out.push(0x80 | (opcode & 0x0F));
     let n = payload.len();
@@ -178,18 +261,18 @@ pub fn encode_frame(opcode: u8, payload: &[u8], mask: [u8; 4], out: &mut Vec<u8>
 }
 
 /// A close frame's payload: the code, then the reason.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn close_payload(code: u16, reason: &str) -> Vec<u8> {
     let mut p = code.to_be_bytes().to_vec();
     p.extend_from_slice(&reason.as_bytes()[..reason.len().min(123)]);
     p
 }
 
-/// The longest text message the S0 probe's decoder takes (the echo
-/// Worker's are tens of bytes). Not protocol v1's limits: those are
-/// [`proto::MAX_TEXT_IN`](super::proto::MAX_TEXT_IN) and
-/// [`proto::MAX_TEXT_OUT`](super::proto::MAX_TEXT_OUT); F2 raises this to
-/// the first.
-pub const MAX_TEXT: usize = 256;
+/// The longest text message the decoder takes: protocol v1's limit for
+/// what is sent to the panel ([`proto::MAX_TEXT_IN`](super::proto::MAX_TEXT_IN)).
+/// What the panel sends may be longer
+/// ([`proto::MAX_TEXT_OUT`](super::proto::MAX_TEXT_OUT)).
+pub const MAX_TEXT: usize = super::proto::MAX_TEXT_IN;
 
 /// What [`Decoder::feed`] hands on.
 #[derive(Debug, PartialEq, Eq)]
@@ -227,6 +310,7 @@ pub enum WsError {
 }
 
 impl WsError {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn as_str(self) -> &'static str {
         match self {
             WsError::Masked => "server frame masked",
@@ -239,9 +323,10 @@ impl WsError {
     }
 }
 
-/// A text frame's length is one the probe takes. Compared as `u64`: a cast
+/// A text frame's length is one the decoder takes. Compared as `u64`: a cast
 /// to `usize` first would truncate on the 32-bit ESP32 (2^32 + 5 -> 5) and
-/// let the copy into the 256-byte buffer overrun.
+/// let the copy into the 1,024-byte buffer overrun.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn text_len_ok(len: u64) -> bool {
     len <= MAX_TEXT as u64
 }
@@ -262,6 +347,7 @@ pub struct Decoder {
 }
 
 impl Default for Decoder {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         Self::new()
     }
@@ -282,6 +368,7 @@ impl Decoder {
     }
 
     /// The header's length once its first two bytes are in.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn head_len(&self) -> usize {
         match self.head[1] & 0x7F {
             126 => 4,
@@ -291,6 +378,7 @@ impl Decoder {
     }
 
     /// Feed bytes; `f` is called for each event, in order.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn feed<F: FnMut(Event<'_>)>(&mut self, mut input: &[u8], f: &mut F) -> Result<(), WsError> {
         loop {
             match self.left {
@@ -328,6 +416,7 @@ impl Decoder {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn start_frame<F: FnMut(Event<'_>)>(&mut self, f: &mut F) -> Result<(), WsError> {
         let (b0, b1) = (self.head[0], self.head[1]);
         if b0 & 0x70 != 0 {
@@ -378,6 +467,7 @@ impl Decoder {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn end_frame<F: FnMut(Event<'_>)>(&mut self, f: &mut F) {
         self.left = None;
         let p = &self.small[..self.small_len];
@@ -411,12 +501,14 @@ pub const SPREAD_AFTER_DROP: Duration = Duration::from_secs(30);
 
 impl Backoff {
     /// Failures in a row so far.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn failures(&self) -> u32 {
         self.failures
     }
 
     /// A connection attempt failed: the wait before the next. `rand`: any
     /// random `u32`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn failed(&mut self, rand: u32) -> Duration {
         self.failures = self.failures.saturating_add(1);
         let full = BACKOFF_FIRST
@@ -428,11 +520,13 @@ impl Backoff {
 
     /// A session ran and ended: the failures are forgotten, and the wait
     /// before the first retry is 0-30 s.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn dropped(&mut self, rand: u32) -> Duration {
         self.failures = 0;
         Duration::from_millis(u64::from(rand) % (SPREAD_AFTER_DROP.as_millis() as u64 + 1))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn reset(&mut self) {
         self.failures = 0;
     }
@@ -454,6 +548,7 @@ pub struct Hist {
 }
 
 impl Hist {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn add(&mut self, ms: u32) {
         let k = HIST_MS.iter().position(|&b| ms <= b).unwrap_or(HIST_MS.len() - 1);
         self.counts[k] += 1;
@@ -465,6 +560,7 @@ impl Hist {
 
     /// The `p`th percentile (0-100), as its bucket's upper bound (the most
     /// seen, for the top bucket or when that is lower); `None` when empty.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn percentile(&self, p: u32) -> Option<u32> {
         if self.n == 0 {
             return None;
@@ -480,11 +576,13 @@ impl Hist {
         Some(self.max_ms)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn mean_ms(&self) -> Option<u32> {
         (self.n > 0).then(|| (self.sum_ms / u64::from(self.n)) as u32)
     }
 
     /// `{"n","last","max","mean","p50","p95","buckets":[…]}`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn json(&self) -> String {
         let o = |v: Option<u32>| v.map_or_else(|| "null".to_string(), |v| v.to_string());
         let buckets: Vec<String> = self.counts.iter().map(|c| c.to_string()).collect();
@@ -513,10 +611,12 @@ pub struct Payload {
 }
 
 impl Payload {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(seed: u32) -> Payload {
         Payload { x: if seed == 0 { 0x9E37_79B9 } else { seed }, k: 0 }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn next_byte(&mut self) -> u8 {
         if self.k == 0 {
             let mut x = self.x;
@@ -531,6 +631,7 @@ impl Payload {
     }
 
     /// How many of `got` differ from the stream's next bytes.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check(&mut self, got: &[u8]) -> u32 {
         got.iter().filter(|&&b| b != self.next_byte()).count() as u32
     }
@@ -541,12 +642,14 @@ impl Payload {
 pub struct Fnv(pub u32);
 
 impl Default for Fnv {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         Fnv(0x811C_9DC5)
     }
 }
 
 impl Fnv {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn update(&mut self, data: &[u8]) {
         for &b in data {
             self.0 = (self.0 ^ u32::from(b)).wrapping_mul(0x0100_0193);
@@ -555,6 +658,7 @@ impl Fnv {
 }
 
 /// The echo Worker's `end <bytes> <fnv hex>`: (bytes, fnv).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_end(text: &[u8]) -> Option<(u64, u32)> {
     let t = std::str::from_utf8(text).ok()?;
     let mut w = t.split(' ');
@@ -570,6 +674,7 @@ pub fn parse_end(text: &[u8]) -> Option<(u64, u32)> {
 
 /// One DER TLV at the start of `d`: (tag, the whole TLV's length, the
 /// value's offset).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn der_tlv(d: &[u8]) -> Option<(u8, usize, usize)> {
     let tag = *d.first()?;
     let b = *d.get(1)?;
@@ -593,6 +698,7 @@ fn der_tlv(d: &[u8]) -> Option<(u8, usize, usize)> {
 /// The subject Name of an X.509 certificate in DER, tag and length
 /// included: what mbedTLS keeps as `subject_raw`, and compares a child's
 /// `issuer_raw` with. `None` if `der` is not a certificate's shape.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn cert_subject(der: &[u8]) -> Option<&[u8]> {
     let (tag, total, off) = der_tlv(der)?;
     if tag != 0x30 {
@@ -623,6 +729,7 @@ pub fn cert_subject(der: &[u8]) -> Option<&[u8]> {
 
 /// Seconds since 1970 of a UTC civil time (proleptic Gregorian; month and
 /// day from 1), for X.509 validity against the clock floor.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn civil_to_unix(year: i64, mon: u32, day: u32, hour: u32, min: u32, sec: u32) -> i64 {
     // Howard Hinnant's days_from_civil.
     let y = if mon <= 2 { year - 1 } else { year };
@@ -655,6 +762,7 @@ pub const ED25519_SIG: [u8; 64] = [
 ];
 
 /// M9's message.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ed25519_msg() -> [u8; ED25519_MSG_LEN] {
     let mut p = Payload::new(ED25519_MSG_SEED);
     std::array::from_fn(|_| p.next_byte())
@@ -709,9 +817,9 @@ mod tests {
         let key = "dGhlIHNhbXBsZSBub25jZQ==";
         let good = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
         assert_eq!(head_end(good), Some(good.len()));
-        assert_eq!(check_upgrade(good, key), Ok(()));
-        let lower = b"HTTP/1.1 101 x\r\nupgrade: WebSocket\r\nsec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
-        assert_eq!(check_upgrade(lower, key), Ok(()));
+        assert_eq!(check_upgrade(good, key), Ok(None));
+        let lower = b"HTTP/1.1 101 x\r\nupgrade: WebSocket\r\nsec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Protocol:  odc1 \r\n\r\n";
+        assert_eq!(check_upgrade(lower, key), Ok(Some("odc1".into())));
         let wrong = b"HTTP/1.1 101 x\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: AAAA\r\n\r\n";
         assert!(check_upgrade(wrong, key).unwrap_err().contains("does not match"));
         let refused = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
@@ -719,9 +827,40 @@ mod tests {
         let no_up = b"HTTP/1.1 101 x\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
         assert!(check_upgrade(no_up, key).is_err());
         assert_eq!(head_end(b"HTTP/1.1 101 x\r\n"), None);
-        let req = upgrade_request("h.example", "/ws?k=s", key);
+        let req = upgrade_request("h.example", "/ws?k=s", key, "");
         assert!(req.starts_with("GET /ws?k=s HTTP/1.1\r\nHost: h.example\r\n"));
-        assert!(req.ends_with("\r\n\r\n"));
+        assert!(req.ends_with("\r\n\r\n") && !req.contains("Protocol"));
+        let req = upgrade_request("h.example", "/v1/panel", key, "odc1, d.x");
+        assert!(req.contains("\r\nSec-WebSocket-Protocol: odc1, d.x\r\n"));
+    }
+
+    #[test]
+    fn posts_and_their_answers() {
+        let req = post_request("h.example", "/v1/register", r#"{"v":1}"#);
+        assert!(req.starts_with("POST /v1/register HTTP/1.1\r\nHost: h.example\r\n"));
+        assert!(req.contains("\r\nContent-Length: 7\r\n") && req.ends_with("\r\n\r\n{\"v\":1}"));
+        let head = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nContent-Length:  41 \r\n\r\n";
+        assert_eq!(http_status(head), Some(200));
+        assert_eq!(content_length(head), Some(41));
+        assert_eq!(http_status(b"HTTP/1.1 426 Upgrade Required\r\n\r\n"), Some(426));
+        assert_eq!(content_length(b"HTTP/1.1 200 OK\r\n\r\n"), None);
+        for bad in [&b"HTTP/1.1 20 OK\r\n"[..], b"garbage", b"HTTP/1.1 2x0 OK\r\n", b""] {
+            assert_eq!(http_status(bad), None, "{bad:?}");
+        }
+        assert_eq!(content_length(b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n"), None);
+        // A body bounded by the caller's limit; a huge Content-Length is
+        // refused, never added to the head's end (it would wrap on 32 bits).
+        let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        assert_eq!(response(ok, 2048), Response::Complete { end: ok.len() - 2, len: 2 });
+        assert_eq!(response(&ok[..ok.len() - 1], 2048), Response::Partial);
+        assert_eq!(response(b"HTTP/1.1 200 OK\r\n", 2048), Response::Partial);
+        for huge in ["4294967295", "4294967290", "18446744073709551615", "2049"] {
+            let h = format!("HTTP/1.1 200 OK\r\nContent-Length: {huge}\r\n\r\n");
+            assert_eq!(response(h.as_bytes(), 2048), Response::TooLong, "{huge}");
+        }
+        assert_eq!(response(&[b'x'; 2049], 2048), Response::TooLong);
+        // No Content-Length: complete only when the connection ends.
+        assert_eq!(response(b"HTTP/1.1 200 OK\r\n\r\n{}", 2048), Response::Partial);
     }
 
     /// The server's frame (unmasked).

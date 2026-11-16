@@ -2,7 +2,8 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Check docs/api.md against the routes firmware/src/http.rs registers.
+"""Check docs/api.md against the routes firmware/src/http.rs registers
+(and firmware/src/connect/api.rs, Remote control's).
 
     uv run tools/api-doc-check.py [docs/api.md] [firmware/src/http.rs]
 
@@ -29,6 +30,10 @@ def main() -> int:
     md_path = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "docs" / "api.md"
     rs_path = Path(sys.argv[2]) if len(sys.argv) > 2 else REPO / "firmware" / "src" / "http.rs"
     rs = rs_path.read_text(encoding="utf-8")
+    # Remote control's LAN routes, registered from http.rs (`connect::api::routes`).
+    connect = rs_path.parent / "connect" / "api.rs"
+    if len(sys.argv) <= 2 and connect.exists():
+        rs += connect.read_text(encoding="utf-8")
     md = md_path.read_text(encoding="utf-8")
     routes = {(m, u) for u, m in re.findall(r'server\.route(?:_json)?\(\s*"(/api/[^"]*)",\s*Method::(\w+)', rs)}
     routes = {(m.upper(), u) for m, u in routes}

@@ -204,21 +204,29 @@ pub fn bundled(name: &str) -> Option<&'static [u8]> {
 /// the panel moves on to anything else. Not kept in Recently played.
 pub const SENT_NAME: &str = "~sent";
 pub const SENT: &str = "@formula:~sent";
-type Held = std::sync::Mutex<Option<std::sync::Arc<Vec<u8>>>>;
+/// The bytes and their CRC-32, held together so no caller can pair one
+/// send's bytes with another's identity.
+type Held = std::sync::Mutex<Option<(std::sync::Arc<Vec<u8>>, u32)>>;
 static SENT_PSB: Held = std::sync::Mutex::new(None);
 
-/// Hold `psb` as the sent Formula (`None`: let the last one go).
-pub fn set_sent(psb: Option<Vec<u8>>) {
+/// Hold `psb` as the sent Formula, with the CRC-32 of its bytes (made by
+/// the sender, on CPU0: `now_playing.sent`); `None`: let the last one go.
+pub fn set_sent(psb: Option<(Vec<u8>, u32)>) {
     let old = std::mem::replace(
         &mut *SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()),
-        psb.map(std::sync::Arc::new),
+        psb.map(|(b, crc)| (std::sync::Arc::new(b), crc)),
     );
     drop(old);
 }
 
 /// The sent Formula's compiled bytes, while it is held.
 pub fn sent() -> Option<std::sync::Arc<Vec<u8>>> {
-    SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|(b, _)| b.clone())
+}
+
+/// The CRC-32 the sent Formula's bytes were held with, while they are.
+pub fn sent_crc() -> Option<u32> {
+    SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|&(_, crc)| crc)
 }
 
 /// Is `path` the sent Formula's ([`SENT`], maybe with options)?

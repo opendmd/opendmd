@@ -857,6 +857,9 @@ pub fn receive(
             "no card (or one that cannot be read): a web app update is staged on the card, insert one",
         );
     }
+    // Remote control closes and holds off a while (`connect::UPDATE_HOLD`).
+    #[cfg(feature = "connect")]
+    crate::connect::hold_for_update();
     let Some(part) = partition() else {
         return up.error(
             500,

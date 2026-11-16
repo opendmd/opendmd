@@ -41,28 +41,33 @@ pub const INVITE_CHARS: usize = 26;
 
 /// The pairing secret `S` from 13 random bytes (the low 4 bits of the
 /// last are not used).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn secret_from_random(r: &[u8; 13]) -> String {
     base32_bits(r, 100)
 }
 
 /// An invite secret from 16 random bytes.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn invite_secret_from_random(r: &[u8; 16]) -> String {
     base32_bits(r, 128)
 }
 
 /// `S` as read from a link or QR: lowercased, then it must be 20 canonical
 /// base32 characters.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_secret(s: &str) -> Option<String> {
     let s = s.to_ascii_lowercase();
     unbase32_bits::<13>(&s, 100).map(|_| s)
 }
 
 /// An invite secret as read from a link: 26 canonical base32 characters.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn parse_invite_secret(s: &str) -> Option<String> {
     let s = s.to_ascii_lowercase();
     unbase32_bits::<16>(&s, 128).map(|_| s)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn id10(domain: &[u8], secret: &str) -> [u8; 10] {
     let h = sha256(&[domain, secret.as_bytes()]);
     let mut id = [0u8; 10];
@@ -70,31 +75,37 @@ fn id10(domain: &[u8], secret: &str) -> [u8; 10] {
     id
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn pair_id(secret: &str) -> [u8; 10] {
     id10(PAIR_ID_DOMAIN, secret)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn invite_id(secret: &str) -> [u8; 10] {
     id10(INVITE_ID_DOMAIN, secret)
 }
 
 /// `label`: its UTF-8 bytes exactly as sent (after JSON unescaping, before
 /// any cleaning), the last field: every other one has a fixed length.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn pair_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -> [u8; 32] {
     hmac_sha256(secret.as_bytes(), &[PAIR_MAC_DOMAIN, dev, public, label])
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn paired_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32]) -> [u8; 32] {
     hmac_sha256(secret.as_bytes(), &[PAIRED_MAC_DOMAIN, dev, public])
 }
 
 /// `label` as for [`pair_mac`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn add_mac(secret: &str, dev: &[u8; 16], public: &[u8; 32], label: &[u8]) -> [u8; 32] {
     hmac_sha256(secret.as_bytes(), &[ADD_MAC_DOMAIN, dev, public, label])
 }
 
 /// The 4 characters both screens show while adding a device (uppercase
 /// base32 of the first 20 bits of the hash).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn confirm_code(public: &[u8; 32]) -> String {
     base32_bits(&sha256(&[CONFIRM_DOMAIN, public]), 20).to_ascii_uppercase()
 }
@@ -111,6 +122,7 @@ pub enum PairError {
 
 impl PairError {
     /// The `err` in a `paired` answer.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn code(self) -> &'static str {
         match self {
             PairError::Closed => "closed",
@@ -132,17 +144,21 @@ pub struct Window {
 
 impl Window {
     /// A panel's pairing window for `S`, open from `now`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn open(secret: String, now: Duration) -> Window {
         Window { secret, until: now + PAIR_TTL, tries: PAIR_TRIES, open: true, invite: false }
     }
     /// An inviting controller's window for an invite secret.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn open_invite(secret: String, now: Duration) -> Window {
         Window { invite: true, ..Window::open(secret, now) }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn secret(&self) -> &str {
         &self.secret
     }
     /// What the server knows this window by: `pair_id` or `invite_id`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn id(&self) -> [u8; 10] {
         if self.invite {
             invite_id(&self.secret)
@@ -150,9 +166,11 @@ impl Window {
             pair_id(&self.secret)
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_open(&self, now: Duration) -> bool {
         self.open && now < self.until
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn close(&mut self) {
         self.open = false;
     }
@@ -161,6 +179,7 @@ impl Window {
     /// this panel `dev`. On success the window is used up and the answer's
     /// `mac2` returned; the caller cleans the label only now, and sends
     /// `mac2` only after the key is stored. A wrong MAC spends a try.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check(&mut self, dev: &[u8; 16], public: &[u8; 32], label: &[u8], mac: &[u8; 32], now: Duration) -> Result<[u8; 32], PairError> {
         if !self.open {
             return Err(PairError::Closed);

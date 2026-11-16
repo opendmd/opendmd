@@ -194,8 +194,8 @@ const _: () = assert!(
     esp_idf_sys::CONFIG_LWIP_MAX_SOCKETS as usize
         >= config::HTTP_MAX_SOCKETS as usize + 3 + 1 + 1 + QUEUE_DEPTH
 );
-// And the Connect probe's session (`connect_probe`).
-#[cfg(feature = "connect-core")]
+// And Remote control's session (`connect`).
+#[cfg(feature = "connect")]
 const _: () = assert!(
     esp_idf_sys::CONFIG_LWIP_MAX_SOCKETS as usize
         > config::HTTP_MAX_SOCKETS as usize + 3 + 1 + 1 + QUEUE_DEPTH
