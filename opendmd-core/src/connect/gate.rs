@@ -93,11 +93,11 @@ pub enum Unmet {
     PsramLargest { have: u32, need: u32 },
 }
 
-impl Unmet {
-    /// For `GET /api/connect` `waiting`: "internal heap 79 KB < 100 KB".
-    /// KB rounded down, so the two sides never print equal.
+impl core::fmt::Display for Unmet {
+    /// "internal heap 79 KB < 100 KB": KB rounded down, so the two sides
+    /// never print equal.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn describe(&self) -> String {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (what, have, need) = match *self {
             Unmet::Free { have, need } => ("internal heap", have, need),
             Unmet::Largest { have, need } => ("internal largest block", have, need),
@@ -105,10 +105,38 @@ impl Unmet {
         };
         // `have < need`: show bytes where whole KB would read the same.
         if have / KB < need / KB {
-            format!("{what} {} KB < {} KB", have / KB, need / KB)
+            write!(f, "{what} {} KB < {} KB", have / KB, need / KB)
         } else {
-            format!("{what} {have} B < {need} B")
+            write!(f, "{what} {have} B < {need} B")
         }
+    }
+}
+
+impl Unmet {
+    /// For `GET /api/connect` `waiting` (human-readable, not for parsing).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    /// Whether [`describe`](Self::describe) would give `s`, without
+    /// allocating (the worker asks every 2 s while it waits).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn reads_as(&self, s: &str) -> bool {
+        struct Cmp<'a>(&'a str);
+        impl core::fmt::Write for Cmp<'_> {
+            fn write_str(&mut self, part: &str) -> core::fmt::Result {
+                match self.0.strip_prefix(part) {
+                    Some(rest) => {
+                        self.0 = rest;
+                        Ok(())
+                    }
+                    None => Err(core::fmt::Error),
+                }
+            }
+        }
+        let mut c = Cmp(s);
+        core::fmt::write(&mut c, format_args!("{self}")).is_ok() && c.0.is_empty()
     }
 }
 
@@ -185,6 +213,20 @@ mod tests {
         let e = check(&S3_PSRAM_TLS, &none, false).unwrap_err();
         assert_eq!(e, Unmet::PsramLargest { have: 0, need: 64 * 1024 });
         assert_eq!(e.describe(), "PSRAM largest block 0 KB < 64 KB");
+    }
+
+    #[test]
+    fn reads_as_matches_describe_exactly() {
+        let e = Unmet::Free { have: 79_196, need: 100 * 1024 };
+        assert!(e.reads_as(&e.describe()));
+        assert!(!e.reads_as("internal heap 77 KB < 100 K"));
+        assert!(!e.reads_as("internal heap 77 KB < 100 KB!"));
+        assert!(!e.reads_as(""));
+        assert!(!Unmet::Free { have: 76 * 1024, need: 100 * 1024 }.reads_as(&e.describe()));
+        // The same KB on both readings: no new string needed.
+        assert!(Unmet::Free { have: 79_000, need: 100 * 1024 }.reads_as(&e.describe()));
+        let p = Unmet::PsramLargest { have: 0, need: 64 * 1024 };
+        assert!(p.reads_as("PSRAM largest block 0 KB < 64 KB") && !p.reads_as(&e.describe()));
     }
 
     #[test]

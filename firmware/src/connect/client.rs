@@ -722,7 +722,6 @@ impl Client {
         let free = free_heap();
         let heap = gate::Heap { free, largest: largest_free_block() as u32, psram_largest: psram_largest(gates.psram_largest) };
         if let Err(unmet) = gate::check(&gates, &heap, resumed) {
-            set_state(super::WAITING_FOR_MEMORY);
             super::set_waiting(unmet);
             tele(|t| t.gate_waits += 1);
             self.not_before = now + Duration::from_secs(2);
