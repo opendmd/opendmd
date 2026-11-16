@@ -32,6 +32,9 @@ Sprites from your own pictures.
 - Updates over WiFi now also accept a second, backup signing key, kept
   offline, so if the main key is ever lost, your display can still be
   updated over WiFi instead of reinstalled over USB.
+- Now's preview of a Formula that never repeats draws the same picture as
+  the panel, and knows a Formula you showed on the panel from another one
+  shown there since, even one with the same name.
 
 ## 1.1.0-beta.2 · 2026-11-11
 

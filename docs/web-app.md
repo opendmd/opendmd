@@ -65,15 +65,15 @@ button lands on them.
   while it is this page's last Show on panel, else none); one it can't
   find or compile says "Preview not available for this Formula", and one
   the panel can't be asked for just now "Panel not reachable" (asked again
-  at the next status). A Formula that reads its seed (a `loop forever`
-  one) or the world (the clock, `since`/`was`; Endless road, Time gate,
-  the clocks) previews in step but not always the same picture: the
-  status doesn't carry the panel's seed (a follow-up: `now_playing` could
-  carry it cheaply). Which send the panel's `~sent` is, Now infers from
-  when it started (early rather than late: content time runs a little
-  behind the panel's clock; its pauses taken out) and its name, asked
-  again at each status; the proper follow-up is `now_playing` carrying
-  the send's identity (a counter or a CRC of the compiled bytes). Captions and
+  at the next status). It draws with the panel's seed (`now_playing.seed`:
+  a `loop forever` one's picture is the panel's); one that reads the world
+  (the clock, `since`/`was`; Endless road, Time gate, the clocks) previews
+  in step but not always the same picture. The panel's `~sent` is this
+  page's last send when `now_playing.sent`, the CRC-32 of the compiled
+  bytes, is that send's (asked again at each status while the send is under
+  2 s old); firmware without it, Now infers it from when it started (early
+  rather than late: content time runs a little behind the panel's clock;
+  its pauses taken out) and its name. Captions and
   names are plain words, never a path or the player's error. The preview
   can be switched off (Settings
   → Panel → *Mirror the panel on Now*, per browser). The device's figures

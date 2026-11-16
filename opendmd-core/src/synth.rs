@@ -765,6 +765,16 @@ impl<R: Read> SynthSource<R> {
         self.name.as_deref()
     }
 
+    /// The `seed` the Formula it plays was opened with (`None`: not a
+    /// Formula): `now_playing.seed`, so a preview draws the same picture.
+    #[cfg(feature = "psi")]
+    pub fn seed(&self) -> Option<i32> {
+        match &self.spec {
+            Spec::Fx(crate::fx::Fx::Psi(f)) => Some(f.seed()),
+            _ => None,
+        }
+    }
+
     /// A formula on screen takes `path`'s formula in place, keeping its
     /// clock and memory (no transition, no restart): a live edit or
     /// another Formula played over it, as `how` says (what the governor

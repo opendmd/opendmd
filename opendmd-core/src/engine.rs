@@ -1072,6 +1072,14 @@ impl Engine {
         self.current.as_ref().map(Playing::now_playing)
     }
 
+    /// The `seed` the Formula on screen was opened with (Q16.16, 0..1;
+    /// `None`: no Formula on screen): `/api/status`' `now_playing.seed`.
+    /// A live edit keeps it; a new start has its own.
+    #[cfg(feature = "psi")]
+    pub fn seed(&self) -> Option<i32> {
+        self.current.as_ref().and_then(|p| p.gif.seed())
+    }
+
     /// Play `path` next, now, ahead of the schedule.
     ///
     /// The file is opened straight away through the [`Source`] (so an open
@@ -2275,6 +2283,52 @@ mod tests {
         assert_eq!(rate(&mut e), (10, 80), "a live edit keeps the level");
         // (Its steps up after, a level per CALM calm frames, are
         // `fx_psi::tests::a_live_edit_keeps_the_governors_level`'s.)
+    }
+
+    /// `now_playing.seed` (`Engine::seed`): none for a GIF; the seed the
+    /// Formula on screen opened with, in 0..1 (Q16.16), kept through a live
+    /// edit and another Formula played in place (no new start), so a
+    /// preview given it draws the panel's picture.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn the_seed_on_screen_is_the_one_its_formula_opened_with() {
+        use crate::fx_psi::Retune;
+        let gif = "/gifs/Consoles/NES_A_01.gif";
+        let mut e = engine_with(
+            &[(gif, one_pixel_gif(255, 0, 0))],
+            gif,
+            DwellPolicy {
+                min: Duration::from_secs(60),
+                max: Duration::from_secs(60),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        assert_eq!(e.seed(), None, "a GIF has none");
+        let a = crate::fx_psi::path("loop forever\ngray(frac(x + t/5 + seed))", "name=A");
+        let b = crate::fx_psi::path("loop forever\ngray(frac(y + t/5 + seed))", "name=B");
+        e.play_now(&a, Duration::from_millis(100)).unwrap();
+        e.note_sent();
+        let mut t = 100;
+        for _ in 0..5 {
+            t += 20;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+        }
+        let s = e.seed().expect("a Formula on screen has its seed");
+        assert!((0..65_536).contains(&s), "0..1 in Q16.16: {s}");
+        let p = e.current.as_mut().unwrap();
+        let Some(crate::fx::Fx::Psi(f)) = p.gif.synth_mut().unwrap().fx_mut() else {
+            panic!("not a formula");
+        };
+        assert_eq!(f.seed(), s, "the one it draws with");
+        e.retune(&b, Duration::from_millis(t), None, Retune::Play).unwrap().unwrap();
+        assert_eq!(e.seed(), Some(s), "another Formula in place keeps it");
+        e.retune(&a, Duration::from_millis(t), None, Retune::Edit).unwrap().unwrap();
+        assert_eq!(e.seed(), Some(s), "a live edit keeps it");
+        e.play_now(gif, Duration::from_millis(t)).unwrap();
+        e.tick(Duration::from_millis(t + 20), &mut c).unwrap();
+        assert_eq!(e.seed(), None, "a GIF again");
     }
 
     /// A live edit that comes after the playlist moved on to another

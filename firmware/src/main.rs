@@ -487,6 +487,18 @@ fn flush_settings(cfg: &mut Config, settings: &Settings, dirty: &mut bool) {
     }
 }
 
+/// `now_playing.seed`: the seed the Formula on screen opened with
+/// (`Engine::seed`), at each start.
+fn seed_on_screen(eng: &opendmd_core::engine::Engine) -> Option<i32> {
+    #[cfg(feature = "psi")]
+    return eng.seed();
+    #[cfg(not(feature = "psi"))]
+    {
+        let _ = eng;
+        None
+    }
+}
+
 /// Racing the beam: may this tick's Formula frame write
 /// its pairs as it draws them? Not with the panel dark, under the glow or
 /// a formula look, nor while a transition runs. (Out of line: once a tick,
@@ -919,6 +931,9 @@ fn main() -> Result<()> {
     // back with the paused frame, if one is.
     let mut update_named: Option<(String, String)> = None;
 
+    // The CRC-32 of the sent Formula's bytes last held (`PlayNow`'s, made
+    // on CPU0): `now_playing.sent` for the start that plays them.
+    let mut sent_crc = 0u32;
     loop {
         // 0. Safe start: extended once when the network comes up, then the
         //    saved ceiling takes over.
@@ -1015,8 +1030,9 @@ fn main() -> Result<()> {
                     if !reply.claim() {
                         continue;
                     }
-                    if psb.is_some() {
-                        opendmd_core::synth::set_sent(psb);
+                    if let Some((psb, crc)) = psb {
+                        opendmd_core::synth::set_sent(Some(psb));
+                        sent_crc = crc;
                     }
                     // A Formula in place: (the frame ms it starts at, asked).
                     let mut in_place = None;
@@ -1070,6 +1086,10 @@ fn main() -> Result<()> {
                                     if let (Ok(mut s), Some(np)) = (status.lock(), np) {
                                         s.path = np.path.into();
                                         s.title = np.title.into();
+                                        // (A live edit of the sent one: its new bytes.)
+                                        if opendmd_core::synth::is_sent(&path) {
+                                            s.sent = Some((np.ordinal, sent_crc));
+                                        }
                                     }
                                 }
                                 r
@@ -1090,7 +1110,13 @@ fn main() -> Result<()> {
                                 }
                             }
                             let ordinal = engine.as_ref().and_then(|e| e.now_playing()).map(|p| p.ordinal);
-                            status.lock().unwrap().kept = keep.secs().zip(ordinal).map(|(secs, o)| (o, secs));
+                            let mut s = status.lock().unwrap();
+                            s.kept = keep.secs().zip(ordinal).map(|(secs, o)| (o, secs));
+                            // The sent one, held (just now, or still from
+                            // its last send): which bytes this start plays.
+                            if opendmd_core::synth::is_sent(&path) {
+                                s.sent = ordinal.map(|o| (o, sent_crc));
+                            }
                         }
                         r
                     };
@@ -2512,6 +2538,7 @@ fn main() -> Result<()> {
                 s.path = playing.path.into();
                 s.title = playing.title.into();
                 s.gifs_started = playing.ordinal;
+                s.seed = seed_on_screen(eng);
             }
             if let Some((elapsed, frame, at, due)) = shown {
                 s.frame_elapsed = elapsed;

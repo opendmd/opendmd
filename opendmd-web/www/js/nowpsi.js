@@ -3,11 +3,12 @@
 // bundled one by name, formulas.json; one of yours on the card, its .psi;
 // an inline one, the saved or bundled Formula that compiles to it; the
 // panel's sent one, `@formula:~sent`, only while it is this page's last
-// Show on panel, js/psishow.js `sent`), drawn by pkg-psi (an instance of
-// its own, `?now<gen>`) into the Now preview at the panel's position.
-// Nothing found or compiled: `play` fails, and Now says so in plain words.
-// A Formula that reads its seed or the world (the clock, `since`) draws in
-// step with the panel but not always the same picture.
+// Show on panel, js/psishow.js `sent`: its bytes' CRC-32 the panel's
+// `now_playing.sent`), drawn by pkg-psi (an instance of its own,
+// `?now<gen>`) into the Now preview at the panel's position, with the
+// panel's `now_playing.seed`. Nothing found or compiled: `play` fails, and
+// Now says so in plain words. A Formula that reads the world (the clock,
+// `since`) draws in step with the panel but not always the same picture.
 
 import { app } from './state.js';
 import { Q, num, path as fpath, compiler, hasCompiler } from './psikit.js';
@@ -111,17 +112,25 @@ export async function find(p) {
   return [...[store.get('psi.mine', [])].flat(), ...await bundled()].find((f) => typeof f?.src == 'string' && fpath({ src: f.src }) == want);
 }
 
-// The Formula's text, or null. `start()`: when (page clock) the panel started what it plays.
-async function source(p, start) {
+// The Formula's text, or null. `start()`: when (page clock) the panel
+// started what it plays; `sent`: its `now_playing.sent` (null: firmware
+// without it).
+async function source(p, start, sent) {
   const head = p.split('?')[0];
   if (head == '@formula:~sent') {
-    // This page's last send, if what the panel plays started by then (its
-    // start, js/now.js, errs early) and has its name; else asked again at
-    // each status (a send of ours on its way to it, a clock not yet
-    // measured), saying there's none once its send is 2 s old.
-    // (Proper: now_playing carrying the send's identity.)
-    const s = app.device && (await import('./psishow.js')).sent(), t = start(), n = /^\s*name\s+"([^"\n]*)"/m.exec(s?.src || '')?.[1];
+    // This page's last send, if its bytes are what the panel plays (`sent`);
+    // else asked again at each status (a send of ours on its way to it),
+    // saying there's none once its send is 2 s old. Firmware that doesn't
+    // say: if what the panel plays started by then (its start, js/now.js,
+    // errs early) and has its name.
+    const s = app.device && (await import('./psishow.js')).sent();
     if (!s) return null;
+    if (sent != null) {
+      if (s.crc === sent) return s.src;
+      if (performance.now() - s.at >= 2000) return null;
+      throw new Later(false);
+    }
+    const t = start(), n = /^\s*name\s+"([^"\n]*)"/m.exec(s.src)?.[1];
     if (t != null && t <= s.at + 300 && (!n || n.trim() == (app.status?.now_playing?.title || '').trim())) return s.src;
     throw new Later(performance.now() - s.at >= 2000);
   }
@@ -132,22 +141,25 @@ async function source(p, start) {
 
 // Plays `p` into `pv` (a PanelPreview) until the returned stop() is
 // called or `alive()` turns false. `pos()`: the panel's ms into it, or
-// null (the page's clock from now); `fail()` if it stops drawing. Throws
-// when it can't be previewed (a Later: not yet; a network error as it came).
-export async function play(p, pv, { pos, start, alive, fail }) {
+// null (the page's clock from now); `fail()` if it stops drawing; `seed`,
+// `sent`: the panel's `now_playing` ones (null: not said). Throws when it
+// can't be previewed (a Later: not yet; a network error as it came).
+export async function play(p, pv, { pos, start, alive, fail, seed = null, sent = null }) {
   // (The display's refresh learnt while the module and the Formula load, so its first frames don't run at
   // 60 Hz's.)
   let warm = 0;
   const learn = (now) => { refresh(now); warm = requestAnimationFrame(learn); };
   warm = requestAnimationFrame(learn);
-  try { return await play_(p, pv, { pos, start, alive, fail }); } finally { cancelAnimationFrame(warm); }
+  try { return await play_(p, pv, { pos, start, alive, fail, seed, sent }); } finally { cancelAnimationFrame(warm); }
 }
-async function play_(p, pv, { pos, start, alive, fail }) {
+async function play_(p, pv, { pos, start, alive, fail, seed, sent }) {
   const P = await own();
   if (!alive()) return () => {};
-  const src = await source(p, start);
+  const src = await source(p, start, sent);
   if (!alive()) return () => {};
   if (!src || !P.compile(src)) throw new Error('no preview');
+  // The panel's seed (a `loop forever` one draws its picture), else 0.
+  P.setSeed?.(Number.isInteger(seed) ? seed : 0);
   const q = new URLSearchParams(p.split('?')[1] || ''), [a, b, c] = [...'abc'].map((k) => Q(num(q.get(k))));
   const i = P.info(), pace = pacer(i[17] || i[10] || 20), lp = i[4] === 0 ? Infinity : i[4] || 8000, t0 = performance.now(), ds = pv.canvas.dataset;
   let raf = 0, on = true;
@@ -166,7 +178,7 @@ async function play_(p, pv, { pos, start, alive, fail }) {
       pv.p.showRgb(new Uint8Array(P.mem.buffer, P.pixels(), 12288));
     } catch { stop(); M = null; gen++; fail(); return; }
     // (For tools/web-smoke.py.)
-    Object.assign(ds, { frames: -~ds.frames, ms, src: p, len: src.length, q: `${a},${b},${c}` });
+    Object.assign(ds, { frames: -~ds.frames, ms, src: p, len: src.length, q: `${a},${b},${c}`, seed: Number.isInteger(seed) ? seed : '' });
   };
   ds.loops = ++loops;
   raf = requestAnimationFrame(step);

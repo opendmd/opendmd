@@ -898,13 +898,19 @@ class Lane:
                 return None
             return time.time() - t0, jit(st)
         api.json("POST", "/api/play", {"path": "/gifs/EmuApi/emu-a.gif"})
-        self.wait_status(api, lambda s: s["now_playing"]["path"] == "/gifs/EmuApi/emu-a.gif", 30, "the GIF before")
+        st = self.wait_status(api, lambda s: s["now_playing"]["path"] == "/gifs/EmuApi/emu-a.gif", 30, "the GIF before")
+        self.expect(not {"seed", "sent"} & set(st["now_playing"]), "sent", f"a GIF with a seed or a send's identity: {st['now_playing']}")
         _, r = api.json("POST", "/api/play/formula?a=0.5&key=secret", long)
         self.expect(r.get("path") == "@formula:~sent?a=0.5", "sent", f"answered {r} (the sliders kept, never the key)")
         st = self.wait_status(api, lambda s: s["now_playing"]["path"].startswith("@formula:~sent")
                               and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the long Formula playing")
         np = st["now_playing"]
         self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
+        # Its identity (Connect P1 F0): the CRC-32 of the bytes sent, and the
+        # seed it opened with.
+        seed = np.get("seed")
+        self.expect(np.get("sent") == zlib.crc32(long), "sent", f"now_playing.sent {np.get('sent')}, wanted {zlib.crc32(long)} (the bytes' CRC-32)")
+        self.expect(isinstance(seed, int) and 0 <= seed < 65536, "sent", f"now_playing.seed {seed!r}, wanted 0..65535")
         ordinal = np["ordinal"]
         first = jit_on("the long Formula")
         # Live edits as the editor sends them (~200 ms apart): the other Formula, then back.
@@ -917,6 +923,8 @@ class Lane:
         np = st["now_playing"]
         self.expect(np["ordinal"] == ordinal and np["title"] == name(long), "sent",
                     f"after 10 live edits: ordinal {np['ordinal']} (was {ordinal}), title {np['title']!r}")
+        self.expect(np.get("seed") == seed and np.get("sent") == zlib.crc32(long), "sent",
+                    f"after 10 live edits: seed {np.get('seed')} (was {seed}), sent {np.get('sent')} (wanted {zlib.crc32(long)})")
         # The JIT comes back after the edits pause, with one kernel made for
         # the burst, not one per edit (Jit::settling).
         jit_off("after the live edits")
@@ -935,13 +943,19 @@ class Lane:
             self.notes.append(f"sent: no kernel on this heap ({jit(api.status())}): the JIT's checks were not made")
             self.expect(not emu.find(re.compile(r"kernel of \d+ B at .*to be checked"), mark)
                         or emu.find(re.compile(r"checked against the VM"), mark), "sent", "a kernel made after a=30 was never checked")
+        # Another's bytes (short's) in place: their own identity, the seed kept.
+        api.json("POST", "/api/play/formula?live=1", short)
+        st = self.wait_status(api, lambda s: s["now_playing"].get("sent") == zlib.crc32(short), 30, "a live edit's identity")
+        self.expect(st["now_playing"].get("seed") == seed, "sent", f"a live edit's seed {st['now_playing'].get('seed')}, was {seed}")
         _, rec = api.json("GET", "/api/status?recent=1")
         self.expect(not any("~sent" in str(x) for x in rec.get("recent") or []), "sent", f"in Recently played: {rec.get('recent')}")
         api.call("POST", "/api/play/formula", b"\0" * (16 * 1024 + 1), want=(413,))
         api.call("POST", "/api/play/formula", {"path": "x"}, want=(415,))
         api.call("POST", "/api/play/formula", b"not a formula", want=(400,))
         # The Formula refused, the one on the panel plays on.
-        self.expect(api.status()["now_playing"]["ordinal"] == ordinal, "sent", "a refused one moved the panel on")
+        np = api.status()["now_playing"]
+        self.expect(np["ordinal"] == ordinal, "sent", "a refused one moved the panel on")
+        self.expect(np.get("sent") == zlib.crc32(short), "sent", f"after the refused ones, sent {np.get('sent')}: not the bytes on screen's")
         api.json("POST", "/api/skip")
         self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
         api.call("POST", "/api/play/formula?live=1", long, want=(409,))
