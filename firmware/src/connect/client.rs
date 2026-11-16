@@ -6,7 +6,7 @@
 //! |---|---|
 //! | Full handshake | only with 48 KB free and a 16 KB block ([`Cfg`], `opendmd_core::connect::gate`), and 10 s without a LAN upload, stream or heavy request (`super::lan_busy`). Otherwise wait: "waiting for memory" (`waiting` names the unmet condition), "waiting for quiet" |
 //! | Resumed handshake (a TLS ticket held) | 44 KB until it is measured (D3); the same quiet |
-//! | S3 | 100 KB: open in practice. With mbedTLS in PSRAM (`psram-tls`): the classic's internal gates, and a 64 KB PSRAM block |
+//! | S3 | 100 KB: open in practice. With mbedTLS in PSRAM (`psram-tls`): the classic's internal free gates, an 8 KB internal block, and a 64 KB PSRAM block |
 //! | Looking up the server | on its own task, one at a time, waited for 25 s ("looking up the server"; `opendmd_core::connect::dns`). Unanswered by then: one failure (its late error is not another; a late address is used next time). Still running at the next attempt: reported as stuck, one failure. DNS failures back off no further than 30 s |
 //! | After a server close | 0-30 s spread, then 5 s doubling to 15 min, with jitter (`Backoff`) |
 //! | Refused (4403, or HTTP 403 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |

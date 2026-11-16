@@ -157,10 +157,11 @@ pub static TLS_PEAK: AtomicI32 = AtomicI32::new(0);
 
 /// Of [`TLS_IN_USE`], the bytes in PSRAM (`psram-tls`, an ESP32-S3
 /// measurement build), and the allocations that wanted PSRAM and got
-/// internal RAM.
+/// internal RAM (its `connect.heap.psram`; a shipping build's only
+/// [`tls_calloc`] call, the verify callback's root, is not counted).
 #[cfg(all(esp32s3, feature = "psram-tls", feature = "connect-measure"))]
 pub static TLS_PSRAM: AtomicI32 = AtomicI32::new(0);
-#[cfg(all(esp32s3, feature = "psram-tls"))]
+#[cfg(all(esp32s3, feature = "psram-tls", feature = "connect-measure"))]
 pub static TLS_FELL_BACK: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(feature = "psram-tls", not(esp32s3)))]
 compile_error!("psram-tls is an ESP32-S3 measurement switch (VARIANT=s3)");
@@ -187,6 +188,7 @@ pub unsafe extern "C" fn tls_calloc(n: usize, size: usize) -> *mut c_void {
     let p = {
         let p = sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT);
         if p.is_null() && n.saturating_mul(size) > 0 {
+            #[cfg(feature = "connect-measure")]
             TLS_FELL_BACK.fetch_add(1, Relaxed);
             sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT)
         } else {
