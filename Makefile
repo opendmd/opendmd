@@ -1540,8 +1540,8 @@ emu-s3-probe: emu-build
 #               no pin loopback), and the brownout-loop guard (src/s3board.rs)
 #   carrier-connect  carrier with the shipping Connect client (`connect`,
 #               GIF sends on as on every S3) in place of the probe: no
-#               measuring half, nothing test-only (no connect-test, no
-#               OPENDMD_CONNECT_*), sdkconfig.connect layered on as for any
+#               measuring half, no Connect test hooks (no connect-test,
+#               no OPENDMD_CONNECT_*), sdkconfig.connect layered on as for any
 #               connect build; Remote control off until switched on over the
 #               LAN (`cx_on`, POST /api/connect)
 #
@@ -1603,11 +1603,12 @@ S3_FLASH_CMD = $(S3_FLASH_CMD_$(S3_FLASH))
 
 fw-s3-image:
 	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
+	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@$(if $(S3_ON_WIFI),test -f "$(S3_CREDENTIALS)" || { echo "no $(S3_CREDENTIALS): S3_CREDENTIALS=<a file like firmware/.env.example>"; exit 2; },true)
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	@mkdir -p $(S3_DIR)
 	@find $(S3_DIR) -maxdepth 1 -name 'opendmd-*-s3-*.bin' -delete
-	OPENDMD_S3_IMAGE=$(S3_IMAGE) OPENDMD_S3_SWITCHES="$(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))" $(S3_ENV_$(S3_IMAGE)) \
+	OPENDMD_S3_IMAGE=$(S3_IMAGE) OPENDMD_S3_SWITCHES="$(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))" \
 	$(if $(S3_ON_WIFI),,OPENDMD_PROBE_NOCARD_TIMINGS=1 )$(MAKE) --no-print-directory fw-release-variant VARIANT=s3 \
 	  FW_RELEASE_FEATURES=$(S3_FEATURES_$(S3_IMAGE)) $(if $(S3_SDK_$(S3_IMAGE)),FW_EXTRA_SDKCONFIG="$(strip $(S3_SDK_$(S3_IMAGE)))") \
 	  $(if $(S3_ON_WIFI),FW_S3_CREDENTIALS="$(S3_CREDENTIALS)") FW_APP_SPARE=$(S3_SPARE) FW_RELEASE_TARGET_DIR=$(S3_DIR)/target DIST=$(S3_DIR)
@@ -1632,7 +1633,6 @@ fw-s3-image:
 	 echo "==> $(S3_IMAGE): $$full ($$(stat -c %s $(S3_DIR)/opendmd-*-s3-app.bin) B app)"; cat $(S3_DIR)/sections.txt
 	@! grep -q '^CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=y' $(S3_DIR)/sdkconfig || { echo "memory protection is on: no executable heap for the JIT"; exit 1; }
 	@$(if $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),grep -qx 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=y' $(S3_DIR)/sdkconfig && echo "sdkconfig: Connect's mbedTLS settings in force" || { echo "$(S3_DIR)/sdkconfig: Connect's mbedTLS settings are missing"; exit 1; },true)
-	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 
 fw-s3-images:
 	@for i in $(S3_IMAGES); do $(MAKE) --no-print-directory fw-s3-image S3_IMAGE=$$i || exit 1; done
