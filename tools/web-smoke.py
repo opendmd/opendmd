@@ -11227,8 +11227,9 @@ def platform_checks(page: Page, base: str) -> None:
           and page.inner_text("#now-title") == "No card",
           f"now: a card that has stopped answering says to cut the power, no Format ({page.inner_text('#now-sd-text')!r})")
     page.unroute(STATUS_RE)
-    page.wait_for_function("!document.querySelector('#now-title').textContent.startsWith('Nothing')", timeout=10000)
-    check(page.is_hidden("#now-sd"), "now: the card line goes once the card is back")
+    page.wait_for_function("!['No card', 'Nothing playing'].includes(document.querySelector('#now-title').textContent)", timeout=10000)
+    page.wait_for_selector("#now-sd", state="hidden", timeout=5000)
+    check(True, "now: the card line goes once the card is back")
     check(True, "now: playing again once status has entries")
     goto_view(page, "settings/device")
     page.wait_for_selector("#st-facts dt")
