@@ -106,6 +106,13 @@ connect = ["opendmd-core/connect"]
 connect-measure = ["connect"]
 connect-probe = ["connect-measure"]
 connect-core = ["connect"]
+# Remote control without GIF sends (`hello` says `send: false`, a `send` is
+# `not-allowed`): the classic's switch should device test D4's card writes
+# fail beside play. Sends are on in every other connect build.
+connect-no-send = ["connect"]
+# GIF sends on the classic too (off there until device test D4 passes; on
+# the S3 always): D4's builds and the emulator lane's image.
+connect-send-classic = ["connect"]
 # The emulator lane's image only (`make emu-image-connect`): lets the build
 # take OPENDMD_CONNECT_HOST, _ADDR, _HOLD_S, _TEST_ROOT and _TEST_KEY (a
 # local server, a test root, a test controller key whose seed is public).

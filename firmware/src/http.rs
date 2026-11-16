@@ -2821,8 +2821,18 @@ fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::
         identity_json(s),
         opt_json((!s.next.is_empty()).then_some(s.next.as_str())),
         s.paused,
-        stream::transfers() > 0 || stream::uploads() > 0,
+        stream::transfers() > 0 || stream::uploads() > 0 || remote_sending(),
     );
+}
+
+/// A Remote control send holds a transfer (`connect` builds).
+#[optimize(size)]
+#[inline(never)]
+fn remote_sending() -> bool {
+    #[cfg(feature = "connect")]
+    return crate::connect::sending();
+    #[cfg(not(feature = "connect"))]
+    false
 }
 
 /// `GET /api/status?now=1`: the Now page's poll between full reads, ~300 B
@@ -3782,7 +3792,7 @@ pub(crate) fn connect_status(status: &Mutex<Status>, settings: &Mutex<Settings>,
         snap.paused,
         json_string(&set),
         json_string(crate::follow::state_name()),
-        stream::transfers() > 0 || stream::uploads() > 0,
+        stream::transfers() > 0 || stream::uploads() > 0 || remote_sending(),
         json_string(crate::state::firmware_version()),
         json_string(name),
         opt_json(crate::state::panel_id()),

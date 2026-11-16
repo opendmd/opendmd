@@ -71,8 +71,8 @@ impl Client {
             Remote::AddController { public, label } => self.add(k, public, label),
             Remote::RemoveController { k: gone } => self.remove(gone),
             Remote::Name { name } => self.rename(name),
-            // GIF sends come with P1's F4; `hello` says `send: false`.
-            Remote::Send(_) | Remote::SendCancel { .. } => Err(Refusal::NotAllowed),
+            // Queued for the top level by `frame` (`xfer`), never here.
+            Remote::Send(_) | Remote::SendCancel { .. } => Err(Refusal::Busy),
         };
         let ack = match r {
             Ok(r) => proto::ack_ok(&k, n, r.as_deref()),
@@ -84,7 +84,7 @@ impl Client {
 
     #[optimize(size)]
     #[inline(never)]
-    fn play(&mut self, path: String) -> Done {
+    pub(super) fn play(&mut self, path: String) -> Done {
         // The remote rule (`proto::remote_play_path_ok`) has run; the LAN's
         // own validation runs too.
         if http::check_play_path(&path, false, false).is_err() {

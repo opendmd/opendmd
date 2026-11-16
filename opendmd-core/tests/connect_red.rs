@@ -315,3 +315,79 @@ fn a_label_rewritten_by_the_server_is_refused() {
     assert!(matches!(w.check(&dev, &public, b"guest phone\xe2\x80\x8b", &mac, t), Err(PairError::BadMac { .. })));
     assert!(w.check(&dev, &public, LABEL, &mac, t).is_ok());
 }
+
+// --- Transfers on the panel's slot, from the pinned vectors ----------------------
+
+/// The pinned vectors' panel (its list, id and session) and a frame by name.
+fn pinned() -> (serde_json::Value, KeyList, Dev, [u8; 12]) {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/connect-vectors.json")).unwrap()).unwrap();
+    let unhex = |s: &serde_json::Value| -> Vec<u8> { (0..s.as_str().unwrap().len()).step_by(2).map(|i| u8::from_str_radix(&s.as_str().unwrap()[i..i + 2], 16).unwrap()).collect() };
+    let p = &v["panel"];
+    let keys = KeyList::decode(&unhex(&p["key_blob"])).unwrap();
+    let dev = Dev(unhex(&p["dev_hex"]).try_into().unwrap());
+    let sess: [u8; 12] = unhex(&p["sess"]).try_into().unwrap();
+    (v, keys, dev, sess)
+}
+
+fn pinned_frame(v: &serde_json::Value, name: &str) -> Vec<u8> {
+    let c = v["commands"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap_or_else(|| panic!("no vector {name}"));
+    let s = c["frame"].as_str().unwrap();
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
+
+#[test]
+fn the_pinned_send_charges_once_and_resumes_only_for_its_key() {
+    let (v, keys, dev, sess) = pinned();
+    let lim = v["limits"].clone();
+    assert_eq!(lim["max_chunk"], xfer::MAX_CHUNK);
+    assert_eq!(lim["max_file"], xfer::MAX_FILE);
+    let mut s = Session::new(dev, sess, proto::VERSION, Duration::ZERO);
+    let acc = s.check(&keys, &Limits { max_brightness: 128 }, &pinned_frame(&v, "ok-send"), Duration::ZERO).unwrap();
+    let Command::Send(args) = acc.cmd else { panic!("not a send") };
+    let mut slot = xfer::Slot::new(2);
+    let now = Duration::from_secs(50);
+    let (plan, _) = slot.check(&acc.k, &args, now).unwrap();
+    assert_eq!(plan, xfer::Plan::Start { replaces: false });
+    slot.start(acc.k, args.clone(), now).unwrap();
+    let bytes = u64::from(args.size) + u64::from(args.copy_size);
+    assert_eq!(slot.quota.used(now), bytes, "size + copy_size, when accepted");
+    // The panel's first credit: its window, never more.
+    let h = slot.held.as_ref().unwrap();
+    assert_eq!(h.t.upto(), 2 * xfer::MAX_CHUNK as u32);
+    // Signed again (a reconnect): a resume, nothing charged again.
+    assert_eq!(slot.check(&acc.k, &args, now + Duration::from_secs(60)).unwrap().0, xfer::Plan::Resume);
+    assert!(slot.resume(&args, now + Duration::from_secs(60)));
+    assert_eq!(slot.quota.used(now), bytes);
+    // Another paired key naming the same transfer: busy, nothing charged.
+    let other = keys.entries().iter().map(|e| e.id()).find(|k| *k != acc.k).unwrap();
+    assert_eq!(slot.check(&other, &args, now).unwrap_err(), Refusal::Busy);
+    assert_eq!(slot.quota.used(now), bytes);
+    // Abandoned (a cancel): no refund.
+    assert!(slot.cancel(&acc.k, args.id).unwrap().is_some());
+    assert_eq!(slot.quota.used(now), bytes);
+}
+
+#[test]
+fn a_whole_stream_through_the_slot_with_a_tampered_copy() {
+    let gif: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+    let copy: Vec<u8> = (0..1700u32).map(|i| (i % 13) as u8).collect();
+    let args = proto::SendArgs { id: 5, name: "s.gif".into(), size: 3000, sha256: sha256(&[&gif]), copy_size: 1700, copy_sha256: Some(sha256(&[&copy])), play: true };
+    for tamper in [None, Some(3500usize)] {
+        let mut slot = xfer::Slot::new(4);
+        slot.start([1; 8], args.clone(), Duration::ZERO).unwrap();
+        let mut all = [gif.as_slice(), copy.as_slice()].concat();
+        if let Some(at) = tamper {
+            all[at] ^= 0x40;
+        }
+        let t = &mut slot.held.as_mut().unwrap().t;
+        while !t.complete() {
+            let at = t.received() as usize;
+            let n = (t.upto() as usize - at).min(xfer::MAX_CHUNK);
+            t.accept(&parse_chunk(&chunk_frame(5, at as u32, &all[at..at + n])).unwrap(), Duration::ZERO).unwrap();
+            t.commit(&all[at..at + n]);
+            t.grant_more();
+            assert!(t.upto() - t.offset() <= 4 * xfer::MAX_CHUNK as u32);
+        }
+        assert_eq!(t.finish(), if tamper.is_some() { Err(XferError::Tampered) } else { Ok(()) });
+    }
+}

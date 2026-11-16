@@ -257,6 +257,10 @@ pub struct Client {
     /// "Remote control added" up until then, with the device's name.
     pub(super) added: Option<(String, Instant)>,
     pub(super) shown: Shown,
+    /// A GIF being sent (`xfer`): the slot, what the read path queued, the
+    /// `.part` open. Boxed: the client lives on the network worker's
+    /// stack, and the transfer's hash states are ~0.5 KB.
+    pub(super) xfer: Box<super::xfer::Xfer>,
 }
 
 impl Client {
@@ -331,6 +335,7 @@ impl Client {
             pair_store: None,
             added: None,
             shown: Shown::None,
+            xfer: Box::new(super::xfer::Xfer::new()),
         }
     }
 
@@ -358,6 +363,11 @@ impl Client {
         if self.pending.is_some() || !self.paired_due.is_empty() || self.pair_store.is_some() {
             return w.min(Duration::from_millis(200));
         }
+        // A send's chunks or credit wait for the next turn (a chunk held
+        // back by a LAN upload, an update or the heap: not at 200 Hz).
+        if let Some(d) = self.xfer.due() {
+            return w.min(d.max(busy));
+        }
         // The card's copy is due: the next turn makes it.
         if self.card_due.is_some_and(|t| Instant::now() >= t) {
             return busy;
@@ -372,6 +382,8 @@ impl Client {
         self.turn(online);
         // Pairing, at the top level (never under the read path).
         self.pairing();
+        // A send's hashing and card writes, likewise.
+        self.transfers();
         // The worker's stack margin, where something reads it (a measuring
         // build's telemetry, an emulator image's lane).
         #[cfg(any(feature = "connect-measure", feature = "connect-test"))]
@@ -1072,8 +1084,9 @@ impl Client {
                 self.backoff.reset();
             }
         }
-        // What the panel can do: no sends yet (P1's F4 decides, per chip).
-        let caps = Caps { send: false, window: if cfg!(esp32s3) { 4 } else { 2 } };
+        // What the panel can do: sends (unless switched off for this chip:
+        // `super::sends_on`), and the credit window the server holds it to.
+        let caps = Caps { send: super::sends_on(), window: super::xfer::window() };
         let hello = proto::hello(&secret, crate::state::firmware_version(), &sess, caps);
         let conn = self.conn.as_mut().expect("held");
         conn.text(&hello)?;
@@ -1216,7 +1229,7 @@ impl Client {
             self.server_message(m)?;
         }
         for f in acts.frames {
-            self.frame(&f)?;
+            self.frame(f)?;
         }
         if let Some((code, reason)) = acts.close {
             // Answer the close (RFC 6455 5.5.1), then end.
@@ -1259,12 +1272,18 @@ impl Client {
     /// against this panel's own list, then carried out and answered.
     #[optimize(size)]
     #[inline(never)]
-    fn frame(&mut self, f: &[u8]) -> Result<(), End> {
-        // A transfer chunk (`0x02`) comes with P1's F4: there is no
-        // transfer to take one, so it is dropped (as any other type).
+    fn frame(&mut self, f: Vec<u8>) -> Result<(), End> {
+        // A transfer chunk (`0x02`): checked against the credit and queued
+        // for the top level (`xfer`), which hashes and writes it. Any other
+        // type is dropped.
+        if f.first() == Some(&opendmd_core::connect::xfer::TYPE_CHUNK) {
+            self.chunk_in(f);
+            return Ok(());
+        }
         if f.first() != Some(&proto::TYPE_COMMAND) {
             return Ok(());
         }
+        let f = f.as_slice();
         let Some(sess) = self.sess.as_mut() else { return Ok(()) };
         let limits = proto::Limits { max_brightness: self.link.settings.lock().unwrap().max_brightness };
         let t = now_us();
@@ -1282,7 +1301,12 @@ impl Client {
         let ack = match checked {
             Ok(acc) => {
                 self.note_use(acc.k);
-                Some(self.run(acc))
+                if matches!(acc.cmd, proto::Command::Send(_) | proto::Command::SendCancel { .. }) {
+                    // Answered from the top level, where the card is.
+                    self.xfer_cmd_in(acc)
+                } else {
+                    Some(self.run(acc))
+                }
             }
             Err(r) => {
                 log::info!("connect: command refused: {}", r.err.code());
@@ -1479,6 +1503,8 @@ impl Client {
         let Some(conn) = self.conn.take() else { return };
         self.save_card(true);
         self.sess = None;
+        // A send waits for its controller to sign it again (a resume).
+        self.xfer_session_end();
         // (A pairing's answer cannot follow its guest to another session.)
         // (A key stored meanwhile stays: its device may attach without the
         // answer; one not stored yet is not stored.)

@@ -503,7 +503,11 @@ pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 #[cfg(feature = "connect")]
 pub const REMOTE_SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
-pub const NET_WORKER_STACK: usize = if cfg!(feature = "connect") { 12 * 1024 } else { 11 * 1024 };
+/// Remote control's builds: 13 KB (a send's hashing, card writes,
+/// renames and play run on it, from its turn's top level; ~1.2 KB was left
+/// at 12 KB in the emulator lane, and the heap's low while sending, ~40 KB,
+/// is well over the 29 KB floor).
+pub const NET_WORKER_STACK: usize = if cfg!(feature = "connect") { 13 * 1024 } else { 11 * 1024 };
 /// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
 /// handed over): the web app's CRC pass, the HTTP server's start, the mount
 /// attempts and the playlist index (opened, or built: one streaming pass

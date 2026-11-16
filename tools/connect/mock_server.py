@@ -16,7 +16,13 @@ tag before anything, version negotiation (4426 / 4406), the panel's secret
 (4403), the controller's challenge and signed attach (4403 alike for an
 unknown key and a bad signature), guests only with an open window, the
 signature pre-check and rates on commands, routing of ack / credit /
-paired, `watch` when controllers come and go. It keeps no status and no
+paired, `watch` when controllers come and go. Transfers as the Worker
+routes them: by (key, id), one owner per id; a chunk forwarded only inside
+the panel's last credit and at the next offset (the first after a `send`
+anywhere from the credit's end less `caps.win` chunks: a resume); a
+refused `send`'s route dropped. It checks the panel too: every credit
+must stay within `caps.win` chunks of the bytes forwarded so far
+(`credit-beyond-win` in `refused` otherwise). It keeps no status and no
 history.
 """
 from __future__ import annotations
@@ -52,7 +58,11 @@ class Record:
     next_g: int = 1
     pairs: dict = field(default_factory=dict)  # pair_id -> expiry (monotonic s)
     invites: dict = field(default_factory=dict)  # invite_id -> (inviter ws, expiry)
-    transfers: dict = field(default_factory=dict)  # transfer id -> ctl ws
+    # transfer id -> [ctl ws, key, last credit's upto, send's n, next offset (-1: none yet), unused]
+    transfers: dict = field(default_factory=dict)
+    # transfer id -> the furthest byte ever forwarded (kept across routes: a resume)
+    fwd_max: dict = field(default_factory=dict)
+    win: int = 8
     rates: dict = field(default_factory=dict)  # k -> Bucket
     panel_rate: odc.Bucket = field(default_factory=lambda: odc.Bucket(odc.RATE_PER_PANEL, now_us()))
 
@@ -67,6 +77,11 @@ class Server:
         # `pair` or `add-req`.
         self.rewrite_label: str | None = None
         self.refused: dict[str, int] = {}
+        # Every credit the panel sent: (id, upto, next offset, win); the last hello's caps.
+        self.credits: list[tuple] = []
+        self.caps: dict = {}
+        # Chunks forwarded to the panel.
+        self.forwarded = 0
 
     def refuse(self, why: str):
         self.refused[why] = self.refused.get(why, 0) + 1
@@ -158,6 +173,9 @@ class Server:
             await ws.close(code=odc.CLOSE_REFUSED)
             return ws
         old, rec.panel, rec.sess, rec.fw = rec.panel, ws, hello.get("sess"), str(hello.get("fw", ""))
+        caps = hello.get("caps") if isinstance(hello.get("caps"), dict) else {}
+        rec.win = caps["win"] if odc.is_int(caps.get("win")) and 1 <= caps["win"] <= 64 else 8
+        self.caps = caps
         if old is not None and not old.closed:
             await old.close(code=1000, message=b"replaced")
         await self.to_ctls(rec, {"t": "panel", "online": True, "sess": rec.sess})
@@ -209,10 +227,26 @@ class Server:
             for c, ck in rec.ctls.items():
                 if ck == k:
                     await c.send_str(text)
+            # A refused `send`: its route goes.
+            if "err" in m:
+                for tid, x in list(rec.transfers.items()):
+                    if x[1] == k and x[3] == m.get("n"):
+                        rec.transfers.pop(tid)
         elif t == "credit":
-            c = rec.transfers.get(m.get("id"))
-            if c is not None and not c.closed:
-                await c.send_str(text)
+            x = rec.transfers.get(m.get("id"))
+            k = odc.unhex(m.get("k"), 8) if "k" in m else None
+            if x is not None and odc.is_int(m.get("upto")) and (k is None or k == x[1]):
+                # The panel never grants more than its window past what it
+                # was sent (the Worker trusts caps.win for a resume's start).
+                fwd = rec.fwd_max.get(m.get("id"), 0)
+                if m["upto"] > fwd + rec.win * odc.MAX_CHUNK:
+                    self.refuse("credit-beyond-win")
+                self.credits.append((m.get("id"), m["upto"], fwd, rec.win))
+                x[2] = m["upto"]
+                if not x[0].closed:
+                    await x[0].send_str(text)
+                if "done" in m or "err" in m:
+                    rec.transfers.pop(m.get("id"), None)
         elif t == "status":
             await self.to_ctls(rec, m)
         elif t == "paired":
@@ -284,7 +318,7 @@ class Server:
                     await self.ctl_binary(ws, rec, k, msg.data)
         finally:
             rec.ctls.pop(ws, None)
-            for tid in [t for t, c in rec.transfers.items() if c is ws]:
+            for tid in [t for t, x in rec.transfers.items() if x[0] is ws]:
                 rec.transfers.pop(tid)
             if not rec.ctls:
                 await self.watch(rec)
@@ -315,15 +349,21 @@ class Server:
 
         if frame[:1] == bytes([odc.TYPE_CHUNK]):
             try:
-                tid, _off, _data = odc.parse_chunk(frame)
+                tid, off, data = odc.parse_chunk(frame)
             except odc.Bad:
                 return
-            # Forwarded only for the transfer this socket started (the
-            # credit window itself is the panel's to enforce in v1's mock).
-            if rec.transfers.get(tid) is ws and rec.panel is not None:
-                await rec.panel.send_bytes(frame)
-            else:
+            x = rec.transfers.get(tid)
+            # Only for the transfer this socket started, inside the last
+            # credit, at the next offset (the first: no further back than
+            # the panel's window before the credit's end).
+            if x is None or x[0] is not ws or rec.panel is None or off + len(data) > x[2] \
+                    or (off != x[4] if x[4] >= 0 else off < x[2] - rec.win * odc.MAX_CHUNK):
                 self.refuse("chunk")
+                return
+            x[4] = off + len(data)
+            rec.fwd_max[tid] = max(rec.fwd_max.get(tid, 0), x[4])
+            self.forwarded += 1
+            await rec.panel.send_bytes(frame)
             return
         try:
             fk = odc.precheck({kk: v[0] for kk, v in rec.keys.items()}, frame)
@@ -346,11 +386,22 @@ class Server:
         if rec.panel is None or rec.panel.closed:
             await ack("busy")
             return
-        # The server reads a `send` in passing to route its credits.
+        # The server reads a `send` in passing to route its credits and
+        # chunks: by (key, id), one owner per id (another key's: busy); the
+        # same key takes it over from another of its sockets (a resume).
         try:
             body = odc.loads(frame[odc.COMMAND_HEAD:])
-            if body.get("c") == "send" and odc.is_int(body.get("a", {}).get("id")):
-                rec.transfers[body["a"]["id"]] = ws
+            a = body.get("a", {}) if isinstance(body.get("a"), dict) else {}
+            if body.get("c") == "send" and odc.is_int(a.get("id")) and a["id"] != 0:
+                x = rec.transfers.get(a["id"])
+                if x is not None and x[1] != k:
+                    await ack("busy")
+                    return
+                rec.transfers[a["id"]] = [ws, k, 0, body.get("n"), -1, 0]
+            elif body.get("c") == "send-cancel" and odc.is_int(a.get("id")):
+                x = rec.transfers.get(a["id"])
+                if x is not None and x[1] == k:
+                    rec.transfers.pop(a["id"])
         except (odc.Bad, AttributeError):
             pass
         await rec.panel.send_bytes(frame)

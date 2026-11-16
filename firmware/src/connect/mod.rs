@@ -40,8 +40,14 @@
 //! dies. The QR and "Remote control added" screens are drawn by the main
 //! task from a [`Screen`] the client sends (`Command::ConnectScreen`).
 //!
-//! **Not here yet** (Connect P1's F4): GIF sends (`send` is
-//! `not-allowed`, chunks are dropped, `hello` says `send: false`).
+//! **Sending a GIF** (`docs/connect-protocol.md` 8; [`xfer`]): a signed
+//! `send` and its chunks are taken in by the read path and queued; the
+//! hashing, the card writes and the `ack`s happen at the turn's top level,
+//! inside the credit window `hello` declares (`caps.win`), into
+//! `/gifs/Sent/`. Sends are on the S3 and off on the classic until device
+//! test D4 passes (`connect-send-classic` turns them on there,
+//! `connect-no-send` off anywhere, [`set_sends`] at run time): off,
+//! `hello` says `send: false` and a `send` is `not-allowed`.
 
 pub mod api;
 mod client;
@@ -50,6 +56,7 @@ mod dispatch;
 mod measure;
 mod pair;
 mod tls;
+mod xfer;
 
 pub use client::Client;
 pub use opendmd_core::connect::pair::Window;
@@ -399,6 +406,48 @@ fn write(cmd: &mpsc::Sender<Command>, what: Store) -> Result<(), String> {
         mpsc::Handoff::Withdrawn => Err("busy".into()),
     }
 }
+
+// --- Sends ---------------------------------------------------------------------
+
+/// Whether this panel takes GIF sends (`hello`'s `caps.send`): on the S3;
+/// **off on the classic** until device test D4 shows its card writes
+/// sit beside play (P1-PLAN 10, open question 1), except in a build with
+/// `connect-send-classic` (D4's own builds, the emulator lane's image);
+/// never with `connect-no-send`. Changeable at run time ([`set_sends`]:
+/// from the next session's `hello`, and at once for a new `send`).
+static SENDS: AtomicBool = AtomicBool::new(SENDS_BUILT);
+const SENDS_BUILT: bool = (cfg!(esp32s3) || cfg!(feature = "connect-send-classic")) && cfg!(not(feature = "connect-no-send"));
+
+#[optimize(size)]
+#[inline(never)]
+pub fn sends_on() -> bool {
+    SENDS.load(Relaxed)
+}
+
+#[allow(dead_code)]
+#[optimize(size)]
+#[inline(never)]
+pub fn set_sends(on: bool) {
+    SENDS.store(on && SENDS_BUILT, Relaxed);
+}
+
+/// A remote send holds a transfer (`/api/status` `transfer`, as a LAN
+/// upload does).
+pub(crate) static SENDING: AtomicBool = AtomicBool::new(false);
+
+#[optimize(size)]
+#[inline(never)]
+pub fn sending() -> bool {
+    SENDING.load(Relaxed)
+}
+
+/// An emulator image's stand-in for a card taken out, for sends only
+/// (`PUT /api/connect` `{"test_no_card":bool}`, `connect-test` builds).
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_NO_CARD: AtomicBool = AtomicBool::new(false);
+/// ... and for the next send's card write failing (`{"test_fail_write":true}`).
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_FAIL_WRITE: AtomicBool = AtomicBool::new(false);
 
 // --- Signals from the rest of the firmware --------------------------------------
 
