@@ -483,6 +483,12 @@ impl Panel {
         tinted || refade
     }
 
+    /// The tint in use (an emulator image's Remote control screen check).
+    #[cfg(feature = "connect-test")]
+    pub fn look(&self) -> Look {
+        self.look
+    }
+
     /// A new file: if the glow's copy could not be allocated before, try
     /// again at its first frame.
     pub fn glow_retry(&mut self) {

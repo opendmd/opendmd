@@ -945,7 +945,7 @@ fn main() -> Result<()> {
     #[cfg(feature = "connect")]
     let mut cx_redraw = false;
     #[cfg(feature = "connect-test")]
-    let mut cx_logged: Option<(u32, u8)> = None;
+    let mut cx_logged: Option<(u32, u8, opendmd_core::look::Look)> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -1934,9 +1934,10 @@ fn main() -> Result<()> {
             if show::connect_stage(update_shown) {
                 let crc = canvas_crc(&canvas);
                 let b = panel.brightness();
-                if cx_logged != Some((crc, b)) {
-                    cx_logged = Some((crc, b));
-                    log::info!("remote control screen: canvas {crc:08x}, brightness {b}");
+                let look = panel.look();
+                if cx_logged != Some((crc, b, look)) {
+                    cx_logged = Some((crc, b, look));
+                    log::info!("remote control screen: canvas {crc:08x}, brightness {b}, look {look:?}");
                 }
             } else {
                 cx_logged = None;
@@ -3953,6 +3954,12 @@ fn update_screen(
     if stage == *shown && !(redraw && show::connect_stage(stage)) {
         return;
     }
+    // Leaving the QR code's fixed level, whatever comes next (an update's
+    // screen, "added", playback): the setting's brightness back.
+    // (10: `show::CONNECT_PAIR`.)
+    if *shown == 10 && stage != 10 {
+        panel.set_brightness(bright);
+    }
     if *shown == show::NO_UPDATE {
         if let Some(e) = engine {
             let paused = e.is_paused();
@@ -3974,8 +3981,8 @@ fn update_screen(
             None => canvas.clear(),
         }
         looks.redraw();
+        panel.set_brightness(bright);
         if show::connect_stage(*shown) {
-            panel.set_brightness(bright);
             log::info!("remote control screen: off; playback resumes");
         } else {
             log::info!("update screen: off (the update did not go through); playback resumes");
@@ -3985,8 +3992,10 @@ fn update_screen(
             Some(draw) => draw(canvas),
             None => canvas.clear(),
         }
-        // The QR code at a fixed mid level; "added" at the setting's.
-        // (10: `show::CONNECT_PAIR`.)
+        // Untinted and unglowed at every draw (a look, a glow or the panel
+        // test set by a command under it), the QR code at a fixed mid
+        // level, "added" at the setting's. (10: `show::CONNECT_PAIR`.)
+        panel.set_display(Look::Colour, GlowLevel::Off);
         panel.set_brightness(if stage == 10 { qr_bright } else { bright });
         // (10: `show::CONNECT_PAIR`, a const of `connect` builds only.)
         log::info!("remote control screen: {}", if stage == 10 { "pairing QR code" } else { "added" });

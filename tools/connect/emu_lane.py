@@ -75,7 +75,7 @@ HOST = "connect.test"
 # The image's pairing window (Makefile EMU_CONNECT_PAIR_TTL_S).
 PAIR_TTL_S = int(os.environ.get("EMU_CONNECT_PAIR_TTL_S", "90"))
 SCREEN = re.compile(r"remote control screen: (pairing QR code|added|off)")
-CANVAS = re.compile(r"remote control screen: canvas ([0-9a-f]{8}), brightness (\d+)")
+CANVAS = re.compile(r"remote control screen: canvas ([0-9a-f]{8}), brightness (\d+), look (\w+)")
 PAIR_BRIGHTNESS = 96
 LANE_KEY = "emu-lane-api-key-0123"
 PORT = 8080
@@ -746,21 +746,22 @@ class Lane:
         async def first_canvas():
             hits = self.emu.find(CANVAS, line)
             return hits[0][1].groups() if hits else None
-        crc0, b0 = await self.wait("the QR screen's canvas line", first_canvas, 120, every=1)
+        crc0, b0, look0 = await self.wait("the QR screen's canvas line", first_canvas, 120, every=1)
         cfg = (await self.http("GET", "/api/config"))[1] or {}
         mx = cfg.get("max_brightness", 255)
         self.expect(int(b0) == min(PAIR_BRIGHTNESS, mx), "the QR code at its fixed mid brightness", f"brightness {b0}")
         st = await self.status()
         path = (st.get("now_playing") or {}).get("next") or "@formula:starfield"
         c_play, _ = await self.http("POST", "/api/play", {"path": path})
-        c_bright, _ = await self.http("PUT", "/api/config", {"brightness": min(200, mx)})
+        c_bright, _ = await self.http("PUT", "/api/config", {"brightness": min(200, mx), "look": "amber", "glow": "short"})
         await asyncio.sleep(1.5)
         c_play2, _ = await self.http("POST", "/api/play", {"path": "@formula:starfield"})
         await asyncio.sleep(8)
         seen = [m.groups() for _, m in self.emu.find(CANVAS, line)]
-        self.expect(all(c == crc0 and int(b) == int(b0) for c, b in seen) and (await self.connect_info()).get("pairing", {}).get("qr") is True,
-                    "red: a play, a brightness and a Formula while the QR code is up: the picture and its brightness unchanged",
+        self.expect(look0 == "Colour" and all(c == crc0 and int(b) == int(b0) and lk == look0 for c, b, lk in seen) and (await self.connect_info()).get("pairing", {}).get("qr") is True,
+                    "red: a play, a brightness with a look and a glow, and a Formula while the QR code is up: the picture, its brightness and its untinted look unchanged",
                     f"play {c_play}/{c_play2}, brightness {c_bright}; canvas lines {seen}")
+        await self.http("PUT", "/api/config", {"look": "colour", "glow": "off"})
         info = await self.connect_info()
         self.expect((info.get("pairing") or {}).get("qr") is True and secret not in json.dumps(info), "GET /api/connect: the window, its QR, never its secret", json.dumps(info.get("pairing")))
         g1 = Controller(self.ctl_base, dev, "Den phone")
