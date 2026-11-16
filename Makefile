@@ -181,7 +181,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack connect-mock \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
@@ -197,7 +197,7 @@ blocklist-check:
 	uv run tools/blocklist-check.py $(BLOCKLIST_ARGS)
 
 test:
-	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: the Connect probe's half; panel-id: the stable panel ID)"
+	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: Connect's session half and protocol v1; panel-id: the stable panel ID)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,panel-id
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
 	@mkdir -p target
@@ -206,6 +206,8 @@ test:
 	target/updater-panel-timing-test ota/updater/test/panel_timing_vectors.txt
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
+	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
+	uv run --quiet tools/connect/vectors_check.py
 	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features player,ota --lib a_player_without_formulas
 	@echo "==> Testing $(RENDER)"
@@ -235,6 +237,13 @@ test:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEBMIN) (make web's minifier)"
 	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo test
+
+# OpenDMD Connect v1 end to end on localhost (tools/connect/roundtrip.py): the
+# mock server, the mock panel and controllers in one process, blue cases and
+# the red list over the wire. No device, no Cloudflare; throwaway keys.
+connect-mock:
+	uv run --quiet tools/connect/vectors_check.py
+	uv run --quiet tools/connect/roundtrip.py
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
@@ -292,6 +301,8 @@ check:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween,names,ota,tags
 	@echo "==> Checking $(CORE) with panel-id alone (the stable panel ID without ota)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --features panel-id
+	@echo "==> Checking $(CORE) with connect alone (Connect's session half and protocol v1)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features connect
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
@@ -312,6 +323,7 @@ check-wasm:
 	@echo "==> Checking $(CORE) for $(WASM_TARGET)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features tween,names,tags
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features connect
 	@echo "==> Checking $(RENDER) for $(WASM_TARGET)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
@@ -519,6 +531,7 @@ clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect,panel-id -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features connect -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
