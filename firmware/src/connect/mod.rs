@@ -44,9 +44,10 @@
 //! `send` and its chunks are taken in by the read path and queued; the
 //! hashing, the card writes and the `ack`s happen at the turn's top level,
 //! inside the credit window `hello` declares (`caps.win`), into
-//! `/gifs/Sent/`. Sends can be switched off for a chip (`connect-no-send`
-//! at build time, [`set_sends`] at run time): `hello` then says
-//! `send: false` and a `send` is `not-allowed`.
+//! `/gifs/Sent/`. Sends are on the S3 and off on the classic until device
+//! test D4 passes (`connect-send-classic` turns them on there,
+//! `connect-no-send` off anywhere, [`set_sends`] at run time): off,
+//! `hello` says `send: false` and a `send` is `not-allowed`.
 
 pub mod api;
 mod client;
@@ -408,12 +409,14 @@ fn write(cmd: &mpsc::Sender<Command>, what: Store) -> Result<(), String> {
 
 // --- Sends ---------------------------------------------------------------------
 
-/// Whether this panel takes GIF sends (`hello`'s `caps.send`): on unless
-/// the build says `connect-no-send` (the classic's switch, should device
-/// test D4's card writes fail beside play), and changeable at run time
-/// ([`set_sends`]; it applies from the next session's `hello`, and at once
-/// to a new `send`).
-static SENDS: AtomicBool = AtomicBool::new(cfg!(not(feature = "connect-no-send")));
+/// Whether this panel takes GIF sends (`hello`'s `caps.send`): on the S3;
+/// **off on the classic** until device test D4 shows its card writes
+/// sit beside play (P1-PLAN 10, open question 1), except in a build with
+/// `connect-send-classic` (D4's own builds, the emulator lane's image);
+/// never with `connect-no-send`. Changeable at run time ([`set_sends`]:
+/// from the next session's `hello`, and at once for a new `send`).
+static SENDS: AtomicBool = AtomicBool::new(SENDS_BUILT);
+const SENDS_BUILT: bool = (cfg!(esp32s3) || cfg!(feature = "connect-send-classic")) && cfg!(not(feature = "connect-no-send"));
 
 #[optimize(size)]
 #[inline(never)]
@@ -425,7 +428,7 @@ pub fn sends_on() -> bool {
 #[optimize(size)]
 #[inline(never)]
 pub fn set_sends(on: bool) {
-    SENDS.store(on && cfg!(not(feature = "connect-no-send")), Relaxed);
+    SENDS.store(on && SENDS_BUILT, Relaxed);
 }
 
 /// A remote send holds a transfer (`/api/status` `transfer`, as a LAN
@@ -442,6 +445,9 @@ pub fn sending() -> bool {
 /// (`PUT /api/connect` `{"test_no_card":bool}`, `connect-test` builds).
 #[cfg(feature = "connect-test")]
 pub(crate) static TEST_NO_CARD: AtomicBool = AtomicBool::new(false);
+/// ... and for the next send's card write failing (`{"test_fail_write":true}`).
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_FAIL_WRITE: AtomicBool = AtomicBool::new(false);
 
 // --- Signals from the rest of the firmware --------------------------------------
 

@@ -861,11 +861,15 @@ class Lane:
         frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=80, loop=0)
         big = buf.getvalue()
         tid += 1
-        big_args = send_args(tid, "lane-big.gif", big)
+        # With a prepared copy after it (another GIF's: only its head is
+        # checked), so a chunk written unhashed would show in /cache/.
+        big_all = big + copy
+        big_args = send_args(tid, "lane-big.gif", big, copy)
         r = await send(a, big_args)
         self.expect(r and r.get("ok"), f"a {len(big) // 1024} KB send started", json.dumps(r))
         c0 = await a.until("credit", lambda m: m.get("id") == tid, timeout=60)
-        _, _, at = await stream(a, tid, big, upto=c0["upto"], stop=40 * 1024, timeout=120)
+        # (Dropped inside the copy's bytes: where an unhashed write would land.)
+        _, _, at = await stream(a, tid, big_all, upto=c0["upto"], stop=len(big) + 8 * 1024, timeout=300)
         await asyncio.sleep(3)
         sess_now = bytes.fromhex(self.rec().sess)
         got = await self.injected_ack("another key's send of the held transfer", odc.sign_command(b.sk, odc.command_body(dev, sess_now, 10**11, "send", big_args)), b.k)
@@ -882,12 +886,24 @@ class Lane:
         # Credits from before the reconnect are stale: a controller uses
         # only those after its resumed send's ack.
         a.inbox = [m for m in a.inbox if not (m.get("t") == "credit" and m.get("id") == tid)]
-        r = await send(a, big_args)
+        # Red: the relay forwards the re-signed send and, in the same batch,
+        # a forged chunk at the offset (taken in before the resume rewinds):
+        # it must never be written. Put straight on the panel's socket.
+        start = len(self.srv.said)
+        f = a.frame("send", big_args)
+        n_resume = odc.loads(f[odc.COMMAND_HEAD:])["n"]
+        ws = self.panel_ws()
+        await ws.send_bytes(f)
+        await ws.send_bytes(odc.chunk_frame(tid, at, b"\xEE" * 1024))
+        r = await self.panel_says("the resumed send's ack", "ack", start, lambda m: m.get("k") == a.k.hex() and m.get("n") == n_resume)
         off = ((r or {}).get("r") or {}).get("offset")
         self.expect(r and r.get("ok") and (r.get("r") or {}).get("resumed") and isinstance(off, int) and 0 < off <= at, f"resume by the same key after the reconnect: from {off} B", json.dumps(r))
-        _, end, _ = await stream(a, tid, big, start=off, timeout=180)
+        a.inbox = [m for m in a.inbox if m.get("t") != "ack"]
+        _, end, _ = await stream(a, tid, big_all, start=off, timeout=180)
         code, got = await self.get_bytes("/gifs/Sent/lane-big.gif")
         self.expect(end and end.get("done") and code == 200 and got == big, "the resumed send landed whole, byte for byte", f"{len(got)} of {len(big)} B")
+        code, got = await self.get_bytes(f"/cache/Sent/{bucket('lane-big.gif')}/lane-big.gif")
+        self.expect(code == 200 and got == copy, "red: a chunk queued behind the resume never written (the copy byte for byte)", f"{code}, {len(got)} of {len(copy)} B")
         self.expect(not self.srv.refused.get("credit-beyond-win"), "no credit past caps.win, the resume's included", "")
 
         # Red: bytes that miss the signed hash; the .part goes.
@@ -936,6 +952,44 @@ class Lane:
         r = await cmd_n(a, "send-cancel", {"id": tid})
         await asyncio.sleep(2)
         self.expect(had and r and r.get("ok") and await no_part() and "lane-cancel.gif" not in await self.sent_listing(), "send-cancel: ok, its .part gone", json.dumps(r))
+        # The deeper paths, each with the worker's stack read after it.
+        stacks = {}
+
+        async def stack_now():
+            return ((await self.status()).get("connect") or {}).get("stack_unused")
+        # A card write that fails: an error line, abandoned (busy), nothing left.
+        await self.http("PUT", "/api/connect", {"test_fail_write": True})
+        tid += 1
+        r = await send(a, send_args(tid, "lane-wfail.gif", small))
+        _, end, _ = await stream(a, tid, small, timeout=120)
+        await self.http("PUT", "/api/connect", {"test_fail_write": False})
+        ls = await self.sent_listing()
+        self.expect(end and end.get("err") == "busy" and "lane-wfail.gif" not in ls and await no_part(), "a card write that fails: err busy, nothing left", json.dumps(end))
+        stacks["write_failure"] = await stack_now()
+        # A play the player refuses (a GIF header over junk): landed, not shown.
+        mark_junk = self.emu.mark()
+        junk = b"GIF89a\x80\x00\x20\x00\x00\x00\x00" + bytes(range(256)) * 4
+        tid += 1
+        r = await send(a, send_args(tid, "lane-junk.gif", junk, play=True))
+        _, end, _ = await stream(a, tid, junk, timeout=120)
+        await asyncio.sleep(5)
+        self.expect(end and end.get("done") and self.emu.find(re.compile(r"play now: /gifs/Sent/lane-junk\.gif"), mark_junk), "a sent file the player cannot play: landed, the play refused, nothing else", json.dumps(end))
+        stacks["play_refused"] = await stack_now()
+        # No /cache at all (removed on the LAN): the copy's folders made anew.
+        rounds, done = 0, False
+        while not done and rounds < 300:
+            code, body = await self.http("DELETE", "/api/files/cache?recursive=1")
+            rounds += 1
+            done = code == 404 or (code == 200 and (body or {}).get("done") is True)
+        code, _ = await self.http("GET", "/api/files?dir=/cache")
+        tid += 1
+        r = await send(a, send_args(tid, "lane-nocache.gif", gif, copy))
+        _, end, _ = await stream(a, tid, gif + copy, timeout=120)
+        code2, got = await self.get_bytes(f"/cache/Sent/{bucket('lane-nocache.gif')}/lane-nocache.gif")
+        self.expect(done and code == 404 and end and end.get("done") and code2 == 200 and got == copy, "no /cache at all: the copy's folders made anew, the copy byte for byte", f"{rounds} delete rounds, /cache {code}, copy {code2} {len(got)} B")
+        stacks["no_cache_dir"] = await stack_now()
+        self.report["send_stacks"] = stacks
+
         # Another key's other transfer while one is held: busy. The same
         # key's next replaces its stalled one. Then the quota: 1 MB
         # announced each, each replacing the last (charged when accepted,

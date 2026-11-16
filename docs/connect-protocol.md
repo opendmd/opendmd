@@ -384,7 +384,7 @@ server can show a controller a false state, never change the panel's.
 - Signed `send {id, name, size, sha256, copy_size, copy_sha256, play}`:
   `id` a non-zero 32-bit transfer id; `name` a file name only (no `/`, no
   control character, not `.`-leading, ending `.gif`, at most 120
-  characters) for `/gifs/Sent/`, never overwriting (a taken name gets the
+  characters, at most 240 bytes) for `/gifs/Sent/`, never overwriting (a taken name gets the
   web app's next name: `x_09.gif` → `x_10.gif`, `cat.gif` → `cat_2.gif`);
   `size` 1 to 524,288 (more is `too-big`); `sha256` hex; `copy_size` 0
   (no prepared copy) to 524,288, with `copy_sha256` exactly when it is
@@ -433,10 +433,14 @@ server can show a controller a false state, never change the panel's.
   abandons it, in any later session too (another key's: `not-allowed`; no
   such transfer: ok). `.part` files are removed at boot.
 - `hello`'s `caps {send, win}` are the panel's own: `send` true only when
-  this panel takes sends (a build or a run-time switch can turn them off),
-  `win` the window above. The server passes them to controllers.
-- Quotas: 8 MB per rolling 24 h on the panel (`size + copy_size` charged
-  when a send is accepted, never on a resume, never refunded), 16 MB and
+  this panel takes sends: on the ESP32-S3; **off on the classic ESP32**
+  until device test D4 shows its card writes sit beside play (a build
+  with `connect-send-classic` turns them on there, `connect-no-send` off
+  anywhere); `win` the window above. The server passes them to
+  controllers.
+- Quotas: 8 MB per rolling 24 h on the panel (`size + copy_size`, at
+  least 64 KB, charged when a send is accepted, never on a resume, never
+  refunded), 16 MB and
   60 sends a day per panel at the server (`quota`).
 
 ## 9. Limits

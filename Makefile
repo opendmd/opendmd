@@ -666,7 +666,7 @@ FW_L2_COPY ?= 0
 # keeps sdkconfig.defaults' TLS section as it is.
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
-FW_CONNECT_FEATURES := connect connect-probe connect-core connect-measure connect-no-send
+FW_CONNECT_FEATURES := connect connect-probe connect-core connect-measure connect-no-send connect-send-classic
 FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
 # The feature and its sdkconfig must go together: a bench build takes it in
 # FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
@@ -1327,7 +1327,7 @@ emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 OPENDMD_CONNECT_PAIR_TTL_S=$(EMU_CONNECT_PAIR_TTL_S) \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-connect: emu-build emu-card
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 $(EMU_ARGS)

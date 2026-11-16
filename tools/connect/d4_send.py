@@ -20,10 +20,11 @@ and sent along) and, while it goes, reads the panel's `/api/status` each
 second over the LAN: the free heap and its floor, late frames (`misses`),
 `transfer`. The report per run: KB/s, credits, the last credit (`done` or `err`), the
 card file byte-equal (fetched back over the LAN), heap low, late frames
-added. D4 passes on the classic when the heap stays over the session
+added. On the classic the panel must run a build with `connect-send-classic`
+(sends are off there by default: `hello` says `send: false` until D4
+passes). D4 passes on the classic when the heap stays over the session
 gate's floor (20 KB outside LAN load) and no steady-state late frames are
-added; then `hello` keeps `send: true` (else build with
-`connect-no-send`). Never contacts anything but --lan and --server.
+added; then sends can be turned on for the classic in release builds. Never contacts anything but --lan and --server.
 """
 from __future__ import annotations
 

@@ -39,6 +39,9 @@ pub const TYPE_CHUNK: u8 = 0x02;
 pub const MAX_WINDOW: u32 = 64;
 /// How long a broken transfer can be resumed.
 pub const RESUME_FOR: Duration = Duration::from_secs(10 * 60);
+/// The least a started transfer is charged (so tiny sends cannot hold the
+/// slot, or churn it, for nothing).
+pub const MIN_CHARGE: u64 = 64 * 1024;
 /// The panel's quota.
 pub const QUOTA_BYTES: u64 = 8 * 1024 * 1024;
 pub const QUOTA_WINDOW: Duration = Duration::from_secs(24 * 3600);
@@ -187,18 +190,23 @@ impl Transfer {
         Ok(())
     }
 
-    /// Hash the next accepted bytes (in order: the caller's queue); how
-    /// many of them are the GIF's (the rest are the copy's). The caller
-    /// writes them, then asks for more credit ([`grant`](Self::grant_more)).
+    /// Hash the next accepted chunk, whole (in order: the caller's
+    /// queue): `Some(split)`, how many of its bytes are the GIF's (the rest
+    /// are the copy's), for the caller to write exactly those, then ask
+    /// for more credit ([`grant`](Self::grant_more)). `None`, and nothing
+    /// hashed, if the chunk is not wholly among the bytes taken in and not
+    /// yet committed (one queued behind a resume, which rewound the
+    /// stream): the caller drops it and writes nothing.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn commit(&mut self, data: &[u8]) -> usize {
-        let n = (self.received.saturating_sub(self.offset) as usize).min(data.len());
-        let data = &data[..n];
+    pub fn commit(&mut self, data: &[u8]) -> Option<usize> {
+        if data.is_empty() || (self.received.saturating_sub(self.offset) as usize) < data.len() {
+            return None;
+        }
         let split = (self.send.size.saturating_sub(self.offset) as usize).min(data.len());
         self.gif.update(&data[..split]);
         self.copy.update(&data[split..]);
-        self.offset += n as u32;
-        split
+        self.offset += data.len() as u32;
+        Some(split)
     }
 
     /// Chunks taken in but not committed are gone (a session ended with
@@ -432,7 +440,7 @@ impl Slot {
             Some(_) => true,
             None => false,
         };
-        if !self.quota.fits(u64::from(s.size) + u64::from(s.copy_size), now) {
+        if !self.quota.fits(charge(s), now) {
             return Err(Refusal::Quota);
         }
         Ok((Plan::Start { replaces }, expired))
@@ -450,7 +458,7 @@ impl Slot {
     /// that skipped `check`), to clean up. `Err(quota)` if the quota no longer fits (nothing changed).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn start(&mut self, k: KeyId, s: SendArgs, now: Duration) -> Result<Option<Held>, Refusal> {
-        if !self.quota.charge(u64::from(s.size) + u64::from(s.copy_size), now) {
+        if !self.quota.charge(charge(&s), now) {
             return Err(Refusal::Quota);
         }
         Ok(self.held.replace(Held { t: Transfer::start(s, self.window, now), k }))
@@ -476,6 +484,31 @@ impl Slot {
         }
         None
     }
+}
+
+/// What a started transfer is charged: `size + copy_size`, at least
+/// [`MIN_CHARGE`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn charge(s: &SendArgs) -> u64 {
+    (u64::from(s.size) + u64::from(s.copy_size)).max(MIN_CHARGE)
+}
+
+/// The name to fall back on once [`next_name`] found only taken ones:
+/// `<stem>_<id, 8 hex>.gif`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn fallback_name(name: &str, id: u32) -> String {
+    let stem = name.len().checked_sub(4).filter(|&i| name.get(i..).is_some_and(|e| e.eq_ignore_ascii_case(".gif"))).map_or(name, |i| &name[..i]);
+    format!("{stem}_{id:08x}.gif")
+}
+
+/// The `.part` names a send writes (`<name>.<id, 8 hex>.part` and
+/// `….copy.part`), and nothing else: what the boot sweep may remove.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn is_send_part(file: &str) -> bool {
+    let Some(rest) = file.strip_suffix(".copy.part").or_else(|| file.strip_suffix(".part")) else { return false };
+    let Some(dot) = rest.len().checked_sub(9) else { return false };
+    let (head, tail) = rest.split_at(dot);
+    tail.as_bytes()[0] == b'.' && tail[1..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && head.len() > 4 && head.get(head.len() - 4..).is_some_and(|e| e.eq_ignore_ascii_case(".gif"))
 }
 
 /// A landed transfer's last `credit` (also said again for a `send` signed
@@ -696,9 +729,9 @@ mod tests {
         t.accept(&parse_chunk(&chunk_frame(77, 0, &all[..1024])).unwrap(), Duration::ZERO).unwrap();
         t.accept(&parse_chunk(&chunk_frame(77, 1024, &all[1024..2048])).unwrap(), Duration::ZERO).unwrap();
         t.accept(&parse_chunk(&chunk_frame(77, 2048, &all[2048..])).unwrap(), Duration::ZERO).unwrap();
-        assert_eq!(t.commit(&all[..1024]), 1024);
-        assert_eq!(t.commit(&all[1024..2048]), 476);
-        assert_eq!(t.commit(&all[2048..]), 0);
+        assert_eq!(t.commit(&all[..1024]), Some(1024));
+        assert_eq!(t.commit(&all[1024..2048]), Some(476));
+        assert_eq!(t.commit(&all[2048..]), Some(0));
         assert!(t.complete());
         assert_eq!(t.finish(), Ok(()));
         assert!(!t.grant_more());
@@ -725,7 +758,7 @@ mod tests {
         assert_eq!(slot.check(&A, &s, t0).unwrap().0, Plan::Start { replaces: false });
         assert!(slot.start(A, s.clone(), t0).unwrap().is_none());
         let used = slot.quota.used(t0);
-        assert_eq!(used, 4000);
+        assert_eq!(used, MIN_CHARGE, "a 4000 B send pays the least charge");
         // Another key, the same send: busy; its own other send: busy.
         assert_eq!(slot.check(&B, &s, t0).unwrap_err(), Refusal::Busy);
         let mut other = s.clone();
@@ -815,6 +848,54 @@ mod tests {
         assert_eq!(slot.check(&B, &s, t0).unwrap().0, Plan::Start { replaces: false });
         assert_eq!(slot.check(&A, &s, t0 + RESUME_FOR + Duration::from_secs(1)).unwrap().0, Plan::Start { replaces: false });
         assert_eq!(done_message(77, 4000, &A, "cat_2.gif"), r#"{"t":"credit","id":77,"upto":4000,"k":"0a0a0a0a0a0a0a0a","done":true,"name":"cat_2.gif"}"#);
+    }
+
+    #[test]
+    fn a_chunk_queued_behind_a_resume_is_never_written() {
+        // The relay's attack: the controller dropped, the re-signed `send`
+        // forwarded, then a forged chunk in the same batch. The chunk was
+        // taken in (accepted) before the resume rewound the stream.
+        let gif: Vec<u8> = (0..4000u32).map(|i| i as u8).collect();
+        let copy: Vec<u8> = (0..1500u32).map(|i| (i * 3) as u8).collect();
+        let s = send(&gif, &copy);
+        let all = [gif.as_slice(), copy.as_slice()].concat();
+        let mut t = Transfer::start(s.clone(), 2, Duration::ZERO);
+        for at in [0usize, 1024] {
+            t.accept(&parse_chunk(&chunk_frame(77, at as u32, &all[at..at + 1024])).unwrap(), Duration::ZERO).unwrap();
+            assert!(t.commit(&all[at..at + 1024]).is_some());
+        }
+        t.grant_more();
+        t.rewind();
+        let forged = vec![0xEE; 1024];
+        t.accept(&parse_chunk(&chunk_frame(77, 2048, &forged)).unwrap(), Duration::ZERO).unwrap();
+        assert!(t.resume(&s, Duration::from_secs(1)));
+        assert_eq!(t.commit(&forged), None, "nothing hashed, nothing to write");
+        assert_eq!(t.offset(), 2048);
+        // The real bytes from the offset complete it, both hashes good.
+        while !t.complete() {
+            let at = t.received() as usize;
+            let n = (t.upto() as usize - at).min(MAX_CHUNK);
+            t.accept(&parse_chunk(&chunk_frame(77, at as u32, &all[at..at + n])).unwrap(), Duration::ZERO).unwrap();
+            assert!(t.commit(&all[at..at + n]).is_some());
+            t.grant_more();
+        }
+        assert_eq!(t.finish(), Ok(()));
+    }
+
+    #[test]
+    fn min_charge_fallback_and_part_shapes() {
+        let tiny = send(b"GIF89a", &[]);
+        assert_eq!(charge(&tiny), MIN_CHARGE);
+        let mut slot = Slot::new(2);
+        slot.start(A, tiny, Duration::ZERO).unwrap();
+        assert_eq!(slot.quota.used(Duration::ZERO), MIN_CHARGE);
+        assert_eq!(fallback_name("cat_2.gif", 0x4d), "cat_2_0000004d.gif");
+        assert!(is_send_part("cat.gif.0000004d.part"));
+        assert!(is_send_part("cat.gif.0000004d.copy.part"));
+        assert!(!is_send_part("cat.gif.part"), "a LAN upload's own");
+        assert!(!is_send_part("cat.gif.0000004D.part"));
+        assert!(!is_send_part("notes.txt.0000004d.part"));
+        assert!(!is_send_part(".0000004d.part"));
     }
 
     #[test]

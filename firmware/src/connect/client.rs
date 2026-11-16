@@ -363,9 +363,10 @@ impl Client {
         if self.pending.is_some() || !self.paired_due.is_empty() || self.pair_store.is_some() {
             return w.min(Duration::from_millis(200));
         }
-        // A send's chunks or credit wait for the next turn.
-        if self.xfer.busy() {
-            return busy;
+        // A send's chunks or credit wait for the next turn (a chunk held
+        // back by a LAN upload, an update or the heap: not at 200 Hz).
+        if let Some(d) = self.xfer.due() {
+            return w.min(d.max(busy));
         }
         // The card's copy is due: the next turn makes it.
         if self.card_due.is_some_and(|t| Instant::now() >= t) {

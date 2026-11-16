@@ -90,6 +90,8 @@ pub(super) struct Xfer {
     /// A text to say right after the `ack` being answered (a landed
     /// send's `done`, said again).
     pub after_ack: Option<String>,
+    /// The command just answered was a resume.
+    pub resumed: bool,
 }
 
 impl Xfer {
@@ -104,12 +106,18 @@ impl Xfer {
             credits: proto::Bucket::new(CREDITS_PER_S, core_now()),
             swept: false,
             after_ack: None,
+            resumed: false,
         }
     }
 
-    /// Something for the next turn (the worker's loop runs it soon).
-    pub fn busy(&self) -> bool {
-        !self.inbox.is_empty() || self.credit_due
+    /// How soon the next turn is wanted: at once (5 ms) for queued work,
+    /// a while (75 ms) when the head of the queue is a chunk waiting for a
+    /// LAN upload, an update or the heap; `None`: nothing to do.
+    pub fn due(&self) -> Option<std::time::Duration> {
+        if matches!(self.inbox.first(), Some(XferIn::Chunk(_))) && writes_wait() {
+            return Some(std::time::Duration::from_millis(75));
+        }
+        (!self.inbox.is_empty() || self.credit_due).then_some(std::time::Duration::from_millis(5))
     }
 }
 
@@ -200,7 +208,10 @@ impl Client {
     #[inline(never)]
     pub(super) fn transfers(&mut self) {
         let now = core_now();
-        if !self.xfer.swept && self.xfer.slot.held.is_none() && stream::uploads() == 0 && card_usable(self) {
+        // Once a boot, and again each time the card comes back.
+        if !card_usable(self) {
+            self.xfer.swept = false;
+        } else if !self.xfer.swept && self.xfer.slot.held.is_none() && stream::uploads() == 0 {
             self.xfer.swept = true;
             sweep();
         }
@@ -214,14 +225,22 @@ impl Client {
             self.abandon(h, Some("not-allowed"));
         }
         let mut rest = Vec::new();
+        // Chunks queued behind a resume were taken in before it rewound the
+        // stream: none of them is written (the sender sends again from the
+        // offset the resume's credit gives).
+        let mut after_resume = false;
         for item in std::mem::take(&mut self.xfer.inbox) {
             if !rest.is_empty() {
                 rest.push(item);
                 continue;
             }
+            if after_resume && matches!(item, XferIn::Chunk(_) | XferIn::Outside(_)) {
+                continue;
+            }
             match item {
                 XferIn::Cmd(acc) => {
                     let ack = self.xfer_cmd(acc);
+                    after_resume |= std::mem::take(&mut self.xfer.resumed);
                     self.say(&ack);
                     if let Some(m) = self.xfer.after_ack.take() {
                         self.say(&m);
@@ -332,6 +351,7 @@ impl Client {
         match plan {
             Plan::Resume => {
                 self.xfer.slot.resume(&s, now);
+                self.xfer.resumed = true;
                 self.xfer.out = None;
                 self.xfer.credit_due = true;
                 let off = self.xfer.slot.held.as_ref().map_or(0, |h| h.t.offset());
@@ -392,7 +412,10 @@ impl Client {
         let Some(h) = self.xfer.slot.held.as_mut().filter(|h| h.t.send.id == c.id && h.t.offset() == c.offset) else { return };
         let at = h.t.offset();
         let size = h.t.send.size;
-        let split = h.t.commit(c.data);
+        // Hashed whole or not at all: one not wholly among the bytes taken
+        // in (queued behind a resume, which rewound the stream) is dropped,
+        // never written.
+        let Some(split) = h.t.commit(c.data) else { return };
         let (gif, copy) = (&c.data[..split], &c.data[split..]);
         let s = h.t.send.clone();
         let r = {
@@ -433,6 +456,10 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn part_write(&mut self, s: &SendArgs, copy: bool, at: u32, data: &[u8]) -> std::io::Result<()> {
+        #[cfg(feature = "connect-test")]
+        if super::TEST_FAIL_WRITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::other("a write failed (the lane's switch)"));
+        }
         if self.xfer.out.as_ref().is_some_and(|o| o.copy != copy) {
             self.xfer.out = None;
         }
@@ -486,7 +513,7 @@ impl Client {
             error_line("a sent file is not a GIF, or its copy not a prepared copy: refused, removed");
             return self.abandon(h, Some("bad-arg"));
         }
-        let Some(name) = place(&gif_part, &h.t.send.name) else {
+        let Some(name) = place(&gif_part, &h.t.send.name, h.t.send.id) else {
             return self.abandon(h, Some("busy"));
         };
         let card = format!("/gifs/Sent/{name}");
@@ -546,22 +573,26 @@ fn head(path: &str) -> Option<Vec<u8>> {
 /// rename is the check). The name used.
 #[optimize(size)]
 #[inline(never)]
-fn place(part: &str, name: &str) -> Option<String> {
+fn place(part: &str, name: &str, id: u32) -> Option<String> {
     let _held = crate::cache_builder::busy();
     let mut name = name.to_string();
-    for _ in 0..NAME_TRIES {
+    for k in 0..=NAME_TRIES {
+        if k == NAME_TRIES {
+            // That many taken: the stem and the transfer's id.
+            name = xfer::fallback_name(&name, id);
+        }
         let dest = format!("{SENT}/{name}");
         crate::fatidx::touched(&dest);
         match fs::rename(part, &dest) {
             Ok(()) => return Some(name),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => name = xfer::next_name(&name),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists && k < NAME_TRIES => name = xfer::next_name(&name),
             Err(e) => {
                 error_line(&format!("a sent GIF could not be put in place: {e}"));
                 return None;
             }
         }
     }
-    error_line(&format!("a sent GIF: {NAME_TRIES} names taken"));
+    error_line(&format!("a sent GIF: {} names taken", NAME_TRIES + 1));
     None
 }
 
@@ -570,7 +601,7 @@ fn place(part: &str, name: &str) -> Option<String> {
 #[inline(never)]
 fn sweep() {
     let Ok(dir) = fs::read_dir(SENT) else { return };
-    let names: Vec<String> = dir.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.ends_with(".part")).collect();
+    let names: Vec<String> = dir.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| xfer::is_send_part(n)).collect();
     let _held = crate::cache_builder::busy();
     for n in names {
         let _ = fs::remove_file(format!("{SENT}/{n}"));
