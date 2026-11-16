@@ -2224,7 +2224,10 @@ def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
     try:
         for kbps in (0, 400):
             page = new_page(browser, "laptop", errors)
-            io = card_requests(page)
+            # Only SmokeDark open (no other folder's thumbnails): the mock's
+            # bytes sent are this GIF's read alone.
+            page.context.add_init_script("try { localStorage.setItem('odmd.lib.open', '[]') } catch {}")
+            asked = card_requests(page)
             ends: list = []
             page.on("requestfinished", lambda r: ends.append("finished") if "/gifs/SmokeDark/" in r.url else None)
             page.on("requestfailed", lambda r: ends.append(f"cut ({r.failure})") if "/gifs/SmokeDark/" in r.url else None)
@@ -2242,10 +2245,17 @@ def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
             page.wait_for_timeout(500)
             lit = page.eval_on_selector(sel, """c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
                 for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
-            reads = [u for u in io["urls"] if u == path]
+            reads = [u for u in asked["urls"] if u == path]
+            others = [u for u in asked["urls"] if u != path and u != cache_path(path)]
+            sent = get_json(base + "/mock/io")["bytes"]
             how = "sent whole" if not kbps else f"paced at {kbps} KB/s"
-            check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and len(ends) == 1,
-                  f"thumbnails: a dark start of {len(gif):,} B {how}: a lit still ({lit} px), read once ({len(reads)} requests, {ends})")
+            # Paced, the read is cut at the clip (32 KB and a piece or two), never
+            # read to the end: the request ends cut and the mock sent well under
+            # the file. (Sent whole, either ending is right: the bytes are all out.)
+            cut = not kbps or (ends[:1] and ends[0].startswith("cut") and not others and sent < len(gif) // 2)
+            check(len(gif) > 32 * 1024 and lit > 500 and len(reads) == 1 and len(ends) == 1 and cut,
+                  f"thumbnails: a dark start of {len(gif):,} B {how}: a lit still ({lit} px), read once ({len(reads)} requests, {ends}; "
+                  f"{sent:,} B sent{f', other card reads {others[:2]}' if others else ''})")
             page.context.close()
     finally:
         get_json(base + "/mock/io?kbps=0")
