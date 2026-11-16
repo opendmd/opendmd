@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pynacl==1.5.0", "aiohttp==3.12.15"]
+# dependencies = ["pynacl==1.5.0", "aiohttp==3.12.15", "pillow"]
 # ///
 """Remote control's client in the emulator (`make emu-connect`): the real
 firmware against tools/connect/mock_server.py, over TLS. Correctness only,
@@ -24,14 +24,27 @@ reconnecting after a server close; a refusal (4403) and a too-new close
 (4406) handled by policy; the server gone and back; pairing (the LAN
 link's window with its QR code on the panel, a guest found by `pair_id`,
 the key stored with can_add, `keys` before `paired`, `mac2`, `pair-close`, "Remote control added", the new device's
-commands; a window cancelled on the LAN); switch off; forget (a new
-identity); a restart (the identity kept, back after the hold).
+commands; a window cancelled on the LAN); GIF sends (`hello` says
+`send` and the window; a GIF and its prepared copy land in /gifs/Sent/
+and /cache/Sent/ byte for byte, play once, the network worker's stack
+and heap read during it; a taken name gets the next; a 200 KB send
+resumed after the server drops the panel, by the same key); switch off;
+forget (a new identity); a restart (the identity kept, back after the
+hold).
 Red, each refused by the panel itself (frames put straight onto the
 panel's socket, past the server's pre-check) and none reaching the player:
 replayed, stale-session, wrong-panel, tampered, unsigned-by-a-stranger,
 disallowed (update, delete, wifi, reboot, ...), bad paths and arguments,
 an over-long body, a one-level key adding another, a removed key, a flood
 (the panel's own rate), chunks and unknown frame types (no answer).
+Sends' red: another key's `send` for the held transfer (`busy`, put
+straight onto the panel's socket); bytes that miss the signed hash
+(`end` bad-arg, the `.part` gone); a chunk outside the credit (put on
+the panel's socket: abandoned, bad-arg, gone); over 512 KB (`too-big`);
+no card (`no-card`); a LAN upload under way (`busy`); a cancel (its
+`.part` gone); the quota spent (`quota`); and every credit the panel
+sent within `caps.win` chunks of what it was sent (the mock server
+checks each).
 Pairing's red: the pair route while off (409) and without the API key
 when one is set (401, whatever the body); three wrong MACs (closed, and
 `pair-close` at once); a window used once (the server forgets it; a
@@ -59,6 +72,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -325,6 +339,15 @@ class Lane:
                 n = odc.loads(f[odc.COMMAND_HEAD:])["n"]
                 return await ctl.until("ack", lambda m: m.get("n") == n, timeout=timeout)
 
+            if os.environ.get("EMU_CONNECT_ONLY") == "sends":
+                # A quicker lane for the sends alone (not the gate's).
+                b = Controller(self.ctl_base, dev, "second")
+                r = await cmd("add-controller", {"pub": b.pub.hex(), "label": "second"})
+                await asyncio.sleep(1.5)
+                await b.attach(http)
+                await self.sends(http, dev, a, b, key)
+                return
+
             # --- blue: the command set -------------------------------------------
             p0 = (await self.status()).get("paused")
             r = await cmd("pause")
@@ -460,9 +483,9 @@ class Lane:
                 ("unsigned (zero signature)", bytes([1]) + a.k + bytes(64) + odc.command_body(dev, a.sess, 10**9 + 3, "pause"), a.k, "bad-sig"),
             ]
             n = 10**9 + 10
-            for c in ("update", "firmware", "delete", "wifi", "reboot", "restart", "config", "upload", "forget", "PAUSE", "send"):
+            for c in ("update", "firmware", "delete", "wifi", "reboot", "restart", "config", "upload", "forget", "PAUSE", "SEND"):
                 n += 1
-                cases.append((f"not on the allow-list: {c}", odc.sign_command(key, odc.command_body(dev, a.sess, n, c, {"id": 1, "name": "x.gif", "size": 1, "sha256": "00" * 32} if c == "send" else None)), a.k, "not-allowed"))
+                cases.append((f"not on the allow-list: {c}", odc.sign_command(key, odc.command_body(dev, a.sess, n, c)), a.k, "not-allowed"))
             for bad in ("/gifs/../wifi.txt", "/cache/a/xx/b.gif", "@formula:~sent", "@formula?psb=AAAA", "/filelist.txt", "/gifs/.hidden/x.gif", "@card:boot"):
                 n += 1
                 cases.append((f"bad path {bad}", odc.sign_command(key, odc.command_body(dev, a.sess, n, "play", {"path": bad})), a.k, "bad-arg"))
@@ -493,6 +516,10 @@ class Lane:
             bad_accepts = [m for _, m in self.emu.find(ACCEPTED, mark_line) if m[2] == "ok"]
             self.expect(len(bad_accepts) <= 8 + 4, "red: only the flood's rate-allowed 'controllers' were carried out", f"{len(bad_accepts)} accepted lines")
             self.report["refusals"] = sorted({m[1] for _, m in self.emu.find(REFUSED, mark_line)})
+
+            # --- GIF sends ---------------------------------------------------------
+            await asyncio.sleep(3)
+            await self.sends(http, dev, a, b, key)
 
             # --- the LAN routes: a controller removed ---------------------------
             await asyncio.sleep(2)
@@ -669,6 +696,242 @@ class Lane:
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
+
+    # --- GIF sends -------------------------------------------------------------------
+    def _get_bytes(self, path, timeout=60.0):
+        for k in range(10):
+            try:
+                with urllib.request.urlopen(self.base + urllib.parse.quote(path), timeout=timeout) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                if e.code == 503 and k < 9:
+                    time.sleep(2)
+                    continue
+                return e.code, b""
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                self.emu.check()
+                time.sleep(2)
+        return None, b""
+
+    async def get_bytes(self, path):
+        return await asyncio.to_thread(self._get_bytes, path)
+
+    async def sent_listing(self):
+        code, body = await self.http("GET", "/api/files?dir=" + urllib.parse.quote("/gifs/Sent") + "&sizes=1")
+        return {e["name"]: e.get("size") for e in (body or {}).get("entries", [])} if code == 200 else {}
+
+    def slow_upload(self, path, total, started: threading.Event, release: threading.Event, result: dict):
+        """A LAN upload that trickles its body until `release` (five bytes a
+        second, inside the upload's 5 s idle limit)."""
+        import socket
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=60)
+            s.sendall(f"PUT {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nContent-Length: {total}\r\nContent-Type: application/octet-stream\r\n\r\n".encode() + b"GIF89a")
+            sent = 6
+            started.set()
+            while not release.is_set() and sent < total - 1:
+                time.sleep(0.2)
+                s.sendall(b"\0")
+                sent += 1
+            s.sendall(b"\0" * (total - sent))
+            result["answer"] = s.recv(4096).decode(errors="replace").split("\r\n", 1)[0]
+            s.close()
+        except Exception as e:  # noqa: BLE001
+            result["answer"] = f"error {e}"
+            started.set()
+
+    async def sends(self, http, dev, a, b, key):
+        from roundtrip import send_args, stream
+        import random as _random
+        from PIL import Image
+
+        rec = self.rec()
+        # (A's counter past the red cases' injected frames, this session.)
+        a.n = max(a.n, 10**11 + 1000)
+        caps = self.srv.caps
+        self.expect(caps.get("send") is True and caps.get("win") == 2, "hello's caps: sends on, a window of 2 chunks (the classic)", json.dumps(caps))
+        root = EMU_DIR / "card" / "root"
+        gif = (root / "gifs" / "Arcade" / "ARCADE_Noise_01.gif").read_bytes()
+        copy = next((root / "cache" / "Arcade").glob("*/ARCADE_Noise_01.gif")).read_bytes()
+
+        def bucket(name: str) -> str:
+            h = 0x811C9DC5
+            for c in name.encode():
+                h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF
+            return f"{h & 0xFF:02x}"
+
+        async def send(ctl, args, timeout=120):
+            f = ctl.frame("send", args)
+            await ctl.send(f)
+            return await ctl.until("ack", lambda m: m.get("n") == odc.loads(f[odc.COMMAND_HEAD:])["n"], timeout=timeout)
+
+        async def no_part():
+            ls = await self.sent_listing()
+            return not any(n.endswith(".part") for n in ls) and ls
+        tid = 7000
+
+        # Blue: a whole send, GIF and copy, played once; the heap and the
+        # worker's stack read while it runs.
+        tid += 1
+        heap_lows: list[int] = []
+
+        async def watch_heap(stop):
+            while not stop.is_set():
+                h = (await self.status()).get("heap") or {}
+                if isinstance(h.get("free"), int):
+                    heap_lows.append(h["free"])
+                await asyncio.sleep(1)
+        stop = asyncio.Event()
+        watcher = asyncio.create_task(watch_heap(stop))
+        st0 = await self.status()
+        mark_send = self.emu.mark()
+        r = await send(a, send_args(tid, "lane-sent.gif", gif, copy, play=True))
+        self.expect(r and r.get("ok") and (r.get("r") or {}).get("offset") == 0, "send: accepted from offset 0", json.dumps(r))
+        t0 = time.time()
+        credits, end, _ = await stream(a, tid, gif + copy, timeout=120)
+        wall = time.time() - t0
+        st_send = await self.status()
+        stop.set()
+        await watcher
+        self.expect(end and end.get("end") == "ok" and end.get("path") == "/gifs/Sent/lane-sent.gif", "send: the last credit says ok, with the path", json.dumps(end))
+        bad_credit = [c for c in self.srv.credits if c[1] > c[2] + c[3] * odc.MAX_CHUNK]
+        self.expect(not bad_credit and not self.srv.refused.get("credit-beyond-win") and all(c.get("k") == a.k.hex() for c in credits),
+                    "send: every credit within caps.win of the bytes sent, for its key", f"{len(credits)} credits, {self.srv.forwarded} chunks forwarded")
+        code, got = await self.get_bytes("/gifs/Sent/lane-sent.gif")
+        self.expect(code == 200 and got == gif, "send: the card's /gifs/Sent/lane-sent.gif byte for byte", f"{code}, {len(got)} of {len(gif)} B")
+        code, got = await self.get_bytes(f"/cache/Sent/{bucket('lane-sent.gif')}/lane-sent.gif")
+        self.expect(code == 200 and got == copy, "send: its prepared copy in /cache/Sent/ byte for byte", f"{code}, {len(got)} of {len(copy)} B")
+        # (Short: it may be over before a status read; the console says.)
+        opened = re.compile(r"\[\d+\] (/gifs/\S+\.gif) <- (prepared|original)")
+
+        async def played_then_next():
+            hits = [m for _, m in self.emu.find(opened, mark_send)]
+            i = next((j for j, m in enumerate(hits) if m[1] == "/gifs/Sent/lane-sent.gif"), None)
+            return i is not None and len(hits) > i + 1 and hits[i][2] == "prepared" and hits[i + 1][1] != "/gifs/Sent/lane-sent.gif"
+        await self.wait("the sent GIF played (from its copy), then the playlist went on", played_then_next, 300, every=2)
+        self.ok("send: played once from its prepared copy, then the playlist carried on", "")
+        su = (st_send.get("connect") or {}).get("stack_unused")
+        self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after a send (hashing and card writes at the top level): >= 1 KB left", f"{su} B")
+        self.report["send"] = {"bytes": len(gif) + len(copy), "wall_s": round(wall, 1), "credits": len(credits), "stack_unused": su,
+                               "heap_before": st0.get("heap"), "heap_after": st_send.get("heap"), "heap_free_min_during": min(heap_lows) if heap_lows else None}
+        self.expect(await no_part(), "send: no .part left", "")
+
+        # The same name again: the next one, never an overwrite (no copy:
+        # any stale copy for that name goes).
+        small = (root / "gifs" / "Arcade" / "ARCADE_Galaga_01.gif").read_bytes()
+        tid += 1
+        r = await send(a, send_args(tid, "lane-sent.gif", small))
+        _, end, _ = await stream(a, tid, small, timeout=120)
+        self.expect(r and r.get("ok") and end and end.get("path") == "/gifs/Sent/lane-sent_2.gif", "send: a taken name gets the next one", json.dumps(end))
+        code, got = await self.get_bytes("/gifs/Sent/lane-sent.gif")
+        self.expect(code == 200 and got == gif, "...and the first is untouched", f"{len(got)} B")
+
+        # A 200 KB send, the server dropping the panel midway: resumed by
+        # the same key; another key's send for it is busy (put straight on
+        # the panel's socket, past the server's own routing).
+        rng = _random.Random(7)
+        frames = [Image.frombytes("P", (128, 32), bytes(rng.randrange(64) for _ in range(128 * 32))) for _ in range(60)]
+        pal = [c for i in range(64) for c in (i * 4, 255 - i * 4, (i * 37) % 256)]
+        for fr in frames:
+            fr.putpalette(pal)
+        buf = __import__("io").BytesIO()
+        frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=80, loop=0)
+        big = buf.getvalue()
+        tid += 1
+        big_args = send_args(tid, "lane-big.gif", big)
+        r = await send(a, big_args)
+        self.expect(r and r.get("ok"), f"a {len(big) // 1024} KB send started", json.dumps(r))
+        c0 = await a.until("credit", lambda m: m.get("id") == tid, timeout=60)
+        _, _, at = await stream(a, tid, big, upto=c0["upto"], stop=40 * 1024, timeout=120)
+        await asyncio.sleep(3)
+        sess_now = bytes.fromhex(self.rec().sess)
+        got = await self.injected_ack("another key's send of the held transfer", odc.sign_command(b.sk, odc.command_body(dev, sess_now, 10**11, "send", big_args)), b.k)
+        self.expect(got.get("err") == "busy", "red: another key's send naming the held transfer: busy (resume is for the key that started it)", json.dumps(got))
+        ls = await self.sent_listing()
+        part = next((n for n in ls if n.startswith("lane-big.gif.") and n.endswith(".part")), None)
+        # (Its size reads 0 in the listing while the panel holds it open.)
+        self.expect(part is not None, "the send's .part on the card meanwhile", f"{part}")
+        old_sess = rec.sess
+        await self.panel_ws().close(code=1001, message=b"bye")
+        await self.open_session("back after the server dropped the panel mid-send", before_sess=old_sess, timeout=900)
+        await a.until("panel", lambda m: m.get("online") is True, timeout=60)
+        a.sess = bytes.fromhex(self.rec().sess)
+        # Credits from before the reconnect are stale: a controller uses
+        # only those after its resumed send's ack.
+        a.inbox = [m for m in a.inbox if not (m.get("t") == "credit" and m.get("id") == tid)]
+        r = await send(a, big_args)
+        off = ((r or {}).get("r") or {}).get("offset")
+        self.expect(r and r.get("ok") and (r.get("r") or {}).get("resumed") and isinstance(off, int) and 0 < off <= at, f"resume by the same key after the reconnect: from {off} B", json.dumps(r))
+        _, end, _ = await stream(a, tid, big, start=off, timeout=180)
+        code, got = await self.get_bytes("/gifs/Sent/lane-big.gif")
+        self.expect(end and end.get("end") == "ok" and code == 200 and got == big, "the resumed send landed whole, byte for byte", f"{len(got)} of {len(big)} B")
+        self.expect(not self.srv.refused.get("credit-beyond-win"), "no credit past caps.win, the resume's included", "")
+
+        # Red: bytes that miss the signed hash; the .part goes.
+        tid += 1
+        r = await send(a, dict(send_args(tid, "lane-bad.gif", small), sha256="00" * 32))
+        _, end, _ = await stream(a, tid, small, timeout=120)
+        ls = await self.sent_listing()
+        self.expect(r and r.get("ok") and end and end.get("end") == "bad-arg" and "lane-bad.gif" not in ls and await no_part(),
+                    "red: bytes that miss the signed hash: end bad-arg, nothing landed, the .part gone", json.dumps(end))
+        # Red: a chunk outside the credit, put straight on the panel's socket.
+        tid += 1
+        r = await send(a, send_args(tid, "lane-outside.gif", big))
+        c0 = await a.until("credit", lambda m: m.get("id") == tid, timeout=60)
+        await self.inject(odc.chunk_frame(tid, c0["upto"], big[c0["upto"]:c0["upto"] + 512]))
+        end = await a.until("credit", lambda m: m.get("id") == tid and "end" in m, timeout=60)
+        self.expect(end and end.get("end") == "bad-arg" and await no_part(), "red: a chunk outside the credit: abandoned (bad-arg), the .part gone", json.dumps(end))
+        # Red: over 512 KB.
+        tid += 1
+        r = await send(a, send_args(tid, "lane-huge.gif", b"GIF89a") | {"size": 512 * 1024 + 1})
+        self.expect(r and r.get("err") == "too-big", "red: a send over 512 KB: too-big", json.dumps(r))
+        # No card.
+        await self.http("PUT", "/api/connect", {"test_no_card": True})
+        tid += 1
+        r = await send(a, send_args(tid, "lane-nocard.gif", small))
+        await self.http("PUT", "/api/connect", {"test_no_card": False})
+        self.expect(r and r.get("err") == "no-card", "no card: no-card", json.dumps(r))
+        # A LAN upload under way: busy (the LAN always wins).
+        started, release, result = threading.Event(), threading.Event(), {}
+        th = threading.Thread(target=self.slow_upload, args=("/api/files/gifs/Sent/lane-lan.gif", 4096, started, release, result), daemon=True)
+        th.start()
+        await asyncio.to_thread(started.wait, 60)
+        await asyncio.sleep(3)
+        tid += 1
+        r = await send(a, send_args(tid, "lane-during.gif", small))
+        release.set()
+        await asyncio.to_thread(th.join, 120)
+        self.expect(r and r.get("err") == "busy" and "200" in (result.get("answer") or ""), "a LAN upload under way: the send is busy, the upload completes", f"{json.dumps(r)}; upload {result.get('answer')!r}")
+        # A cancel: its .part goes.
+        await asyncio.sleep(1)
+        tid += 1
+        r = await send(a, send_args(tid, "lane-cancel.gif", big))
+        c0 = await a.until("credit", lambda m: m.get("id") == tid, timeout=60)
+        await stream(a, tid, big, upto=c0["upto"], stop=8 * 1024, timeout=120)
+        await asyncio.sleep(3)
+        had = any(n.startswith("lane-cancel.gif.") for n in await self.sent_listing())
+        f = a.frame("send-cancel", {"id": tid})
+        await a.send(f)
+        r = await a.ack(f)
+        await asyncio.sleep(2)
+        self.expect(had and r and r.get("ok") and await no_part() and "lane-cancel.gif" not in await self.sent_listing(), "send-cancel: ok, its .part gone", json.dumps(r))
+        # The quota: 1 MB announced each (each replaces the last: no refund)
+        # until it is spent.
+        n_ok, last = 0, None
+        for _ in range(12):
+            tid += 1
+            last = await send(a, {"id": tid, "name": "lane-q.gif", "size": 512 * 1024, "sha256": "11" * 32, "copy_size": 512 * 1024, "copy_sha256": "22" * 32})
+            if not (last and last.get("ok")):
+                break
+            n_ok += 1
+        self.expect(last and last.get("err") == "quota" and 1 <= n_ok <= 7, "the panel's 8 MB a day: spent, then quota (charged when accepted, none refunded)", f"{n_ok} accepted, then {json.dumps(last)}")
+        f = a.frame("send-cancel", {"id": tid - 1})
+        await a.send(f)
+        await a.ack(f)
+        await asyncio.sleep(2)
+        self.expect(await no_part(), "the quota's held send cancelled: no .part left", "")
+        st = await self.status()
+        self.expect(not self.emu.failure and st.get("transfer") is False, "after the sends: no panic, no transfer held", f"transfer {st.get('transfer')}")
 
     # --- pairing ------------------------------------------------------------------
     async def open_window(self, qr=False, key=None):
@@ -873,6 +1136,10 @@ class Lane:
 
     async def _playing(self, path):
         return ((await self.status()).get("now_playing") or {}).get("path") == path
+
+    async def _not_playing(self, path):
+        p = ((await self.status()).get("now_playing") or {}).get("path")
+        return p is not None and p != path
 
     async def _manifest(self, name):
         return name in ((await self.status()).get("manifest") or "")

@@ -268,7 +268,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `id` | the panel's stable ID: 12 characters of lowercase Crockford base32 (`0-9`, `a-z` without `i l o u`), the same through renames, updates, reboots and erases; `null` when the chip's MAC is unavailable. Hashed from the chip's factory MAC; a lookup key, never a credential (see "Network"). Also the `_opendmd._tcp` record's `id` |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays); `seed` while a Formula plays: the seed it was started with (Q16.16, 0 to 65,535 for 0 to 1; a `loop forever` Formula's `seed`, new at each start, kept through a live edit), so a preview draws the panel's picture; `sent` while the Formula sent with `POST /api/play/formula` plays (`@formula:~sent`): the CRC-32 (zlib's) of its compiled bytes, the send's identity (a live edit: the edit's bytes); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
 | `paused` | bool |
-| `transfer` | a file is going to or from the card on the stream task, or an upload is in hand (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
+| `transfer` | a file is going to or from the card on the stream task, an upload is in hand, or a Remote control send is held (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each (640 B of paths in all, none over 200 B; not the title cards, the power-on effect or a sent Formula); the index of the one on screen |
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
@@ -898,8 +898,11 @@ can be controlled from away from home through the OpenDMD Connect server
 nothing opened on the home network. It is off until switched on here, and
 the LAN API stays the only full tier: a remote controller can only play,
 skip, go back, pause, set the brightness and the playlist, list the
-playlists and the controllers, add or remove a controller and rename the
-panel, each command signed by a key the panel itself paired.
+playlists and the controllers, add or remove a controller, rename the
+panel and send a GIF (with its prepared copy: it lands in `/gifs/Sent/`,
+in no playlist, and plays once; at most 512 KB each and 8 MB a day; a LAN
+upload under way makes a send wait or refuses it), each command signed by
+a key the panel itself paired.
 
 ### GET /api/connect
 

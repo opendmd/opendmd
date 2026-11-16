@@ -6,8 +6,11 @@
 a server (the mock server here, the Worker under `cf dev` later): it
 registers, says hello, keeps a controller list, checks every signed
 command with odc.Session (the panel's rules), pairs a guest through a
-window it opens, acks, and sends status while watched. A pretend player
-underneath: no card, no display, no device.
+window it opens, acks, and sends status while watched; takes a GIF send
+by the panel's rules (credit within `caps.win`, resume only for the
+starting key, `size + copy_size` charged once, both hashes, the last
+`credit`'s `end`), keeping the files in memory (`landed`). A pretend
+player underneath: no card, no display, no device.
 
     uv run tools/connect/mock_panel.py --server http://127.0.0.1:8787
 
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import os
 import time
 
@@ -51,6 +55,10 @@ class Panel:
         self.connected = asyncio.Event()
         self.closed_with: int | None = None
         self.log: list[tuple] = []  # (k, n, c) accepted; ("refused", code) refused
+        self.win = 2
+        self.xfer: dict | None = None  # the held transfer
+        self.quota_used = 0
+        self.landed: dict[str, tuple[bytes, bytes]] = {}  # name -> (gif, copy)
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -90,7 +98,7 @@ class Panel:
         self.session = odc.Session(self.dev, sess, self.version, now_us())
         async with http.ws_connect(f"{self.server}/v1/panel", protocols=protocols, autoping=True, max_msg_size=4096) as ws:
             self.ws = ws
-            await self.send({"t": "hello", "v": self.version, "secret": self.secret.hex(), "fw": self.fw, "sess": sess.hex(), "caps": {"send": False, "win": 2}})
+            await self.send({"t": "hello", "v": self.version, "secret": self.secret.hex(), "fw": self.fw, "sess": sess.hex(), "caps": {"send": True, "win": self.win}})
             await self.send_keys()
             await self.send({"t": "info", "name": self.name})
             self.connected.set()
@@ -143,9 +151,78 @@ class Panel:
         await self.send({"t": "pair-close", "pair_id": self.window.id().hex()})
         await self.send({"t": "paired", "g": g, "k": key.k.hex(), "mac2": mac2.hex()})
 
+    def credit(self, x, end=None, path=None) -> dict:
+        m = {"t": "credit", "id": x["a"]["id"], "upto": x["upto"], "k": x["k"].hex()}
+        if end is not None:
+            m["end"] = end
+        if path is not None:
+            m["path"] = path
+        return m
+
+    async def on_chunk(self, frame: bytes):
+        try:
+            tid, off, data = odc.parse_chunk(frame)
+        except odc.Bad:
+            return
+        x = self.xfer
+        if x is None or tid != x["a"]["id"]:
+            return
+        if off != x["off"] or off + len(data) > x["upto"]:
+            self.xfer = None
+            await self.send(self.credit(x, "bad-arg"))
+            return
+        x["buf"] += data
+        x["off"] += len(data)
+        x["touched"] = time.monotonic()
+        total = x["a"]["size"] + x["a"]["copy_size"]
+        if x["off"] < total:
+            nxt = min(x["off"] + self.win * odc.MAX_CHUNK, total)
+            if nxt > x["upto"]:
+                x["upto"] = nxt
+                await self.send(self.credit(x))
+            return
+        self.xfer = None
+        a = x["a"]
+        gif, copy = bytes(x["buf"][: a["size"]]), bytes(x["buf"][a["size"]:])
+        if hashlib.sha256(gif).digest() != a["sha256"] or (a["copy_size"] and hashlib.sha256(copy).digest() != a["copy_sha256"]) or not gif.startswith((b"GIF87a", b"GIF89a")):
+            await self.send(self.credit(x, "bad-arg"))
+            return
+        name = a["name"]
+        while name.lower() in (n.lower() for n in self.landed):
+            name = odc.next_name(name)
+        self.landed[name] = (gif, copy)
+        path = f"/gifs/Sent/{name}"
+        await self.send(self.credit(x, "ok", path))
+        if a["play"]:
+            self.path = path
+
+    def on_send(self, k: bytes, a: dict):
+        """(ack result, credit to say) or raises Bad(code)."""
+        x = self.xfer
+        now = time.monotonic()
+        if x is not None and now - x["touched"] > odc.RESUME_S:
+            x = self.xfer = None
+        if x is not None:
+            if x["k"] != k:
+                raise odc.Bad("busy")
+            if x["a"]["id"] == a["id"]:
+                if x["a"] != a:
+                    raise odc.Bad("bad-arg")
+                # A resume: from the offset, nothing charged.
+                x["upto"] = min(x["off"] + self.win * odc.MAX_CHUNK, a["size"] + a["copy_size"])
+                x["touched"] = now
+                return {"offset": x["off"], "resumed": True}, x
+        cost = a["size"] + a["copy_size"]
+        if self.quota_used + cost > odc.QUOTA_BYTES:
+            raise odc.Bad("quota")
+        self.quota_used += cost
+        x = self.xfer = {"a": a, "k": k, "off": 0, "upto": min(self.win * odc.MAX_CHUNK, cost), "buf": bytearray(), "touched": now}
+        return {"offset": 0}, x
+
     async def on_binary(self, frame: bytes):
         if frame[:1] == bytes([odc.TYPE_CHUNK]):
-            return  # Sends are F4's; this mock advertises send: false.
+            await self.on_chunk(frame)
+            return
         try:
             k, n, c, a = self.session.check(self.keys, self.max_brightness, frame, now_us())
         except odc.Refusal as r:
@@ -182,9 +259,21 @@ class Panel:
         elif c == "name":
             self.name = a["name"]
             await self.send({"t": "info", "name": self.name})
-        elif c in ("send", "send-cancel"):
-            await self.send(odc.Refusal("busy", k, n).ack())
+        elif c == "send":
+            try:
+                r, x = self.on_send(k, a)
+            except odc.Bad as e:
+                await self.send(odc.Refusal(str(e), k, n).ack())
+                return
+            await self.send(odc.ack_ok(k, n, r))
+            await self.send(self.credit(x))
             return
+        elif c == "send-cancel":
+            if self.xfer is not None and self.xfer["a"]["id"] == a["id"]:
+                if self.xfer["k"] != k:
+                    await self.send(odc.Refusal("not-allowed", k, n).ack())
+                    return
+                self.xfer = None
         await self.send(odc.ack_ok(k, n, r))
         if self.watched:
             await self.send(self.status())

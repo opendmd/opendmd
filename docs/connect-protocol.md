@@ -152,7 +152,7 @@ refused whole.
 | panel → server | `pair-open` / `pair-close` | `pair_id` (hex), `ttl` (seconds) |
 | panel → server | `status` | section 7; only while watched |
 | panel → server → one controller | `ack` | section 5.4 |
-| panel → server → one controller | `credit` | `id`, `upto` |
+| panel → server → one controller | `credit` | `id`, `upto`, `k` (the key that started the transfer); the last one also `end` (and `path`), section 8 |
 | panel → server → one guest | `paired` | `g`, then `k` and `mac2`, or `err` |
 | panel → server | `forget` | the last message under an identity being dropped: the server deletes its record |
 | server → panel | `watch` | `on`: whether any controller is attached |
@@ -384,25 +384,49 @@ server can show a controller a false state, never change the panel's.
 - Signed `send {id, name, size, sha256, copy_size, copy_sha256, play}`:
   `id` a non-zero 32-bit transfer id; `name` a file name only (no `/`, no
   control character, not `.`-leading, ending `.gif`, at most 120
-  characters) for `/gifs/Sent/`, never overwriting (a taken name gets a
-  suffix); `size` 1 to 524,288 (more is `too-big`); `sha256` hex;
-  `copy_size` 0 (no prepared copy) to 524,288, with `copy_sha256` exactly
-  when it is not 0; `play` a boolean (default false).
+  characters) for `/gifs/Sent/`, never overwriting (a taken name gets the
+  web app's next name: `x_09.gif` → `x_10.gif`, `cat.gif` → `cat_2.gif`);
+  `size` 1 to 524,288 (more is `too-big`); `sha256` hex; `copy_size` 0
+  (no prepared copy) to 524,288, with `copy_sha256` exactly when it is
+  not 0; `play` a boolean (default false). A panel whose `hello` said
+  `caps.send: false` answers `not-allowed`.
+- Its `ack` comes once the panel has opened the file: `r {offset}` (0 for
+  a new transfer), then the first `credit`. Refusals: `busy` (a LAN upload
+  or an update under way: the LAN always wins; another controller's
+  transfer held), `no-card`, `quota`, `bad-arg` (the held transfer's id
+  with other arguments).
 - The bytes follow as one stream, the GIF's then the copy's, in `0x02`
   chunks of at most 1,024 bytes, strictly in order, and only inside the
-  panel's last `credit {id, upto}`. The panel grants more only after the
-  card write returned (2 chunks at a time on the classic, 4 or more on the
-  S3: `caps.win`). A chunk at another offset or past `upto` abandons the
-  transfer. The server forwards chunks only for a transfer its socket
-  started and holds nothing.
-- The panel writes `<name>.part`, checks both SHA-256s at the end, renames,
-  and plays it once if `play`. A wrong hash removes the `.part`.
-- Resume: the panel keeps `{id, offset, hash state}` in RAM for 10 minutes;
-  the same `send` signed again after a reconnect gets `credit` from the
-  offset. `.part` files are removed at boot.
-- Quotas: 8 MB per rolling 24 h on the panel, 16 MB and 60 sends a day per
-  panel at the server (`quota`). No card: `no-card`. A LAN upload always
-  wins: a remote send during one is `busy`.
+  panel's last `credit {id, upto, k}`. The panel grants more only after the
+  card write returned, and never more than `caps.win` chunks past what it
+  has written (2 on the classic, 4 on the S3): the server forwards a
+  chunk only inside the last credit and at the next offset, the first
+  after a `send` anywhere from `upto` less `caps.win` chunks (a resume). A
+  chunk at another offset or past `upto` abandons the transfer. The
+  server routes credits and chunks by (key, id) and holds nothing.
+- The panel writes `<name>.<id>.part` (and `<name>.<id>.copy.part`) in
+  `/gifs/Sent/`, checks both SHA-256s at the end and that the GIF is a GIF
+  and the copy a prepared copy (a GIF89a with its `OPENDMD1LZW` hint at a
+  cap of at most 9, `docs/cache-format.md`), renames the GIF into place,
+  moves the copy to its place under `/cache/`, and plays the GIF once if
+  `play` (then the playlist carries on). It lands in no playlist.
+- **The last `credit`** of a transfer carries `end`: `"ok"` with `path`
+  (the GIF's card path, its final name), or an error code: `bad-arg` (the
+  bytes miss the signed hashes, are not a GIF or the copy not a prepared
+  copy, or a chunk came outside the credit), `busy` (the card failed),
+  `not-allowed` (the starting key was removed). Either way the `.part`
+  files are gone. (Older controllers ignore the field.)
+- Resume: the panel keeps `{id, offset, hash state}` in RAM for 10 minutes
+  after the last progress; the same `send` signed again by **the key that
+  started it** (after a reconnect) gets `ack r {offset, resumed: true}` and
+  `credit` from the offset, nothing charged again. Another key's `send`
+  while it is held is `busy`; the same key's `send` with another id
+  abandons it and starts anew. `send-cancel {id}` from its key abandons
+  it (another key's: `not-allowed`; no such transfer: ok). `.part` files
+  are removed at boot.
+- Quotas: 8 MB per rolling 24 h on the panel (`size + copy_size` charged
+  when a send is accepted, never on a resume, never refunded), 16 MB and
+  60 sends a day per panel at the server (`quota`).
 
 ## 9. Limits
 

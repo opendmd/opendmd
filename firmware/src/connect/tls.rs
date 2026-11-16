@@ -512,10 +512,19 @@ pub struct Ping {
     pub missed: u32,
 }
 
-/// The longest binary message kept: a command frame's head and one byte
-/// over its longest body, so one too long is still seen as such (and its
-/// key id answered `too-big`).
-pub const BIN_KEEP: usize = cx::proto::COMMAND_HEAD + cx::proto::MAX_BODY + 1;
+/// The longest binary message kept: one byte over the longest command
+/// frame or transfer chunk, so one too long is still seen as such (a
+/// command's key id answered `too-big`; a chunk refused whole, never taken
+/// cut short).
+pub const BIN_KEEP: usize = max(cx::proto::COMMAND_HEAD + cx::proto::MAX_BODY, cx::xfer::CHUNK_HEAD + cx::xfer::MAX_CHUNK) + 1;
+
+const fn max(a: usize, b: usize) -> usize {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
 
 pub struct Conn {
     tcp: TcpStream,

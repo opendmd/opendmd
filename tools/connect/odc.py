@@ -36,6 +36,9 @@ MAX_TEXT_IN = 1024  # what anyone but the panel sends: the panel's receive buffe
 MAX_TEXT_OUT = 2048  # what the panel sends (a full controllers ack)
 MAX_CHUNK = 1024
 MAX_FILE = 512 * 1024
+# A send (docs/connect-protocol.md 8): the panel's quota, its resume window.
+QUOTA_BYTES = 8 * 1024 * 1024
+RESUME_S = 600
 MAX_KEYS = 8
 MAX_LABEL = 24
 MAX_NAME_CHARS = 32
@@ -626,6 +629,16 @@ def ack_ok(k: bytes, n: int, r=None) -> str:
 
 
 # --- Chunks ----------------------------------------------------------------------
+
+
+def next_name(n: str) -> str:
+    """The next name to try when one is taken (the web app's nextName,
+    opendmd_core::connect::xfer::next_name)."""
+    import re
+    m = re.match(r"^(.*_)(\d+)((?:_[^_]*)?\.gif)$", n, re.I)
+    if m:
+        return m[1] + str(int(m[2]) + 1).zfill(len(m[2])) + m[3]
+    return re.sub(r"(\.gif)$", r"_2\1", n, flags=re.I)
 
 
 def chunk_frame(tid: int, offset: int, data: bytes) -> bytes:

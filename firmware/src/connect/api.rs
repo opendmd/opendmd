@@ -73,7 +73,17 @@ fn refused(req: &mut crate::httpd::Req, e: &str) -> anyhow::Result<()> {
 fn put_body(body: &[u8]) -> Option<(Option<bool>, Option<String>)> {
     let v = opendmd_core::connect::json::parse(body).ok()?;
     let Value::Object(ref m) = v else { return None };
-    if m.is_empty() || m.iter().any(|(k, _)| k != "enabled" && k != "name") {
+    // An emulator image's lane: `test_no_card` stands in for a card taken
+    // out, for sends only (`connect-test` builds; anywhere else a 400).
+    #[cfg(feature = "connect-test")]
+    if let Some(t) = v.get("test_no_card") {
+        super::TEST_NO_CARD.store(t.as_bool()?, std::sync::atomic::Ordering::Relaxed);
+        if m.len() == 1 {
+            return Some((None, None));
+        }
+    }
+    let test = |k: &str| cfg!(feature = "connect-test") && k == "test_no_card";
+    if m.is_empty() || m.iter().any(|(k, _)| k != "enabled" && k != "name" && !test(k)) {
         return None;
     }
     let on = match v.get("enabled") {

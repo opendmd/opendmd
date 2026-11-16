@@ -10,7 +10,8 @@ controllers, all in one process (no device, no Cloudflare, no network past
 
 Blue: register, hello, pair by the LAN link's secret, attach, commands
 with acks and status, add another device (invite, confirm code,
-add-controller), remove, the panel reconnecting. Red, each refused: a
+add-controller), a GIF send (credit, a taken name, resume after the
+panel reconnects, nothing charged twice), remove, the panel reconnecting. Red, each refused: a
 replay, a tampered or unsigned frame, a stale session, names outside the
 allow-list, bad arguments, an oversize body, a flood, a stranger's attach,
 a made-up id, a guest with no window, a wrong pairing MAC three times, a
@@ -135,6 +136,33 @@ class Controller:
     async def closed(self, timeout=3.0):
         m = await self.until("_closed", timeout=timeout)
         return m["code"] if m else None
+
+
+def send_args(tid: int, name: str, gif: bytes, copy: bytes = b"", play: bool = False) -> dict:
+    a = {"id": tid, "name": name, "size": len(gif), "sha256": odc.sha256(gif).hex(), "play": play}
+    if copy:
+        a["copy_size"], a["copy_sha256"] = len(copy), odc.sha256(copy).hex()
+    return a
+
+
+async def stream(ctl, tid: int, data: bytes, start: int = 0, stop: int | None = None, upto: int | None = None, timeout: float = 5.0):
+    """Send `data` from `start` inside the panel's credits until its last
+    credit (`end`) or `stop` bytes; the credits seen and the end message."""
+    at, credits = start, []
+    while True:
+        while upto is not None and at < min(upto, stop if stop is not None else len(data)):
+            n = min(odc.MAX_CHUNK, upto - at)
+            await ctl.ws.send_bytes(odc.chunk_frame(tid, at, data[at:at + n]))
+            at += n
+        if stop is not None and at >= stop:
+            return credits, None, at
+        m = await ctl.until("credit", lambda m: m.get("id") == tid, timeout=timeout)
+        if m is None:
+            return credits, None, at
+        credits.append(m)
+        if "end" in m:
+            return credits, m, at
+        upto = m["upto"]
 
 
 async def guest_pair(http, base, dev, secret, ctl: Controller, mac=None):
@@ -355,6 +383,71 @@ async def main():
         ok(r and r.get("err") == "not-allowed", "red: a one-level key cannot add another (not-allowed)")
         r = await b.command("controllers")
         ok(r and len(r.get("r", [])) == 2, "controllers: both listed")
+
+        # --- Send a GIF --------------------------------------------------------------
+        ok(server.caps.get("send") is True and server.caps.get("win") == panel.win, "hello's caps: send, win")
+        gif = b"GIF89a" + os.urandom(5000)
+        copy = b"GIF89a" + os.urandom(2100)
+        args = send_args(41, "sent.gif", gif, copy, play=True)
+        f = a.frame("send", args)
+        await a.send(f)
+        r = await a.ack(f)
+        ok(r and r.get("ok") and r.get("r") == {"offset": 0}, "send: ack ok, from offset 0")
+        credits, end, _ = await stream(a, 41, gif + copy)
+        ok(end and end.get("end") == "ok" and end.get("path") == "/gifs/Sent/sent.gif" and panel.landed["sent.gif"] == (gif, copy), "send: landed byte for byte (GIF and copy), the last credit says ok")
+        ok(all(c["k"] == a.k.hex() for c in credits) and not server.refused.get("credit-beyond-win"), f"send: every credit for its key, none past caps.win ({len(credits)} credits)")
+        ok(panel.path == "/gifs/Sent/sent.gif" and panel.quota_used == len(gif) + len(copy), "send: played, size + copy_size charged")
+        f = a.frame("send", send_args(42, "sent.gif", gif))
+        await a.send(f)
+        await a.ack(f)
+        _, end, _ = await stream(a, 42, gif)
+        ok(end and end.get("path") == "/gifs/Sent/sent_2.gif", "send: a taken name gets the next one, never an overwrite")
+        # Red: a chunk past the credit is dropped by the server.
+        big = b"GIF89a" + os.urandom(9000)
+        f = a.frame("send", send_args(43, "big.gif", big))
+        await a.send(f)
+        await a.ack(f)
+        c0 = await a.until("credit", lambda m: m.get("id") == 43)
+        before = server.refused.get("chunk", 0)
+        await a.ws.send_bytes(odc.chunk_frame(43, c0["upto"], big[c0["upto"]:c0["upto"] + 100]))
+        await asyncio.sleep(0.1)
+        ok(server.refused.get("chunk", 0) == before + 1 and panel.xfer and panel.xfer["off"] == 0, "red: a chunk past the credit is dropped by the server, the panel unmoved")
+        # Red: another key naming the held transfer: busy.
+        f = b.frame("send", send_args(43, "big.gif", big))
+        await b.send(f)
+        r = await b.ack(f)
+        ok(r and r.get("err") == "busy", "red: another key's send of a held id: busy")
+        # A reconnect midway: the same key signs it again and resumes.
+        _, _, at = await stream(a, 43, big, upto=c0["upto"], stop=4096)
+        await asyncio.sleep(0.1)
+        await panel.ws.close()
+        await task
+        task = asyncio.create_task(panel.run(http))
+        await asyncio.wait_for(panel.connected.wait(), 5)
+        await a.until("panel", lambda m: m.get("online") is True)
+        used = panel.quota_used
+        # (Credits from before the reconnect are stale.)
+        a.inbox = [m for m in a.inbox if m.get("t") != "credit"]
+        f = a.frame("send", send_args(43, "big.gif", big))
+        await a.send(f)
+        r = await a.ack(f)
+        off = (r or {}).get("r", {}).get("offset")
+        ok(r and r.get("ok") and r["r"].get("resumed") and off == panel.xfer["off"] and off > 0, f"resume after a reconnect: from {off}")
+        _, end, _ = await stream(a, 43, big, start=off)
+        ok(end and end.get("end") == "ok" and panel.landed["big.gif"][0] == big and panel.quota_used == used, "resumed send landed whole, nothing charged again")
+        # Red: a wrong hash: refused at the end.
+        bad = dict(send_args(44, "bad.gif", gif), sha256="00" * 32)
+        f = a.frame("send", bad)
+        await a.send(f)
+        await a.ack(f)
+        _, end, _ = await stream(a, 44, gif)
+        ok(end and end.get("end") == "bad-arg" and "bad.gif" not in panel.landed, "red: bytes that miss the signed hash: end bad-arg, nothing landed")
+        # Red: over the quota.
+        panel.quota_used = odc.QUOTA_BYTES - 10
+        f = a.frame("send", send_args(45, "q.gif", gif))
+        await a.send(f)
+        r = await a.ack(f)
+        ok(r and r.get("err") == "quota", "red: over the panel's quota: quota")
 
         # --- Reconnect, remove -------------------------------------------------------
         old = b.frame("next")
