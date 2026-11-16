@@ -20,6 +20,8 @@ sha2 = { version = "0.11", default-features = false, optional = true }
 opendmd-psi = { path = "../opendmd-psi", default-features = false, optional = true }
 
 [dev-dependencies]
+# The Connect vectors (tests/connect-vectors.json) are written and read with it.
+serde_json = "1"
 # Psi's own tables, for the test that core lends identical ones (dev
 # features are not unified into normal builds).
 opendmd-psi = { path = "../opendmd-psi" }
@@ -47,10 +49,13 @@ ota = ["dep:ed25519-dalek", "dep:sha2"]
 # `/api/status` and the `_opendmd._tcp` TXT record. The firmware only (the
 # SHA-256 is the one `ota` links already).
 panel-id = ["dep:sha2"]
-# OpenDMD Connect's spike S0 (src/connect.rs): the host-testable half of
-# the firmware's `connect-probe` (WebSocket framing, backoff, the M10
-# stream, the M9 vector). Only that firmware feature and the tests use it.
-connect = []
+# OpenDMD Connect (src/connect/, docs/connect-protocol.md): spike S0's
+# session half (ws.rs: WebSocket framing, backoff, the M10 stream, the M9
+# vector) and protocol v1 (signed commands, sessions, the remote
+# allow-list, pairing, the key list, transfers). Ed25519 and SHA-256 are
+# the crates `ota` links already. The firmware's connect features and the
+# tests use it; it builds for wasm too (`make check-wasm`).
+connect = ["dep:ed25519-dalek", "dep:sha2"]
 # The device's player (the firmware enables it, always): built without
 # `psi` (the firmware's `formulas` off), a playlist's Formula lines
 # (`@formula…`, `/formulas/<stem>.psi`) are skipped as they are read, like

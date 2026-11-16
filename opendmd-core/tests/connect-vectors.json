@@ -1,0 +1,949 @@
+{
+  "about": "OpenDMD Connect protocol v1 shared test vectors (docs/connect-protocol.md). Every key, secret and id here is a throwaway made from a fixed string: never use one for anything real. Made by opendmd-core/tests/connect_vectors.rs; check, do not edit by hand.",
+  "acks": {
+    "err": "{\"t\":\"ack\",\"k\":\"ed5328324106ab4e\",\"n\":3,\"err\":\"replay\"}",
+    "err_without_n": "{\"t\":\"ack\",\"k\":\"ed5328324106ab4e\",\"err\":\"bad-sig\"}",
+    "ok": "{\"t\":\"ack\",\"k\":\"ed5328324106ab4e\",\"n\":1,\"ok\":true}",
+    "ok_with_result": "{\"t\":\"ack\",\"k\":\"ed5328324106ab4e\",\"n\":2,\"ok\":true,\"r\":{\"paused\":true}}"
+  },
+  "allowed": [
+    "play",
+    "next",
+    "prev",
+    "pause",
+    "brightness",
+    "playlist",
+    "playlists",
+    "send",
+    "send-cancel",
+    "controllers",
+    "add-controller",
+    "remove-controller",
+    "name"
+  ],
+  "attach": {
+    "by_a": "6159f70e327ee5e15768174bd5fcb11cccad1504ec7c36bda43b2423997062955ddf3f8fa66248a7c28a5db8173e0ee2bd09bec21357026cfda8be9cff302a0e",
+    "by_stranger": "6821b069250f474de2e54270dd5834f13788566bfb584b95e522dd8e248a453655e388c33b2c5637f763021dc680f2a4b847cbd3be754c4ee489edcbf38aec0c",
+    "challenge": "{\"t\":\"challenge\",\"nonce\":\"67748039b65419c1571a7706b9f3440f\"}",
+    "dev": "5rjkoafkrbd37nkvy44xyhoffi",
+    "message": "{\"t\":\"attach\",\"k\":\"ed5328324106ab4e\",\"sig\":\"6159f70e327ee5e15768174bd5fcb11cccad1504ec7c36bda43b2423997062955ddf3f8fa66248a7c28a5db8173e0ee2bd09bec21357026cfda8be9cff302a0e\"}",
+    "nonce": "67748039b65419c1571a7706b9f3440f"
+  },
+  "codec": {
+    "base32": [
+      {
+        "hex": "666f6f626172",
+        "text": "mzxw6ytboi"
+      },
+      {
+        "hex": "ec52a700aa8847bfb555c7397c1dc52a",
+        "text": "5rjkoafkrbd37nkvy44xyhoffi"
+      }
+    ],
+    "base32_refused": [
+      "MZXW6YTBOI",
+      "mzxw6ytboj",
+      "mzxw6ytbo1"
+    ],
+    "hmac_sha256": [
+      {
+        "key": "4a656665",
+        "mac": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+        "msg": "7768617420646f2079612077616e7420666f72206e6f7468696e673f"
+      }
+    ]
+  },
+  "commands": [
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e7205ef66d3080afdd86f40e2902136eb6a22d79db4b2f5866a3ca2e0a066497ef22b11d0a12140815624150e251636e2a1fc3a2ada6eb3bb888eb99157e880047b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "ok-next",
+      "note": "a paired key, the current session",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/Arcade/Pac Man.gif\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4ecc00df659473b5b656807b8181595883f6ebfda182f4883596a28ce22f455fa43503841a188bdacd7772725f99255f76508031e52541494e31adaa9b8c9051087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f4172636164652f506163204d616e2e676966227d7d",
+      "name": "ok-play-gif",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"@formula:fire\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4ec7f8f9e0899e821043c9f81fec787636320ca5b319ca57afa1d4730c776c588fe77e7700eda634b151327d40bbf3d228e7491711a9e8e1e07c0bb11d54b0bc067b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a2240666f726d756c613a66697265227d7d",
+      "name": "ok-play-formula",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/formulas/big-clock.psi\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4ee3752af60fe8abfbf4d75b26ebdfe2005b57a0a3711642a414973159e684d06dc4ee85f200dca62c9f3fa38917ec1e2272d5cc19b5718aadeb0766ce5c395d097b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f666f726d756c61732f6269672d636c6f636b2e707369227d7d",
+      "name": "ok-play-formula-file",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"brightness\",\"a\":{\"v\":128}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e16b82375176aa43e7993f4cca50ce884771b4cc44e24bef1e279d5a6068bb4b550555ef3b22849ed962871dba563c5056e1f08f67edb97c8eb7b5c10f73f2d0c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226272696768746e657373222c2261223a7b2276223a3132387d7d",
+      "name": "ok-brightness-ceiling",
+      "note": "max_brightness is 128",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"playlist\",\"a\":{\"set\":\"consoles\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e5a348d427cdda5329364b8453f2874c0db214b40552f734861fac5fb08f34ec89f781333b5aa34a55a2fe069debbe861cafaa99e13cd1581d46405081833b5057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c61796c697374222c2261223a7b22736574223a22636f6e736f6c6573227d7d",
+      "name": "ok-playlist",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"pause\"}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e65348fa25398de126e4ecabe51f2a947ae4d41d4c8ecd60ba59299d1183d63f57ce22f819f649f7ea3e0b1bcc96a74b591a9d2f81c64614ee2db9ed1d542e80c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a227061757365227d",
+      "name": "ok-no-args",
+      "note": "`a` may be left out",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{ \"c\" : \"prev\",\n \"n\":1, \"sess\":\"b17bbe0ae870b1fc3dbf55da\", \"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\", \"v\":1, \"a\":{}, \"later\":[1,2] }",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e63413adf29500eb9ee5187ab2c504d0e0ebdacff996bc31724bd3e8f2e73c5c4cb57b8d1ab5d350c8db5dfe5d9fae1512bddcb1b2165891df61abbf0446f170b7b20226322203a202270726576222c0a20226e223a312c202273657373223a22623137626265306165383730623166633364626635356461222c2022646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c202276223a312c202261223a7b7d2c20226c61746572223a5b312c325d207d",
+      "name": "ok-bytes-as-sent",
+      "note": "whitespace and another key order: the signature is over the bytes, no canonical form",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"remove-controller\",\"a\":{\"k\":\"ed5328324106ab4e\"}}",
+      "expect": "ok",
+      "frame": "01bc450192601946f98216de002cabf385ab9143e28b2efe7bea3717f13889cc860ac15ea5b1bac6b1e41f49d306323772851401697984beb7d63b95dccdb9d5c3227cab8155f7b8047b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2272656d6f76652d636f6e74726f6c6c6572222c2261223a7b226b223a2265643533323833323431303661623465227d7d",
+      "name": "ok-b-removes-a",
+      "note": "any paired key may remove any key",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"add-controller\",\"a\":{\"pub\":\"817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a\",\"label\":\"C tablet\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e42aad6ce02ce984e82814fac73eb75898f9c1bcd16de030bfa56a77b86dbbdc80a54c2e380ddbbf86ffeac26b82c1e21b47c21a4a5288ffe6f9a6e14ad46b90e7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226164642d636f6e74726f6c6c6572222c2261223a7b22707562223a2238313763386138653234353065626432333432336163613238653834363533333334616633613739316638323863303036316266303037633530326134353261222c226c6162656c223a2243207461626c6574227d7d",
+      "name": "ok-a-adds",
+      "note": "A has can_add",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":7,\"name\":\"cat.gif\",\"size\":524288,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"copy_size\":1000,\"copy_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"play\":true}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e8e4dd56049e1a49ad9a0efe014e4ceb4873078da9bbfdff1bca3a9961dc34cd24388ac9e3ee37e34a39892cb8feb3048360cddb72bbef71171e598c98baea20f7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a372c226e616d65223a226361742e676966222c2273697a65223a3532343238382c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c22636f70795f73697a65223a313030302c22636f70795f736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c22706c6179223a747275657d7d",
+      "name": "ok-send",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"name\",\"a\":{\"name\":\"Den panel\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e4dfa01b0ff309f0ac1236ff855b8d0c4e2a0e21329f9e9d3294668963613d8a31d5ae52ea7508de3dde0ae738f444e9c1766df4872144c0b5cba14a66bd6ee0f7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e616d65222c2261223a7b226e616d65223a2244656e2070616e656c227d7d",
+      "name": "ok-name",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "bad-sig",
+      "frame": "01ed5328324106ab4e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "unsigned",
+      "note": "an all-zero signature",
+      "server": "bad-sig"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "bad-sig",
+      "frame": "01ed5328324106ab4eaff42202c87e3aa8c8cbc23c6b1d72cfca50b1a35adc67782174e992e88d7db32a42bfb6e9ce7a4c5f2b7fc7aacfe4161de06570c864c5310002ed9db7117f087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "wrong-signer",
+      "note": "B's signature under A's key id",
+      "server": "bad-sig"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "bad-sig",
+      "frame": "01ed5328324106ab4e4871fcbf72d31dd84828beb1045f73991a6013d5fbbbb2df8be6c8b2248f4695251980110152eda744fc4676b0f47b391fc8ef0e4a8eea0d8d5f04404619c8077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "made-by-the-server",
+      "note": "the server signs with a key of its own under A's id",
+      "server": "bad-sig"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"brightness\",\"a\":{\"v\":19}}",
+      "expect": "bad-sig",
+      "frame": "01ed5328324106ab4e2cbe074e8f7bf5a454faf67f214e6cb3981e7e464d8b9d209b99464740ffcb19de9281a4b31fc2fed7c9682bae686d6c8be0062900dd0cba67e07efb24eaff0f7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226272696768746e657373222c2261223a7b2276223a31397d7d",
+      "name": "tampered-body",
+      "note": "\"v\":10 changed to \"v\":19 after signing",
+      "server": "bad-sig"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1, \"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\", \"sess\":\"b17bbe0ae870b1fc3dbf55da\", \"n\":1, \"c\":\"next\", \"a\":{}}",
+      "expect": "bad-sig",
+      "frame": "01ed5328324106ab4e7205ef66d3080afdd86f40e2902136eb6a22d79db4b2f5866a3ca2e0a066497ef22b11d0a12140815624150e251636e2a1fc3a2ada6eb3bb888eb99157e880047b2276223a312c2022646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c202273657373223a22623137626265306165383730623166633364626635356461222c20226e223a312c202263223a226e657874222c202261223a7b7d7d",
+      "name": "reserialised",
+      "note": "signed compact, sent with spaces: not the bytes signed",
+      "server": "bad-sig"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "unknown-key",
+      "frame": "0123359ef4759eb10efe329d2d8bc0c201383e4af178ff0c9abd50d8d3798eba353e61ab1747955864fdee71d4d3b5d36530c32f73f7359f1437ebf28f7fc9414e93ef980bd332ec027b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "unknown-key",
+      "note": "a stranger's key",
+      "server": "unknown-key"
+    },
+    {
+      "before": [
+        "01ed5328324106ab4ecec30188e3b6c70df1df9fafa1919a554fbda73118b5164d06ec3eb7648fb53831544786e938094f5e31774da886fe1b89f917461153225f13ff7aadcf236d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a226e657874222c2261223a7b7d7d"
+      ],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":5,\"c\":\"next\",\"a\":{}}",
+      "expect": "replay",
+      "frame": "01ed5328324106ab4ecec30188e3b6c70df1df9fafa1919a554fbda73118b5164d06ec3eb7648fb53831544786e938094f5e31774da886fe1b89f917461153225f13ff7aadcf236d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a226e657874222c2261223a7b7d7d",
+      "name": "replayed",
+      "note": "the same frame twice",
+      "server": "forward"
+    },
+    {
+      "before": [
+        "01ed5328324106ab4ecec30188e3b6c70df1df9fafa1919a554fbda73118b5164d06ec3eb7648fb53831544786e938094f5e31774da886fe1b89f917461153225f13ff7aadcf236d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a226e657874222c2261223a7b7d7d"
+      ],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":4,\"c\":\"next\",\"a\":{}}",
+      "expect": "replay",
+      "frame": "01ed5328324106ab4e08df937c10a535335fc365ab4831eb264416eb3bbf2482fad20b249ee1147c984abdaa8d926aeb9768fe08818b180d7d40f03ca1a8aee82afcbb713cf9fedd067b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a342c2263223a226e657874222c2261223a7b7d7d",
+      "name": "old-counter",
+      "note": "n=4 after n=5",
+      "server": "forward"
+    },
+    {
+      "before": [
+        "01ed5328324106ab4ecec30188e3b6c70df1df9fafa1919a554fbda73118b5164d06ec3eb7648fb53831544786e938094f5e31774da886fe1b89f917461153225f13ff7aadcf236d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a226e657874222c2261223a7b7d7d"
+      ],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":5,\"c\":\"pause\",\"a\":{}}",
+      "expect": "replay",
+      "frame": "01ed5328324106ab4e14127830a76267bf8fca14d4c556dbf0c83bc5bfce5f4df62ffee8eacc66f3a9944aa9629b364ec0f429f565e42805c96a151d0994c51bc62353fb2a5b620c0d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a227061757365222c2261223a7b7d7d",
+      "name": "same-counter-new-body",
+      "note": "n=5 again with another command",
+      "server": "forward"
+    },
+    {
+      "before": [
+        "01ed5328324106ab4ecec30188e3b6c70df1df9fafa1919a554fbda73118b5164d06ec3eb7648fb53831544786e938094f5e31774da886fe1b89f917461153225f13ff7aadcf236d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a352c2263223a226e657874222c2261223a7b7d7d"
+      ],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "ok",
+      "frame": "01bc450192601946f9aff42202c87e3aa8c8cbc23c6b1d72cfca50b1a35adc67782174e992e88d7db32a42bfb6e9ce7a4c5f2b7fc7aacfe4161de06570c864c5310002ed9db7117f087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "counter-is-per-key",
+      "note": "B's n=1 after A's n=5",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"eeeeeeeeeeeeeeeeeeeeeeee\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "stale-session",
+      "frame": "01ed5328324106ab4ed1ad64b56699c440852c9ad94589b40745436afef6b3579c63bb9d2a1252c7c27df1382f1415c3a92cd2035d8e965a4c740543d5be02e4ff3a66b5ce49f6720a7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22656565656565656565656565656565656565656565656565222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "wrong-session",
+      "note": "signed for an earlier connection",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"beeqscijbeeqscijkpoxnoxkzy\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "stale-session",
+      "frame": "01ed5328324106ab4e44304a4062988e8a666a0fe17c4821e44c30ec2b3bcbfc83e2585f8c0df701f12e57f7937ed6805195617043fcafdaf2384b828971a447a4e8e6d3a3819f370c7b2276223a312c22646576223a22626565717363696a626565717363696a6b706f786e6f786b7a79222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "wrong-panel",
+      "note": "signed for another panel",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":0,\"c\":\"next\",\"a\":{}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e50afc4d133f4d44de5731e42ed5733686c0b21970669466efbad26e94a45efd5bdb4ae19d20cbc376717daf7e8482cc7f99c725f71d203c37bff5848bd2730037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a302c2263223a226e657874222c2261223a7b7d7d",
+      "name": "n-zero",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"c\":\"next\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e1e97bb520bd7751da6afb8cae9761c1751ec31abaa0b8b0eb5810367af24944439b8123fd7863370849f3af2fb5dcc66af1f1f663d476961c9c08dd5a49175037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c2263223a226e657874227d",
+      "name": "n-missing",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":2.0,\"c\":\"next\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e778883b97600115d87940c3b69bcc1486f92fe88177ee02275e8622bb4016e811b05c206ee0002917510b480e024e51f4f46e6263530ee55ea6eeea4b437590c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a322e302c2263223a226e657874227d",
+      "name": "n-fraction",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":9007199254740993,\"c\":\"next\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e8c93a2a054ddfe538e3b7bc90327df4bb1f2ddbdd1b78526a3df8df5bee5c02fc0f89b13cb6237b508eed420a42ceac52b42b0803348f21113da76830f11a4087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a393030373139393235343734303939332c2263223a226e657874227d",
+      "name": "n-beyond-2^53",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":\"2\",\"c\":\"next\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ee5cf8267000c5fba1a5a0acffce39a4605f7b8bb77f8caad14a7923f3d85bcec6965993ad3635e85748e08aa3d10120c69d62cda7660589a9c95d32dfc981d037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a2232222c2263223a226e657874227d",
+      "name": "n-string",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":2,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e0e6d72975804b1fe08d33f0c772f2e36d3294909cc82a17142f5f6724665588cf2cf8a354c7755bbc8b6e8f29af0e39644e4997707c55bd570363e989c76ed0b7b2276223a322c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874227d",
+      "name": "v-2-in-body",
+      "note": "the body's version must be the session's",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5RJKOAFKRBD37NKVY44XYHOFFI\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\"}",
+      "expect": "stale-session",
+      "frame": "01ed5328324106ab4e02d2e96d72bf3016d63ee3d5b5d2aebdb1a00642871eb1f3a0a4f061d7deef180adaf1352d3509df83e45308f2728bef18003de09a31c3f04398c99acc0617067b2276223a312c22646576223a2235524a4b4f41464b52424433374e4b565934345859484f464649222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874227d",
+      "name": "dev-uppercase",
+      "note": "one spelling per value",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"update\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4eab22d34bf28c2ca252b2369d39859fa4426d697534b292f95c0a1964163b1e930c29ece28a743f76df6ac30c025681f5c95b8b23e485ab76e508c48a8b5d89007b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22757064617465222c2261223a7b7d7d",
+      "name": "never-update",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"firmware\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4e3f0c560d9777e517462a67efe3cc93768cb715b311e1f795ef22944d8f4e810088483945474393344448b9324b6e166f29b5ca20bca47f63d5879b03da056e0d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226669726d77617265222c2261223a7b7d7d",
+      "name": "never-firmware",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"delete\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4e63e6b109e926f0c482c9fe04f77a15ce0c0ed0c607df74564b948e20d929f104e93b6b8ad64639fe0146fa6d669cb5138940339aaa1f34f1cec34381813002027b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2264656c657465222c2261223a7b7d7d",
+      "name": "never-delete",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"wifi\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4ec3148525f1446f7015c4e929bbe2e6f2d73a1b8017c785fb1e052ae452569c030fea4800423282a1d5b453ed619c88a3a61301abf7cad535aa56cb0388226a017b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2277696669222c2261223a7b7d7d",
+      "name": "never-wifi",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"reboot\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4eb67b297851ee5283d0c5ecb9d73d340bcd03c9a6d3d73db14d6c9fde311d8b3206e11b54d94ce4a95d2fa0da75d481d5bef9a55cd49aa1b608ac77a01a585c057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a227265626f6f74222c2261223a7b7d7d",
+      "name": "never-reboot",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"restart\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4ee0788b75c6907059894b3bc9f77aaa14128df7bba99cb4a6b1960520892f1812527d7725fde923fa7fa93d881df6e2e8af2516507a2ed4a3ec471d2c56f540087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2272657374617274222c2261223a7b7d7d",
+      "name": "never-restart",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"config\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4e5145f6d8967677ef8d9d60b003b7ee3fa9458afdc4b8cb584dec7fd477d9862f3e6edef3ebefa71dddfa04a592af4fef42c0290803c61449d3032cd48c329f097b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22636f6e666967222c2261223a7b7d7d",
+      "name": "never-config",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"api-key\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4ee78881e6e042aa68e70557ff5abc55bb41412d7134ee86df85fe71499fca033c97dc4b915362289fe5f4ca92c82a4e76aedc03922531c81b0772695227f65a077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226170692d6b6579222c2261223a7b7d7d",
+      "name": "never-api-key",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"forget\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4ebe976d1812fab3dd95c3404df5443ac794138ca641383befd228ef66a77b52079c1e4e99de83fd085e86de908365cfd562bcf4644859569ce693bc6469ec99057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f72676574222c2261223a7b7d7d",
+      "name": "never-forget",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"PLAY\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4e18a4bc0bc150270144dab74d2e982de6cdc82b30da33188eccca86949d66627fc44e236425c02194fbd1bc04925f5a43494460a612224d8fe04f25718f01ee0e7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22504c4159222c2261223a7b7d7d",
+      "name": "never-upper-case",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"\",\"a\":{}}",
+      "expect": "not-allowed",
+      "frame": "01ed5328324106ab4e0ee7b3bce8180fb75064f83a7de77533da66b20cc3e967dfbd09eb4f5b77fa51b01b4ac38367f853c327c3c44b86c8d3d53794540b4605c2390586dea67f7b007b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22222c2261223a7b7d7d",
+      "name": "never-empty",
+      "note": "not in the allow-list",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"c\":\"reboot\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e331a5ccc6e3c29d1ba1114e0ff741ea38b58e8bc8b30b41fd4a54d0d8d73900086a5fdda66ff931987acbcd8a25a00277bd5e5ae74dcb4ce957bf3f50226c80d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2263223a227265626f6f74227d",
+      "name": "duplicate-c",
+      "note": "\"c\" twice (next, then reboot): JSON parsers disagree, so refused",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"\\u0063\":\"reboot\"}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e2c45bfd37c18a44928c6c743298cbd6cdeab973fb967dced2c95a214bcb230f9d85ec0a9d4ec9505e5660561ad33202cc8aa33742ccb03a5b6d6bb054b737b0b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c225c7530303633223a227265626f6f74227d",
+      "name": "duplicate-escaped-c",
+      "note": "the second \"c\" spelled \\u0063",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"add-controller\",\"a\":{\"pub\":\"817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a\",\"label\":\"x\"}}",
+      "expect": "not-allowed",
+      "frame": "01bc450192601946f9c17828f31e4083e5aa836eae85279c6e823af1ea2a21f19f286ca9162439ecfc72a843819c6bb7f668f2fd53ff87b6733b44427374dc8c4982a1fbef6d60de027b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226164642d636f6e74726f6c6c6572222c2261223a7b22707562223a2238313763386138653234353065626432333432336163613238653834363533333334616633613739316638323863303036316266303037633530326134353261222c226c6162656c223a2278227d7d",
+      "name": "b-cannot-add",
+      "note": "a one-level key trying add-controller",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/../wifi.json\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4eca6d84ef58a1af0cf7f80cc3d7fce60681ebba270f60a6b48e5cd51f1fa1fe76d23d136c92ce2d756df6afb52936491013ae7373d53e71dde0cc74dc380c8d0b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f2e2e2f776966692e6a736f6e227d7d",
+      "name": "path-dotdot",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/a/../../sets/x.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e23b06c515c29b872921f5845b6aa99dd844d2b58ddf201f958e89813f90041be110e8f9bff343dea56267659c681e0de9e6e0a9f7e14e7a15ac828b4779be0047b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f612f2e2e2f2e2e2f736574732f782e676966227d7d",
+      "name": "path-dotdot-deep",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/cache/Arcade/ab/x.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ee44938d31c71ebcf38dabeec266eb603113dede00c8cdb8c5af8cb0d6bbc8d5ee00d08b8c8a7b4b56ff57fa90004c8b547fca82438bd171e1b02fdb7329106077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f63616368652f4172636164652f61622f782e676966227d7d",
+      "name": "path-cache",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"@formula:~sent\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e5d0962210b13bb46d1d8fc077994a524d3c3465aa5a55599af819b6f72afd239ce2cf5c3ad37c67dfadea3d61ea522d6bd08f62c476761e2eb33ae78f5eaed0b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a2240666f726d756c613a7e73656e74227d7d",
+      "name": "path-sent-formula",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"@formula?psb=AAAA\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e56936f4e0c7790da683894d0fc801940c018285f4d964b5486847104489480a486406b00ecf36f54ba695deb8d0f639d0fdc9b2f690964807cf64f258cf7270f7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a2240666f726d756c613f7073623d41414141227d7d",
+      "name": "path-inline-formula",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"@card:boot\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e6e87ad74b3ce69d7879786b7bcb9f3373880f7031a54b987f1cec32f71cece17e1bf8073f67b8c6c62fef432158ff6697e8421047f95e7ab19db5fde190326017b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a2240636172643a626f6f74227d7d",
+      "name": "path-virtual",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/a.txt\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ec319313d5b63db5ea5ff190a0350fc99cd33bfb379a691d9f552895c408c984edfee705ef7043ee83912ea1add15cd2a3b2c45b0c832847997181c3be894a90b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f612e747874227d7d",
+      "name": "path-not-gif",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"gifs/a.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ec3ac74b95ae3b033278f35a410188e3f8f12d303b32f88326ff4aefd57b5fd2f3303fb63de23da572c39ed4a6a977a7e87988431bc595a060359bfe6e38186027b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a22676966732f612e676966227d7d",
+      "name": "path-relative",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/a\\\\..\\\\b.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ee9c6136560af30312b70193032b05e7d2b38865d120b5877ed43bc67ca27bb3ed2fbb9107094ca2c12af848d3f48a3eb0791838e2885bb1541707d8591cedd017b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f615c5c2e2e5c5c622e676966227d7d",
+      "name": "path-backslash",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/.Trash/a.gif\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e1106ce4352e75718b28650b7e733364018b412282085153c8442ebc577fad63dbad154572d0e9abcb63c2286dad2c40e91d563b8d612d0744ef6199069a818077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f2e54726173682f612e676966227d7d",
+      "name": "path-hidden",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e1adf3028b551aa0dac0c40b46ade987bbefb8e017debf817f16f99bd14198e21a6866eee5621fabe9b3baa29d805694007cb2e0691a2f3be419fd2dac0e195097b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b7d7d",
+      "name": "path-missing",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"brightness\",\"a\":{\"v\":129}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e53ba862a4f670c1033169284ec8c4a1bf3a437ae0dc2b816b58c943d0d3a0bb0beca6282bacd9a0da6c52b71b26a174a3b48dc26a620ab5111f37e599342b9007b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226272696768746e657373222c2261223a7b2276223a3132397d7d",
+      "name": "brightness-over-ceiling",
+      "note": "129 over max_brightness 128",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"brightness\",\"a\":{\"v\":-1}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4eae658205bb6c6ef46de278ffcbaaa15ebf3bac48080cf426197ebe33d09783cf7a2d3d964a46fdd1ab8b69e27267c83313b5aba8fc3f21785c47ba1abd9ca0007b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226272696768746e657373222c2261223a7b2276223a2d317d7d",
+      "name": "brightness-negative",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"brightness\",\"a\":{\"v\":\"100\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e108e6406c64d5dc9e01e9af0db93966166344c8037b12ff6c28f8161620cb26a32554255c4a7aa2b1bfa8d69de306de0e15d848d421764b2d508cf69bf00730e7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226272696768746e657373222c2261223a7b2276223a22313030227d7d",
+      "name": "brightness-string",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"playlist\",\"a\":{\"set\":\"../filelist\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e2e554d11d6861e5588a75ef4124e2b9b79902bface4da1c7464b10f40dc530a3d503aeddce9a17925db39bd17ffd7f5d41442be85d2e29477b317c37f609310e7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c61796c697374222c2261223a7b22736574223a222e2e2f66696c656c697374227d7d",
+      "name": "playlist-path",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":[]}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4edd7a8ea4f4b5543cdae89167a2a5a73d713c1f9f874952a400697718c4aebce55484e127c3f05edf39afb2edb404192f7a0873926c171654ccc1075499cc57097b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a5b5d7d",
+      "name": "a-not-object",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":7,\"name\":\"cat.gif\",\"size\":524289,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}}",
+      "expect": "too-big",
+      "frame": "01ed5328324106ab4ea8f08e8e8246c208e98fa0b188bd3d81d143c7eb779ed66f0434bb8278c06bc7c08b6decf2781c0223ece10a5effe46547f676f0509ed99080f073ca588950087b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a372c226e616d65223a226361742e676966222c2273697a65223a3532343238392c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131227d7d",
+      "name": "send-over-512k",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":7,\"name\":\"cat.gif\",\"size\":10,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"copy_size\":524289,\"copy_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}}",
+      "expect": "too-big",
+      "frame": "01ed5328324106ab4e7929b034bc29e23a984530f82ee5260144a2ecd6fd422bde7d8844e1a434d8111259814c47a67b37313a7dd2fd41be827e1659c587a16803457a1d0a526bad077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a372c226e616d65223a226361742e676966222c2273697a65223a31302c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c22636f70795f73697a65223a3532343238392c22636f70795f736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131227d7d",
+      "name": "send-copy-over-512k",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":7,\"name\":\"../cat.gif\",\"size\":10,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e2b83664279a098dfbd66cd8573399b02731abb81efc4385826f55f27002b8a4c3bee965ca0bbb5978951458ec31b1998efb6c0291a697a4644801fa0229999037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a372c226e616d65223a222e2e2f6361742e676966222c2273697a65223a31302c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131227d7d",
+      "name": "send-name-slash",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":0,\"name\":\"cat.gif\",\"size\":10,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e99d353346fe97c9d1e223d9d4a409e2140ba70e282ed86eef23bf9031b950cdd4af9a622e4f5ee5bff3d81ad85063d6e6d4a6415e4062e425a8caf74c01d670c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a302c226e616d65223a226361742e676966222c2273697a65223a31302c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131227d7d",
+      "name": "send-id-zero",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"send\",\"a\":{\"id\":7,\"name\":\"cat.gif\",\"size\":10,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"copy_size\":5}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ed26a75ef7719ef9ef95dbe899429b4c38160843e4c92a87507f62e934258ffb57e40e0c534cb76e408c85bb74651db285731a329614e206a543e7e6eaf8046027b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2273656e64222c2261223a7b226964223a372c226e616d65223a226361742e676966222c2273697a65223a31302c22736861323536223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c22636f70795f73697a65223a357d7d",
+      "name": "send-copy-without-hash",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"add-controller\",\"a\":{\"pub\":\"0100000000000000000000000000000000000000000000000000000000000000\",\"label\":\"x\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ee5a023cfa4fa75671cd37da793114793e9e76921cb17b5da1ab2bd28820df820d009af7678aaa9bcffb249fc723c7a279c56aa830dd8e4126b8279fc76e5190b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226164642d636f6e74726f6c6c6572222c2261223a7b22707562223a2230313030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c226c6162656c223a2278227d7d",
+      "name": "add-weak-key",
+      "note": "a small-order public key",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"add-controller\",\"a\":{\"pub\":\"5d0558e6a4056c8efc458c4561a9bd3d767c707d2bf6a180b0a9a2287e3de097\",\"label\":\"x\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e9864edb3724da7c0b9dfe83643d7cdeffca1bff5dd16f9d2c9ee3f71ce78e601dda4ce3eb11aac12904ae3bf4e1e20fa8c532e4612ba42376a050fc68433440d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226164642d636f6e74726f6c6c6572222c2261223a7b22707562223a2235643035353865366134303536633865666334353863343536316139626433643736376337303764326266366131383062306139613232383765336465303937222c226c6162656c223a2278227d7d",
+      "name": "add-existing-key",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"add-controller\",\"a\":{\"pub\":\"817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a\",\"label\":\"\\u200b\\u202e\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ee8b29a1ca7780e2a37fe230f6468ab6fe19c2d30a53d58af715f6698d922562cc177e12a7158f192fe787277ab54024b8734f2b999eb4fa6d3538bc8782c58037b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226164642d636f6e74726f6c6c6572222c2261223a7b22707562223a2238313763386138653234353065626432333432336163613238653834363533333334616633613739316638323863303036316266303037633530326134353261222c226c6162656c223a225c75323030625c7532303265227d7d",
+      "name": "add-invisible-label",
+      "note": "a label of zero-width characters only",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"remove-controller\",\"a\":{\"k\":\"0011223344556677\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e7a0d48a0568720f5f6ae109ec497c4850b00062f61b7c3e04c902d3ac29627e97ffdb9a10554686e55f114378d535d9be32b4a57a413fb87cdce87b5ed08040f7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a2272656d6f76652d636f6e74726f6c6c6572222c2261223a7b226b223a2230303131323233333434353536363737227d7d",
+      "name": "remove-unknown",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"name\",\"a\":{\"name\":\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ecdc68def52c07511f071d74b18d6c8b83f0577060e87c2c88c259e6cf50add23c0922eec705390e531742bc6115a532944cf955c5a5a0c2a6749bb5778d856057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e616d65222c2261223a7b226e616d65223a226e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e227d7d",
+      "name": "name-too-long",
+      "note": "33 characters",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"play\",\"a\":{\"path\":\"/gifs/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.gif\"}}",
+      "expect": "too-big",
+      "frame": "01ed5328324106ab4e0121900abfd05e9b70be7c20c886b85d417549ea3162074d056146513687194bede46dc53e523d5fa4e29d6aa342754101eebd3120f0e5c5d7aa049d319a12047b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c6179222c2261223a7b2270617468223a222f676966732f787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878782e676966227d7d",
+      "name": "body-over-700",
+      "note": "",
+      "server": "too-big"
+    },
+    {
+      "before": [],
+      "body": "",
+      "expect": "bad-frame",
+      "frame": "01ed5328324106ab4e7205ef66d3080afdd86f40e2902136eb6a22d79db4b2f5866a3ca2e0a066497ef22b11d0a12140815624150e251636e2a1fc3a2ada6eb3bb888eb99157e880",
+      "name": "truncated-frame",
+      "note": "shorter than type, key id and signature: dropped, no ack",
+      "server": "bad-frame"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{}}",
+      "expect": "bad-frame",
+      "frame": "03ed5328324106ab4e7205ef66d3080afdd86f40e2902136eb6a22d79db4b2f5866a3ca2e0a066497ef22b11d0a12140815624150e251636e2a1fc3a2ada6eb3bb888eb99157e880047b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b7d7d",
+      "name": "unknown-frame-type",
+      "note": "dropped, no ack",
+      "server": "bad-frame"
+    },
+    {
+      "before": [],
+      "body": "",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ed5e947edc2fea0422e7ea8344ecce644499525f13c4d655c49f83d890dbb1d817d11ded8a04f7531089bab49c381584f91d42a83f8a9701470e242b3dd67cb0f",
+      "name": "empty-body",
+      "note": "signed, but nothing to parse",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "[1]",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4ec90f1b26b531f384e1c44f5f146274ad99df7c578f467ec553a3f59c965935db46b104ad86ad7c675d7e696c207d1aa98bc4af8eb2ce55cdb380a174b81c52075b315d",
+      "name": "body-not-object",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": null,
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e2c499c705ad2787325efbeba34b4a8b75b35acf9e96ddd5ed890d583730d13246d8fb2baa6c6235b07ae245ab44a3b8f162a40e23868d54c435b7beef2a4eb057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e616d65222c2261223a7b226e616d65223a2278ff227d7d",
+      "name": "body-bad-utf8",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"next\",\"a\":{\"x\":{\"y\":{\"z\":{}}}}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e16e5e8b28c6775d5e6b558639818ae149187d64270b9740e4324770830f0e4432d184a14c321383b6967499ea1e0302bd5fb2a135d3702b4c096be2c1324930c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e657874222c2261223a7b2278223a7b2279223a7b227a223a7b7d7d7d7d7d",
+      "name": "body-too-deep",
+      "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"name\",\"a\":{\"name\":\"\\ud800x\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e789d61f934b16a9f8bc3d4615854fdb2f1cedbd3fca3bc614e51c21e56e74c8390d73b4773d6a000f7abaad7dc940c5408aa05b7e7074ef08bb48f0ae22d86017b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a226e616d65222c2261223a7b226e616d65223a225c756438303078227d7d",
+      "name": "body-lone-surrogate",
+      "note": "",
+      "server": "forward"
+    }
+  ],
+  "controllers": [
+    {
+      "flags": 1,
+      "k": "ed5328324106ab4e",
+      "label": "A phone",
+      "name": "A",
+      "on_list": true,
+      "pub": "80fbe92b1800fd32c2d66f5ca6259ce7a42bdb22090795d4734c66ef25cc141e",
+      "seed": "131348f07307d3a524611dd54a49e718c13019f2c9f1de33fe8e9381b88ea3be"
+    },
+    {
+      "flags": 0,
+      "k": "bc450192601946f9",
+      "label": "B laptop",
+      "name": "B",
+      "on_list": true,
+      "pub": "5d0558e6a4056c8efc458c4561a9bd3d767c707d2bf6a180b0a9a2287e3de097",
+      "seed": "021d7ccd91a8913bb2a28233f620768f261e66ccd6f48dffdf059b38de4b352a"
+    },
+    {
+      "flags": null,
+      "k": "23359ef4759eb10e",
+      "label": null,
+      "name": "stranger",
+      "on_list": false,
+      "pub": "ad83fa21fc15a7152039d7ef2e334f6a2bbae514604c7758ac78dc0a0f5e6a3b",
+      "seed": "3d640332eaedabfa86a38b5ea8415aa3b84dce1e7b7594f9745bf46d55724593"
+    },
+    {
+      "flags": null,
+      "k": "9fed87dea38113dc",
+      "label": null,
+      "name": "C",
+      "on_list": false,
+      "pub": "817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a",
+      "seed": "c052f71e7cbb53fea545f7650937163c9726efac61be66eee6bd7090e4b8f0c1"
+    }
+  ],
+  "domains": {
+    "add_mac": "opendmd add v1",
+    "attach": "opendmd-connect-v1 attach\u0000",
+    "cmd": "opendmd-connect-v1 cmd\u0000",
+    "confirm": "opendmd confirm v1",
+    "dev_tag": "opendmd-connect-v1 dev\u0000",
+    "invite_id": "opendmd invite id v1",
+    "pair_id": "opendmd pair id v1",
+    "pair_mac": "opendmd pair v1",
+    "paired_mac": "ok"
+  },
+  "invite": {
+    "confirm": "3F6J",
+    "invite_id": "96ed7e52e7b06c11e627",
+    "link": "https://opendmd.dev/c#add=5rjkoafkrbd37nkvy44xyhoffi.pyzwfqhfg373covcxhqgwg46ve",
+    "mac": "df4585618b0cee0b4951921d6ae2d4ac480aabfd77c9cf6e03767e80f0214640",
+    "pub": "817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a",
+    "random": "7e3362c0e536ffb13aa2b9e06b1b9ea9",
+    "secret": "pyzwfqhfg373covcxhqgwg46ve"
+  },
+  "limits": {
+    "command_head": 73,
+    "max_body": 700,
+    "max_chunk": 1024,
+    "max_file": 524288,
+    "max_keys": 8,
+    "max_label_bytes": 24,
+    "max_n": 9007199254740991,
+    "max_text": 1024,
+    "rate_per_key": 4,
+    "rate_per_panel": 8
+  },
+  "min_version": 1,
+  "negotiation": [
+    {
+      "offered": [
+        "odc1"
+      ],
+      "result": "accept:1"
+    },
+    {
+      "offered": [
+        "d.x",
+        "odc1"
+      ],
+      "result": "accept:1"
+    },
+    {
+      "offered": [
+        "odc1",
+        "odc2"
+      ],
+      "result": "accept:1"
+    },
+    {
+      "offered": [
+        "odc2"
+      ],
+      "result": "too-new:1"
+    },
+    {
+      "offered": [
+        "odc01"
+      ],
+      "result": "none"
+    },
+    {
+      "offered": [
+        "ODC1"
+      ],
+      "result": "none"
+    },
+    {
+      "offered": [],
+      "result": "none"
+    }
+  ],
+  "never": [
+    "update",
+    "firmware",
+    "ota",
+    "www",
+    "delete",
+    "format",
+    "rename",
+    "wifi",
+    "ssid",
+    "hostname",
+    "key-",
+    "api",
+    "token",
+    "replay",
+    "reboot",
+    "restart",
+    "reset",
+    "timing",
+    "network",
+    "config",
+    "file",
+    "read",
+    "upload"
+  ],
+  "pairing": {
+    "link": "https://opendmd.dev/connect/#pair=z5bltqg6537uvagizsvc",
+    "mac": "8a296c2c9d8a864623616856498140671d452bacb9b5edc41bff5a3bfe58dbef",
+    "mac2": "5f23d7c5a17f580ba26243631959d2baf4877748bba2315ddfa05aa51ce8fcec",
+    "mac_for_a_swapped_key": "58afc509a43db93dfd7adaaddf8deffdace3fee8bcfff975e718a786c74127e6",
+    "pair_id": "5dbf9764443f49c705a4",
+    "pub": "817c8a8e2450ebd23423aca28e84653334af3a791f828c0061bf007c502a452a",
+    "qr": "https://opendmd.dev/c#z5bltqg6537uvagizsvc",
+    "random": "cf42b9c0deeeff4a80c8ccaa24",
+    "secret": "z5bltqg6537uvagizsvc"
+  },
+  "panel": {
+    "dev": "5rjkoafkrbd37nkvy44xyhoffi",
+    "dev_hex": "ec52a700aa8847bfb555c7397c1dc52a",
+    "dev_random": "ec52a700aa8847bfb555",
+    "dev_subprotocol": "d.5rjkoafkrbd37nkvy44xyhoffi",
+    "forged_dev": "5rjkoafkrbd37nkvy44xyhoffm",
+    "id_key": "3b1e7525a564215f6ea5e2a863bb3cad7d968b5bd06e467cbdbbfb18e21304ae",
+    "key_blob": "4b010280fbe92b1800fd32c2d66f5ca6259ce7a42bdb22090795d4734c66ef25cc141e0169191400000000000000000007412070686f6e655d0558e6a4056c8efc458c4561a9bd3d767c707d2bf6a180b0a9a2287e3de09700691a6580ed5328324106ab4e0842206c6170746f70",
+    "keys_message": "{\"t\":\"keys\",\"keys\":[{\"k\":\"ed5328324106ab4e\",\"pub\":\"80fbe92b1800fd32c2d66f5ca6259ce7a42bdb22090795d4734c66ef25cc141e\",\"f\":1},{\"k\":\"bc450192601946f9\",\"pub\":\"5d0558e6a4056c8efc458c4561a9bd3d767c707d2bf6a180b0a9a2287e3de097\",\"f\":0}]}",
+    "max_brightness": 128,
+    "register_body": "{\"v\":1,\"secret_hash\":\"de12df59e2de06c18b453527f2f8641fa8dd7eacc45fcbba73eb7d54b6631882\"}",
+    "secret": "887ef17a3c595962f7152fadd84c22a20f23da8ba16a6c7b454c7dc2301a6f97",
+    "sess": "b17bbe0ae870b1fc3dbf55da"
+  },
+  "signature_check": {
+    "msg": "6f70656e646d642d636f6e6e6563742d763120636d64007b7d",
+    "note": "Ed25519 (RFC 8032) over the cmd domain then the body; a sanity line for a new implementation",
+    "seed": "131348f07307d3a524611dd54a49e718c13019f2c9f1de33fe8e9381b88ea3be",
+    "sig": "ae7e490c508972e373ea8568fadc6795abc59b12727000eaa2b6cf01095c39a28b76c1920773a073b3c4bff07b16026594d4db0104a3ff3aa6d133b136f0b00a"
+  },
+  "version": 1
+}
