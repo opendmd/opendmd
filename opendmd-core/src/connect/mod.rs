@@ -11,11 +11,13 @@
 //! - [`qr`], [`screen`]: the pairing QR code (version 3-L) and the panel's
 //!   two pairing screens.
 //! - [`xfer`]: a GIF send's chunks, credit, hashes and quota.
+//! - [`gate`]: the heap gate a handshake waits on, and why it waits.
 //! - [`codec`], [`json`]: hex, base32, HMAC; a strict JSON reader.
 //!
 //! The firmware's client is `firmware/src/connect/` (feature `connect`).
 
 pub mod codec;
+pub mod gate;
 pub mod json;
 pub mod keys;
 pub mod pair;

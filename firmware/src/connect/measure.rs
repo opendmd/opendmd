@@ -34,10 +34,12 @@ pub struct Cfg {
     pub ping_s: u32,
     pub tickets: bool,
     /// The heap a full handshake needs free (P1-PLAN 4.4), a resumed one,
-    /// and the largest block for either.
+    /// the largest block for either, and PSRAM's largest block (0: not
+    /// gated). Internal RAM throughout; `opendmd_core::connect::gate`.
     pub gate_full: u32,
     pub gate_resumed: u32,
     pub gate_largest: u32,
+    pub gate_psram_largest: u32,
     /// The LAN quiet a handshake waits for.
     pub quiet_s: u32,
 }
@@ -46,19 +48,25 @@ impl Cfg {
     #[optimize(size)]
     #[inline(never)]
     pub fn defaults() -> Cfg {
-        // The S3 has three times the room: its gates are open in practice.
-        #[cfg(esp32s3)]
-        let (full, resumed) = (100 * 1024, 100 * 1024);
+        use opendmd_core::connect::gate;
+        // The S3 has three times the room: its gates are open in practice,
+        // unless mbedTLS allocates from PSRAM (`psram-tls`), when the
+        // internal side needs only the classic's and PSRAM is gated too.
+        #[cfg(all(esp32s3, feature = "psram-tls"))]
+        let g = gate::S3_PSRAM_TLS;
+        #[cfg(all(esp32s3, not(feature = "psram-tls")))]
+        let g = gate::S3_INTERNAL_TLS;
         #[cfg(not(esp32s3))]
-        let (full, resumed) = (48 * 1024, 44 * 1024);
+        let g = gate::CLASSIC;
         Cfg {
             host: std::borrow::Cow::Borrowed(super::HOST),
             addr: std::borrow::Cow::Borrowed(super::ADDR),
             ping_s: 90,
             tickets: true,
-            gate_full: full,
-            gate_resumed: resumed,
-            gate_largest: 16 * 1024,
+            gate_full: g.full,
+            gate_resumed: g.resumed,
+            gate_largest: g.largest,
+            gate_psram_largest: g.psram_largest,
             quiet_s: 10,
         }
     }
@@ -68,7 +76,7 @@ impl Cfg {
     #[inline(never)]
     fn json(&self) -> String {
         format!(
-            r#"{{"host":{},"addr":{},"ping_s":{},"tickets":{},"gate_full":{},"gate_resumed":{},"gate_largest":{},"quiet_s":{},"tls_in":{TLS_IN},"tls_out":{TLS_OUT}}}"#,
+            r#"{{"host":{},"addr":{},"ping_s":{},"tickets":{},"gate_full":{},"gate_resumed":{},"gate_largest":{},"gate_psram_largest":{},"quiet_s":{},"tls_in":{TLS_IN},"tls_out":{TLS_OUT}}}"#,
             json_string(&self.host),
             json_string(&self.addr),
             self.ping_s,
@@ -76,6 +84,7 @@ impl Cfg {
             self.gate_full,
             self.gate_resumed,
             self.gate_largest,
+            self.gate_psram_largest,
             self.quiet_s,
         )
     }
@@ -542,6 +551,7 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             c.gate_full = ranged(num(q, "gate_full", u64::from(c.gate_full))?, 0, 400_000, "gate_full")? as u32;
             c.gate_resumed = ranged(num(q, "gate_resumed", u64::from(c.gate_resumed))?, 0, 400_000, "gate_resumed")? as u32;
             c.gate_largest = ranged(num(q, "gate_largest", u64::from(c.gate_largest))?, 0, 200_000, "gate_largest")? as u32;
+            c.gate_psram_largest = ranged(num(q, "gate_psram_largest", u64::from(c.gate_psram_largest))?, 0, 8_000_000, "gate_psram_largest")? as u32;
             c.quiet_s = ranged(num(q, "quiet_s", u64::from(c.quiet_s))?, 0, 600, "quiet_s")? as u32;
             let json = c.json();
             *CFG.lock().unwrap_or_else(|p| p.into_inner()) = c;
