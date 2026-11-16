@@ -481,6 +481,21 @@ class Lane:
             await self.open_session("back once the server is", before_sess=rec.sess, timeout=1200)
             self.ok("server back: reconnected by itself")
 
+            # The server lost the record (a registration that never said
+            # hello is deleted): 404 at the upgrade, a new id, the
+            # controllers kept.
+            regs = self.srv.registered
+            gone = self.srv.panels.pop(dev)
+            if gone.panel is not None and not gone.panel.closed:
+                await gone.panel.close(code=1001)
+            await self.wait("registered again after a 404", lambda: self._dev_changed(dev), 900)
+            new_dev = next(iter(self.srv.panels))
+            await self.open_session("open under the id made again", timeout=600)
+            self.expect(self.srv.registered == regs + 1 and tk in self.rec().keys, "404 at the upgrade: registered again, the controllers kept", odc.dev_text(new_dev))
+            info = await self.connect_info()
+            self.expect(info.get("refused") is False, "404: not a refusal", f"state {info.get('state')!r}")
+            dev = new_dev
+
             # Switch off.
             code, info = await self.http("PUT", "/api/connect", {"enabled": False})
             await self.wait("switched off", lambda: self._info(lambda i: i.get("state") == "off" and self.panel_ws() is None), 300)

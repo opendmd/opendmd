@@ -8,15 +8,21 @@
 //! | Resumed handshake (a TLS ticket held) | 44 KB until it is measured (D3); the same quiet |
 //! | S3 | 100 KB: open in practice |
 //! | After a server close | 0-30 s spread, then 5 s doubling to 15 min, with jitter (`Backoff`) |
-//! | Refused (4403, or the id unknown: HTTP 403/404 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |
+//! | Refused (4403, or HTTP 403 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |
+//! | The id unknown (HTTP 404 at the upgrade: the server drops a registration that never said `hello` within 10 min) | register again, the controllers kept; the usual backoff |
 //! | Too old (4426, or 426 at registration) | `too_old`, again a day later. Too new (4406) is transient: the usual backoff |
 //! | An upgrade answered without `odc1` | a failed attempt: the usual backoff (never "update needed"). A close right after an upgrade that named it is judged by its code, as above |
 //! | Stay away (4429, or 429) | the minutes it says (1 to a day; 15 if it says none) |
+//! | Too much (1009: a frame over the server's size; 4429 "1": over its text budget) | the usual backoff, and the panel keeps under the budgets itself: text ≤ 2,048 B (`Conn::text`), `keys`/`info` at most one a second after `hello`'s two, status one every 2 s, acks no faster than the commands' 4 a second per key, 8 per panel |
 //! | After boot | [`HOLD_S`] (180 s). After a crash boot 15 min; after two crash boots in a row off until a clean boot or a switch-on in Settings |
 //! | Switched on in Settings | at once: no hold, no backoff |
 //! | Clock | SNTP first; after 60 s without it, the build date as the floor |
 //! | An update under way | closed, held until the restart (`super::updating`) |
 //! | No WiFi, setup mode, `network` off | nothing (the worker does not run this) |
+//!
+//! Close codes are acted on only as a close frame after a completed
+//! upgrade; `hello` goes in the same turn as the upgrade's answer (the
+//! server drops a socket that says nothing for 3 s).
 //!
 //! Keepalive: a WebSocket ping every 90 s (the server's runtime answers
 //! it without waking anything); two in a row unanswered end the session.
@@ -160,6 +166,14 @@ pub struct Client {
     need_info: bool,
     /// The shared state was read once (the first turn takes all of it).
     synced: bool,
+    /// The server no longer knows this id (HTTP 404 at the upgrade: a
+    /// registration that never said `hello`, deleted): register anew,
+    /// keeping the controllers.
+    reregister: bool,
+    /// `keys` and `info` against the server's budget for them (1 a second,
+    /// a burst of 4): the next may go at this time; sends left in the burst.
+    meta_at: Instant,
+    meta_burst: u8,
     /// The open session's protocol state (its `sess`, the counters).
     pub(super) sess: Option<Session>,
     watched: bool,
@@ -222,6 +236,9 @@ impl Client {
             need_keys: false,
             need_info: false,
             synced: false,
+            reregister: false,
+            meta_at: Instant::now(),
+            meta_burst: 0,
             sess: None,
             watched: false,
             status_sent: None,
@@ -578,7 +595,7 @@ impl Client {
         if let Job::Handshakes { ref mut next, interval, .. } = self.job {
             *next = now + interval;
         }
-        let purpose = if self.identity.is_some() { Purpose::Session } else { Purpose::Register };
+        let purpose = if self.identity.is_some() && !self.reregister { Purpose::Session } else { Purpose::Register };
         set_state(if purpose == Purpose::Register { "registering" } else { "connecting" });
         tele(|t| {
             t.attempts += 1;
@@ -785,7 +802,9 @@ impl Client {
         let Some(secret) = self.reg_secret.take() else {
             return Err(End::new(Cause::Register, "no secret"));
         };
-        let keys = super::first_keys();
+        // A new identity starts with the image's first list; one made again
+        // for an id the server dropped keeps the panel's controllers.
+        let keys = if self.reregister { self.keys.clone() } else { super::first_keys() };
         let blob = keys.encode();
         let stored = super::change(
             &self.link.cmd,
@@ -799,6 +818,7 @@ impl Client {
         match stored {
             Ok(()) => {
                 log::info!("connect: registered");
+                self.reregister = false;
                 set_state("registered");
                 self.backoff.reset();
                 self.not_before = Instant::now();
@@ -940,6 +960,7 @@ impl Client {
         drop(hello);
         self.need_keys = true;
         self.need_info = true;
+        self.meta_burst = 2;
         self.sync_out()
     }
 
@@ -948,10 +969,25 @@ impl Client {
     #[inline(never)]
     fn sync_out(&mut self) -> Result<(), End> {
         let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) else { return Ok(()) };
-        if std::mem::take(&mut self.need_keys) {
+        // After `hello` both go at once (the burst); a change waits for the
+        // second since the last one (several in a row: one `keys`, the last).
+        let may = |burst: &mut u8, at: &mut Instant| {
+            if *burst > 0 {
+                *burst -= 1;
+                true
+            } else if Instant::now() >= *at {
+                *at = Instant::now() + Duration::from_secs(1);
+                true
+            } else {
+                false
+            }
+        };
+        if self.need_keys && may(&mut self.meta_burst, &mut self.meta_at) {
+            self.need_keys = false;
             conn.text(&self.keys.keys_message())?;
         }
-        if std::mem::take(&mut self.need_info) {
+        if self.need_info && may(&mut self.meta_burst, &mut self.meta_at) {
+            self.need_info = false;
             // The name a controller gave it, or the panel's hostname.
             let name = if self.name.is_empty() { self.link.settings.lock().unwrap().hostname.clone() } else { self.name.clone() };
             conn.text(&proto::info(&name))?;
@@ -1203,7 +1239,14 @@ impl Client {
     #[inline(never)]
     fn policy(&mut self, e: &End) -> Option<Duration> {
         match (e.cause, e.code) {
-            (Cause::ServerClose, proto::CLOSE_REFUSED) | (Cause::Upgrade, 403 | 404) => {
+            // The id is gone (a registration that never said `hello` is
+            // deleted, or the record lost): a new one, on the usual backoff.
+            (Cause::Upgrade, 404) if self.identity.is_some() => {
+                self.reregister = true;
+                error("the server no longer knows this id: registering again".into());
+                None
+            }
+            (Cause::ServerClose, proto::CLOSE_REFUSED) | (Cause::Upgrade, 403) => {
                 lite(|l| l.refused = true);
                 error("the server does not know this panel: set Remote control up again (Forget all, in Settings)".into());
                 Some(BACKOFF_CAP)

@@ -803,8 +803,6 @@ pub fn lookup(host: String) -> Result<(), String> {
 #[cfg(feature = "connect-measure")]
 extern "C" {
     // mbedtls/platform.h (MBEDTLS_PLATFORM_MEMORY, which IDF defines).
-    #[optimize(size)]
-    #[inline(never)]
     fn mbedtls_platform_set_calloc_free(
         calloc: unsafe extern "C" fn(usize, usize) -> *mut c_void,
         free: unsafe extern "C" fn(*mut c_void),
