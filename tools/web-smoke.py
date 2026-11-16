@@ -319,6 +319,17 @@ not the Formula look picker, and Playback no Formula keep; a playlist with
 two Formulas plays its two GIFs (`entries` 2) and the editor marks the
 Formulas "skipped on this display".
 
+Remote control pass (`remote_pass`, WEB_SMOKE_ONLY=remote): a mock without
+`--connect` has no Settings › Device card, feature or route; one with it
+(js/remote.js against the mock's /api/connect routes): the two linked
+devices, the switch and its state in words, a rename (cleaned), Control
+from this browser (an opendmd.dev link opened by the user, no code on the
+panel), Add a device (the code on the panel, the link, the time left) and
+Cancel, Remove, Forget all; red: linking while off is the panel's 409 in
+words with no link, the routes are 401 without a set API key and the card's
+requests carry it, and none of "socket", "token", "secret", "Connect id",
+"pairing" in its words.
+
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
 listed in `expected` and are not counted as console errors.
@@ -11689,6 +11700,133 @@ def no_formulas_pass(browser) -> None:
     report_errors("mock (no Formulas)", errors)
 
 
+CX_JARGON = re.compile(r"socket|token|secret|connect id|controller key|pairing", re.I)
+
+
+def cx_get(base: str, key: str | None = None) -> tuple[int, dict | None]:
+    req = urllib.request.Request(base + "/api/connect", headers={"Authorization": "Bearer " + key} if key else {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
+def remote_pass(browser, base: str | None = None, errors: list[str] | None = None) -> None:
+    """Settings › Device's Remote control card (js/remote.js) against
+    `mock-device.py --connect`: blue, the card with its two linked
+    devices, the switch, the state in words, a rename, a link for this
+    browser, Add a device (the code on the panel) and Cancel, Remove,
+    Forget all; red, no card in a build without it, linking while off
+    refused (409, said in words, no link), the routes behind the API key and
+    the card's requests carrying it, and no internals in its words."""
+    proc0, base0 = start_mock(["--root", str(CARD)])
+    errors = [] if errors is None else errors
+    try:
+        print(f"\n== mock device without Remote control at {base0}")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base0 + "/")
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-status", timeout=20000)
+        page.wait_for_timeout(1000)
+        code, _ = cx_get(base0)
+        check(page.locator("#rc").count() == 0 and "connect" not in get_json(base0 + "/api/status")["features"] and code == 404,
+              f"remote: red: no Remote control card, feature or route in a build without it (GET /api/connect {code})")
+        page.context.close()
+    finally:
+        proc0.terminate()
+    proc, base = start_mock(["--root", str(CARD), "--connect"])
+    try:
+        print(f"\n== mock device with Remote control at {base}")
+        st = get_json(base + "/api/status")
+        check("connect" in st["features"] and st.get("connect", {}).get("state") == "off",
+              f"remote: status features has connect, its summary off ({st['features']}, {st.get('connect')})")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#rc li[data-k]", timeout=20000)
+        lis = page.eval_on_selector_all("#rc li[data-k]", "els => els.map(e => e.textContent)")
+        check(len(lis) == 2 and "Kitchen tablet" in lis[1] and "added from another device" in lis[1] and "added from" not in lis[0],
+              f"remote: the card lists the two linked devices ({lis})")
+        check(not page.is_checked("#rc-on") and page.inner_text("#rc-state") == "Off" and not page.is_visible("#rc-this"),
+              f"remote: off: the switch off, says Off, no linking buttons ({page.inner_text('#rc-state')!r})")
+        # Red: linking while off (the button forced): the panel's 409, in words, no link.
+        code, reply = post_code(base + "/api/connect/pair", {})
+        expected.append("/api/connect/pair")
+        try:
+            page.evaluate("document.querySelector('#rc-this').click()")
+            t = last_toast(page, "bad")
+        finally:
+            expected.remove("/api/connect/pair")
+        check(code == 409 and t == "Switch Remote control on first" and not page.is_visible("#rc-pair"),
+              f"remote: red: linking while off is refused, said in words, no link ({code}, {t!r})")
+        page.click("#rc-on")
+        page.wait_for_function("document.querySelector('#rc-state').textContent.startsWith('On')", timeout=20000)
+        _, cx = cx_get(base)
+        check(cx["enabled"] is True and page.inner_text("#rc-state") == "On: ready for your devices" and page.is_visible("#rc-this"),
+              f"remote: the switch turns it on: saved, the state in words ({page.inner_text('#rc-state')!r})")
+        check(page.is_visible("#rc-nudge") and "API key" in page.inner_text("#rc-nudge"),
+              "remote: with no API key on the panel, a nudge to set one before linking")
+        check(page.get_attribute("#rc-name", "placeholder") == get_json(base + "/api/config")["hostname"],
+              "remote: the name field shows the hostname as its placeholder")
+        page.fill("#rc-name", "Den ​panel")
+        page.press("#rc-name", "Enter")
+        page.locator("#rc-name").blur()
+        page.wait_for_function("document.querySelector('#rc .tick')?.textContent.includes('Saved')", timeout=20000)
+        _, cx = cx_get(base)
+        check(cx["name"] == "Den panel", f"remote: rename saved, cleaned of an invisible character ({cx['name']!r})")
+        page.click("#rc-this")
+        page.wait_for_selector("#rc-pair:not([hidden])", timeout=20000)
+        href = page.get_attribute("#rc-link", "href") or ""
+        _, cx = cx_get(base)
+        check(re.fullmatch(r"https://opendmd\.dev/connect/#pair=[a-z2-7]{20}", href) is not None
+              and page.get_attribute("#rc-link", "target") == "_blank" and "noopener" in (page.get_attribute("#rc-link", "rel") or "")
+              and cx["pairing"] == {"expires_s": cx["pairing"]["expires_s"], "qr": False} and "this browser" in page.inner_text("#rc-pair-say"),
+              f"remote: Control from this browser: a link to open, no code on the panel ({href}, {cx['pairing']})")
+        page.click("#rc-add")
+        page.wait_for_function("document.querySelector('#rc-pair-say').textContent.includes('on the panel')", timeout=20000)
+        _, cx = cx_get(base)
+        left = page.inner_text("#rc-left")
+        check(cx["pairing"] and cx["pairing"]["qr"] is True and re.fullmatch(r"[45]:\d\d left", left) is not None
+              and page.input_value("#rc-url").startswith("https://opendmd.dev/connect/#pair="),
+              f"remote: Add a device: the code on the panel, the link to send, the time left ({cx['pairing']}, {left!r})")
+        page.click("#rc-cancel")
+        page.wait_for_timeout(800)
+        _, cx = cx_get(base)
+        check(cx["pairing"] is None and not page.is_visible("#rc-pair"), f"remote: Cancel closes it on the panel ({cx['pairing']})")
+        no_leaks(page, "remote")
+        words = page.evaluate("() => { const e = document.querySelector('#rc'); return [e.innerText, ...[...e.querySelectorAll('[title],[placeholder]')].map(x => x.title + ' ' + x.placeholder)].join(' '); }")
+        hits = sorted({m.group(0).lower() for m in CX_JARGON.finditer(words)})
+        check(not hits, f"remote: no internals in the card's words {hits}")
+        page.click("#rc li[data-k='a1b2c3d4e5f60718'] button")
+        page.wait_for_function("document.querySelectorAll('#rc li[data-k]').length === 1", timeout=20000)
+        _, cx = cx_get(base)
+        check([c["k"] for c in cx["controllers"]] == ["3f9a0c1d2e4b5a67"], "remote: Remove takes the device off the panel")
+        # The API key: the routes refuse without it; the card's reads carry it.
+        key = "smoke-remote-key"
+        page.evaluate(f"localStorage.setItem('odmd.apiKey', JSON.stringify({json.dumps(key)}))")
+        put_json(base + "/api/config", {"api_key": key})
+        c1, _ = cx_get(base)
+        c2, _ = post_code(base + "/api/connect/pair", {})
+        c3, _ = cx_get(base, key)
+        auths: list[str] = []
+        page.on("request", lambda r: "/api/connect" in r.url and auths.append(r.headers.get("authorization", "")))
+        page.click("#rc-forget")
+        page.wait_for_selector("#rc-none:not([hidden])", timeout=20000)
+        _, cx = cx_get(base, key)
+        check(c1 == 401 and c2 == 401 and c3 == 200, f"remote: red: with an API key set, GET /api/connect and the pair route are 401 without it ({c1}, {c2}, {c3})")
+        check(cx["controllers"] == [] and auths and all(a == "Bearer " + key for a in auths),
+              f"remote: Forget all, its request carrying the API key ({len(auths)} requests)")
+        shot(page, "remote-card", "laptop")
+        req = urllib.request.Request(base + "/api/config", data=json.dumps({"api_key": ""}).encode(), method="PUT",
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+        urllib.request.urlopen(req, timeout=30).close()
+        page.context.close()
+    finally:
+        proc.terminate()
+    report_errors("mock (Remote control)", errors)
+
+
 def report_errors(name: str, errors: list[str]) -> None:
     check(not errors, f"{name}: zero console/page errors")
     for e in errors:
@@ -11821,6 +11959,8 @@ ONLY_BROWSER["psi_import"] = psi_import_checks
 # (Now's dimmed mirror: WEB_SMOKE_ONLY=now_dim. The web demo's passes are the
 # site repository's, its tools/demo-smoke.py, with the demo's player.)
 ONLY_BROWSER.update(now_dim=now_dim_checks)
+# (Settings' Remote control card, with mocks of its own: WEB_SMOKE_ONLY=remote.)
+ONLY_BROWSER.update(remote=lambda browser, base, errors: remote_pass(browser, errors=errors))
 
 
 def only_pass(browser, names: list[str], repeat: int) -> None:
@@ -11893,6 +12033,7 @@ def main() -> int:
             power_safe_pass(browser)
             www_update_pass(browser)
             no_formulas_pass(browser)
+            remote_pass(browser)
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()
