@@ -1217,6 +1217,8 @@ FORMULA_FILE_MAX = 16384  # synth::MAX_FORMULA_FILE: POST /api/play/formula's bo
 # let go when the panel moves on), as compiled bytes.
 SENT = "@formula:~sent"
 SENT_PSB: list[bytes | None] = [None]
+# Its bytes' CRC-32, as http.rs takes it: `now_playing.sent`.
+SENT_CRC: list[int] = [0]
 LOOK_INLINE_MAX = 2048  # synth::MAX_LOOK_PATH
 NO_SUCH_FORMULA = "there is no bundled Formula by that name"
 SENT_GONE = "that Formula is no longer on the panel: show it again"  # fx_psi::SENT_GONE
@@ -2297,6 +2299,8 @@ class Player:
         # A Formula sent to the panel and kept there (`formula_keep`): the
         # ordinal of its start and its seconds (0: until something else plays).
         self.kept: tuple[int, int] | None = None
+        # The sent Formula's start and its bytes' CRC-32 (`now_playing.sent`).
+        self.sent_id: tuple[int, int] | None = None
         self.overrides_count = 0
         # The file's own clock: its position is (now or frozen_at) - file_t0,
         # advanced through the real frame delays (see position()). Frozen by
@@ -2415,6 +2419,7 @@ class Player:
         self.played = path
         self.last_advance = time.monotonic()
         self.keep(path)
+        self.note_sent_bytes(path)
 
     def play_now(self, path: str):
         self.played = path
@@ -2423,6 +2428,24 @@ class Player:
         self.last_advance = self.file_t0 = time.monotonic()
         self.started(path)
         self.keep(path)
+        self.note_sent_bytes(path)
+
+    def note_sent_bytes(self, path: str):
+        """main.rs PlayNow: which bytes the start of the sent one plays (a
+        live edit: the same start, the edit's)."""
+        if path.partition("?")[0] == SENT:
+            self.sent_id = (self.ordinal, SENT_CRC[0])
+
+    def identity(self, cur: str) -> dict:
+        """Status `now_playing.seed` (a Formula on screen: the seed its start
+        opened with, Q16.16 0..1; here one per start) and `sent` (the sent
+        one on screen: its bytes' CRC-32)."""
+        out = {}
+        if cur and is_formula_ref(cur):
+            out["seed"] = zlib.crc32(b"seed %d" % self.ordinal) & 0xFFFF
+        if cur and cur.partition("?")[0] == SENT and self.sent_id and self.sent_id[0] == self.ordinal:
+            out["sent"] = self.sent_id[1]
+        return out
 
     def keep(self, path: str):
         """main.rs PlayNow: a Formula stays as long as `formula_keep` says."""
@@ -3689,6 +3712,7 @@ def make_handler(ctx: Context, quiet: bool):
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                         **({} if player.kept_s() is None else {"kept_s": player.kept_s()}),
+                        **player.identity(cur),
                         "next": player.peek_next(),
                     },
                     "paused": player.paused,
@@ -3744,6 +3768,8 @@ def make_handler(ctx: Context, quiet: bool):
                     # No card the player can use: nothing plays (the boot
                     # task never hands an unreadable card over).
                     obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0, next=None)
+                    for k in ("seed", "sent"):
+                        obj["now_playing"].pop(k, None)
                     obj.update(entries=0, index_state="unavailable")
             return obj
 
@@ -4601,18 +4627,18 @@ def make_handler(ctx: Context, quiet: bool):
                     if live and not ctx.player.over_on():
                         self.send_error_json(409, "no formula is on the panel now")
                         return
-                    SENT_PSB[0] = body
+                    SENT_PSB[0], SENT_CRC[0] = body, zlib.crc32(body)
                     ctx.player.over = (p, ctx.player.ordinal)
                     self.send_json(200, {"ok": True, "path": p, "over": True})
                     return
                 if ctx.player.retunes(live):
-                    SENT_PSB[0] = body
+                    SENT_PSB[0], SENT_CRC[0] = body, zlib.crc32(body)
                     ctx.player.retune(p)
                 elif live:
                     self.send_error_json(409, "no formula is on the panel now")
                     return
                 else:
-                    SENT_PSB[0] = body
+                    SENT_PSB[0], SENT_CRC[0] = body, zlib.crc32(body)
                     ctx.player.play_now(p)
                 if not live:
                     ctx.player.sent = ctx.player.ordinal

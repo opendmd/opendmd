@@ -5438,6 +5438,7 @@ def mock_pass(browser) -> None:
         formulas_playlist_checks(browser, base, overlay, errors)
         now_formula_checks(browser, base, errors)
         now_sent_checks(browser, base, errors)
+        now_identity_checks(browser, base, errors)
         formulas_remix_checks(browser, base, overlay, errors)
         import_checks(browser, base, overlay, errors)
         formulas_store_checks(browser, base, overlay, errors)
@@ -7505,6 +7506,67 @@ def now_sent_checks(browser, base: str, errors: list[str]) -> None:
         page.context.close()
     finally:
         get_json(base + "/mock/rate?r=1")
+        put_json(base + "/api/config", {"formula_keep": "turn"})
+
+
+def now_identity_checks(browser, base: str, errors: list[str]) -> None:
+    """`now_playing.seed` and `sent` (Connect P1 F0): the status carries the
+    seed the Formula on screen opened with and the sent one's identity (the
+    CRC-32 of its compiled bytes); Now draws with the panel's seed, and takes
+    the panel's sent Formula as this page's only while those bytes are this
+    page's send (not by its start and name: one sent from elsewhere in place,
+    nameless, is not this page's; the same bytes sent again are)."""
+    put_json(base + "/api/config", {"formula_keep": "hold"})
+    src_a = "loop forever\ngray(frac(x + t/8 + seed))"
+    src_b = "loop forever\ngray(frac(y + t/8 + seed))"
+    try:
+        page = new_page(browser, "laptop", errors)
+        bodies: list[bytes] = []
+        page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
+        page.goto(base + "/#formulas")
+        formula_editor(page, src_a)
+        clear_toasts(page)
+        page.click("#psi-ed-show")
+        last_toast(page, "ok")
+        np = get_json(base + "/api/status")["now_playing"]
+        want = zlib.crc32(bodies[-1]) if bodies else None
+        check(np.get("path", "").startswith("@formula:~sent") and np.get("sent") == want,
+              f"now identity: the status' sent is the CRC-32 of the bytes sent ({np.get('sent')}, want {want})")
+        seed = np.get("seed")
+        check(isinstance(seed, int) and 0 <= seed < 65536, f"now identity: a Formula on screen has its seed, 0..1 in Q16.16 ({seed!r})")
+        goto_view(page, "now")
+        mine = f"(c => c.dataset.src?.startsWith('@formula:~sent') && +c.dataset.len == {len(src_a)} && c.dataset.loops == '1')(document.querySelector('#now-panel'))"
+        try:
+            page.wait_for_function(mine, timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+        d = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len, c.dataset.seed]")
+        check(d == ["1", len(src_a), str(seed)], f"now identity: this page's send previewed with the panel's seed ({d}, want {['1', len(src_a), str(seed)]})")
+        # Another, nameless, sent from elsewhere over it in place (the same
+        # start, the same title): not this page's.
+        other = page.evaluate("(src) => import('./js/psikit.js').then((m) => Array.from(m.program(src)))", src_b)
+        page.wait_for_timeout(2200)  # this page's send over 2 s old: no waiting for it
+        post_bytes(base + "/api/play/formula", bytes(other))
+        np2 = get_json(base + "/api/status")["now_playing"]
+        check(np2.get("ordinal") == np.get("ordinal") and np2.get("title") == np.get("title") and np2.get("sent") == zlib.crc32(bytes(other)),
+              f"now identity: sent from elsewhere in place: the same start and title, its own sent ({np2})")
+        no = "(c => c.dataset.loops == '0' && document.querySelector('#now-cap').textContent == 'Preview not available for this Formula')(document.querySelector('#now-panel'))"
+        try:
+            page.wait_for_function(no, timeout=8000)
+        except PlaywrightTimeoutError:
+            pass
+        d = (page.eval_on_selector("#now-panel", "c => c.dataset.loops"), page.eval_on_selector("#now-cap", "e => e.textContent"))
+        check(d == ("0", "Preview not available for this Formula"), f"now identity: another sent in place is not previewed as this page's ({d})")
+        # This page's bytes again, from elsewhere: its identity, so this page's.
+        post_bytes(base + "/api/play/formula", bodies[-1])
+        try:
+            page.wait_for_function(mine, timeout=8000)
+        except PlaywrightTimeoutError:
+            pass
+        d = (page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len]"), page.eval_on_selector("#now-cap", "e => e.textContent"))
+        check(d == (["1", len(src_a)], ""), f"now identity: this page's bytes sent again: previewed as this page's ({d})")
+        page.context.close()
+    finally:
         put_json(base + "/api/config", {"formula_keep": "turn"})
 
 
@@ -11752,7 +11814,7 @@ def www_update_pass(browser) -> None:
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
-ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "now_sent": now_sent_checks, "thumbs_dark": thumbs_dark_checks}
+ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "now_sent": now_sent_checks, "now_identity": now_identity_checks, "thumbs_dark": thumbs_dark_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks, "events": events_checks}
 # (A sprite from a picture, on its own: WEB_SMOKE_ONLY=psi_import.)
 ONLY_BROWSER["psi_import"] = psi_import_checks

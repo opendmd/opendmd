@@ -161,11 +161,12 @@ function mountDevice(el) {
   // (Never the player's own words or a path: CLAUDE.md, the product model.)
   const NO_GIF = 'Preview not available for this GIF', NO_F = 'Preview not available for this Formula', UNREACH = 'Panel not reachable';
   const preview = new PanelPreview(canvas, { wrap: el, onError: () => { cap.textContent = NO_GIF; } });
-  // shownPath: what the preview follows (a path; for the panel's sent
-  // Formula with its start and this page's sends, js/psishow.js);
+  // shownPath: what the preview follows (a path, with the panel's seed; for
+  // the panel's sent Formula with its start, its bytes' CRC (`sent`) and
+  // this page's sends, js/psishow.js);
   // fgen: the follow's generation (a Formula's frames stop when it moves on).
   let shownPath = '', stopF = null, fgen = 0, restarts = 0, sentN = 0, frozen = null, run = {}, retry = null;
-  const fkey = (p, np) => (p?.startsWith('@formula:~sent') ? `${p} ${np.ordinal} ${restarts} ${sentN} ${np.title}` : p);
+  const fkey = (p, np) => (p?.startsWith('@formula:~sent') ? (np.sent != null ? `${p} ${np.ordinal} ${np.sent} ${sentN}` : `${p} ${np.ordinal} ${restarts} ${sentN} ${np.title}`) : p) + (p && np.seed != null ? ` ${np.seed}` : '');
   on('psisent', () => { sentN++; app.soon('now', 300); });
   const unfollow = () => { fgen++; stopF?.(); stopF = null; shownPath = ''; };
   let failures = 0;
@@ -223,7 +224,7 @@ function mountDevice(el) {
   // that the panel feels; a copy's small directory costs ~6 ms.
   // A Formula is drawn here by js/nowpsi.js (loaded then), at the panel's position.
   // A transient failure (the panel not reachable, busy, not yet) is asked again at the next status.
-  async function follow_(path, key = path) {
+  async function follow_(path, key = path, np = {}) {
     if (!mirror() || !path || key === shownPath) return;
     unfollow();
     shownPath = key;
@@ -246,7 +247,7 @@ function mountDevice(el) {
       try {
         const m = await import('./nowpsi.js');
         try {
-          const stop = await m.play(path, preview, { pos: () => pos(path), start: () => start(path), alive, fail: no });
+          const stop = await m.play(path, preview, { pos: () => pos(path), start: () => start(path), alive, fail: no, seed: np.seed ?? null, sent: np.sent ?? null });
           if (!alive()) return stop();
           stopF = stop;
           cap.textContent = '';
@@ -374,7 +375,7 @@ function mountDevice(el) {
     nocard = !sd.mounted && !np.path && !!(sd.attempts || sd.error);
     still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
-    follow_(np.path, fkey(np.path, np));
+    follow_(np.path, fkey(np.path, np), np);
   }
 
   const good = () => {

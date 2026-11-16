@@ -38,11 +38,21 @@ export function show(f) {
   mark();
 }
 // What this page last sent to play (Now's preview of `@formula:~sent`):
-// {src, at (page clock: its answer)}, while it is the one on the panel as far as this page knows.
+// {src, at (page clock: its answer), crc (its compiled bytes' CRC-32, as the
+// panel's `now_playing.sent`)}, while it is the one on the panel as far as this page knows.
 let S = null;
 export const sent = () => (shown ? S : null);
 export function follow(f) { if (f === shown && !next) { next = [f, true]; pump(); } }
 export function drop(f) { if (shown === f) { shown = null; mark(); } }
+
+// CRC-32 (zlib's), as the panel takes a sent Formula's identity.
+let T = null;
+export function crc32(b) {
+  T ??= Uint32Array.from({ length: 256 }, (_, n) => { for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1; return n; });
+  let c = ~0;
+  for (const x of b) c = T[(c ^ x) & 255] ^ (c >>> 8);
+  return ~c >>> 0;
+}
 
 async function pump() {
   if (busy || !next) return;
@@ -51,14 +61,17 @@ async function pump() {
   const [f, live, tries = 0] = next, name = f.name || 'Formula', o = f.over || (f === shown && ov);
   next = null; busy = true; last = Date.now();
   const src = f.src;
+  let crc = null;
   try {
     if (f.src) {
+      const b = program(f.src);
+      crc = crc32(b);
       const q = new URLSearchParams(vals(f, ctlOf(f)).slice(1));
       if (live) q.set('live', 1);
       if (o) q.set('over', 1);
-      await app.src.req('POST', '/api/play/formula?' + q, new Blob([program(f.src)], { type: 'application/octet-stream' }), 8000);
+      await app.src.req('POST', '/api/play/formula?' + q, new Blob([b], { type: 'application/octet-stream' }), 8000);
     } else await app.src.json('POST', '/api/play', { path: '', live, over: true }, 8000);
-    if (src && !o) { S = { src, at: performance.now() }; emit('psisent'); }
+    if (src && !o) { S = { src, at: performance.now(), crc }; emit('psisent'); }
     if (!live) toast(!f.src ? 'Taken off the panel' : o ? `Over the panel’s GIF: ${name}` : `On the panel: ${name}`, 'ok');
     // Over the GIF, it needs the player's memory: say so if it is waiting for it.
     if (o && f.src && !live) setTimeout(() => app.refreshStatus?.().then((st) => { if (shown === f && st?.formula_look?.held === 0) toast('The display is short of memory just now: it draws this over the GIF as soon as there is room', 'bad'); }).catch(() => {}), 1500);
