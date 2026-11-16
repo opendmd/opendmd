@@ -3513,6 +3513,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
+                (m_exact("/mock/connect"), {"GET": self.h_mock_connect}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
                 (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
@@ -3638,6 +3639,26 @@ def make_handler(ctx: Context, quiet: bool):
         # (0: as fast as the machine goes); `&fail503=N` answers the next N
         # card-file GETs 503, `&fail500=N` 500, `&drop=N` closes them
         # unanswered (a browser may retry those by itself).
+        def h_mock_connect(self, path):
+            """--connect's test hooks: `online=0|1` (the panel connected to
+            the server), `dark=0|1` (night mode), `slow_get=<ms>` (GET
+            /api/connect answers that late), `link=1` (a device pairs: the
+            window used, a controller added)."""
+            q = self.path.partition("?")[2]
+            with ctx.lock:
+                cx = ctx.connect
+                if cx is None:
+                    self.send_error_json(404, "no --connect")
+                    return
+                for key in ("online", "dark", "slow_get"):
+                    v = query_param(q, key)
+                    if v is not None:
+                        cx[key] = int(v)
+                if query_param(q, "link") == "1":
+                    cx["pairing"] = None
+                    cx["controllers"].append({"k": "%016x" % random.getrandbits(64), "label": "New phone", "f": 1, "added": int(time.time()), "added_by": None, "last_s": None})
+                self.send_json(200, {k: cx.get(k) for k in ("online", "dark", "slow_get", "in_flight")})
+
         def h_mock_io(self, path):
             _, _, query = self.path.partition("?")
             io = ctx.io
@@ -4428,7 +4449,16 @@ def make_handler(ctx: Context, quiet: bool):
 
         def h_cx_get(self, path):
             with ctx.lock:
-                self.send_json(200, connect_json(ctx.connect))
+                body = connect_json(ctx.connect)
+                slow = ctx.connect.get("slow_get", 0)
+            # (An answer made now, sent late: a read in flight across a POST.)
+            if slow:
+                with ctx.lock:
+                    ctx.connect["in_flight"] = ctx.connect.get("in_flight", 0) + 1
+                time.sleep(slow / 1000)
+                with ctx.lock:
+                    ctx.connect["in_flight"] -= 1
+            self.send_json(200, body)
 
         def h_cx_put(self, path):
             raw = self.json_body()
@@ -4469,9 +4499,12 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(409, "Remote control is off: switch it on first")
                     return
                 secret = "".join(random.choice("abcdefghijklmnopqrstuvwxyz234567") for _ in range(20))
+                dark = bool(cx.get("dark", 0))
+                qr = qr and not dark
                 cx["pairing"] = {"until": time.monotonic() + CX_PAIR_S, "qr": qr, "secret": secret}
                 cx["registered"] = True
-                self.send_json(200, {"link": "https://opendmd.dev/c#" + secret, "expires_s": CX_PAIR_S, "qr": qr, "online": True})
+                self.send_json(200, {"link": "https://opendmd.dev/c#" + secret, "expires_s": CX_PAIR_S, "qr": qr, "dark": dark,
+                                     "online": bool(cx.get("online", 1))})
 
         def h_cx_unpair(self, path):
             with ctx.lock:

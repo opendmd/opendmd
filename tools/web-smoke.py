@@ -11765,8 +11765,8 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         _, cx = cx_get(base)
         check(cx["enabled"] is True and page.inner_text("#rc-state") == "On: ready for your devices" and page.is_visible("#rc-this"),
               f"remote: the switch turns it on: saved, the state in words ({page.inner_text('#rc-state')!r})")
-        check(page.is_visible("#rc-nudge") and "API key" in page.inner_text("#rc-nudge"),
-              "remote: with no API key on the panel, a nudge to set one before linking")
+        check(page.is_visible("#rc-nudge") and "API key" in page.inner_text("#rc-nudge") and "bad" in (page.get_attribute("#rc-nudge", "class") or ""),
+              "remote: with no API key on the panel, a warning to set one before linking")
         check(page.get_attribute("#rc-name", "placeholder") == get_json(base + "/api/config")["hostname"],
               "remote: the name field shows the hostname as its placeholder")
         page.fill("#rc-name", "Den ​panel")
@@ -11780,7 +11780,7 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         href = page.get_attribute("#rc-link", "href") or ""
         _, cx = cx_get(base)
         check(re.fullmatch(r"https://opendmd\.dev/c#[a-z2-7]{20}", href) is not None
-              and page.get_attribute("#rc-link", "target") == "_blank" and "noopener" in (page.get_attribute("#rc-link", "rel") or "")
+              and page.get_attribute("#rc-link", "target") == "_blank" and {"noopener", "noreferrer"} <= set((page.get_attribute("#rc-link", "rel") or "").split())
               and cx["pairing"] == {"expires_s": cx["pairing"]["expires_s"], "qr": False} and "this browser" in page.inner_text("#rc-pair-say"),
               f"remote: Control from this browser: a link to open, no code on the panel ({href}, {cx['pairing']})")
         page.click("#rc-add")
@@ -11790,18 +11790,54 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         check(cx["pairing"] and cx["pairing"]["qr"] is True and re.fullmatch(r"[45]:\d\d left", left) is not None
               and page.input_value("#rc-url").startswith("https://opendmd.dev/c#"),
               f"remote: Add a device: the code on the panel, the link to send, the time left ({cx['pairing']}, {left!r})")
+        check("step back" in page.inner_text("#rc-pair-say"), "remote: Add a device says to step back if the code doesn't scan")
         page.click("#rc-cancel")
         page.wait_for_timeout(800)
         _, cx = cx_get(base)
-        check(cx["pairing"] is None and not page.is_visible("#rc-pair"), f"remote: Cancel closes it on the panel ({cx['pairing']})")
+        check(cx["pairing"] is None and not page.is_visible("#rc-pair") and page.input_value("#rc-url") == "" and page.get_attribute("#rc-link", "href") is None,
+              f"remote: Cancel closes it on the panel, the link cleared from the page ({cx['pairing']})")
+        # Red: a read in flight across the POST must not end the new window.
+        get_json(base + "/mock/connect?slow_get=4000")
+        t_end = time.time() + 20
+        while time.time() < t_end and not get_json(base + "/mock/connect").get("in_flight"):
+            time.sleep(0.1)
+        page.click("#rc-this")
+        page.wait_for_selector("#rc-pair:not([hidden])", timeout=20000)
+        get_json(base + "/mock/connect?slow_get=0")
+        t_end = time.time() + 20
+        while time.time() < t_end and get_json(base + "/mock/connect").get("in_flight"):
+            time.sleep(0.1)
+        page.wait_for_timeout(500)
+        check(page.is_visible("#rc-pair") and page.input_value("#rc-url").startswith("https://opendmd.dev/c#"),
+              "remote: red: a read started before the link was asked for does not end it")
+        page.click("#rc-cancel")
+        page.wait_for_timeout(500)
+        # Not connected yet: said, no code promised as ready.
+        get_json(base + "/mock/connect?online=0")
+        page.click("#rc-add")
+        page.wait_for_selector("#rc-pair:not([hidden])", timeout=20000)
+        say = page.inner_text("#rc-pair-say")
+        check("isn’t connected to opendmd.dev yet" in say and "scan it" not in say, f"remote: red: the panel offline: said, the code not offered as ready ({say!r})")
+        page.click("#rc-cancel")
+        page.wait_for_timeout(500)
+        get_json(base + "/mock/connect?online=1&dark=1")
+        page.click("#rc-add")
+        page.wait_for_selector("#rc-pair:not([hidden])", timeout=20000)
+        say = page.inner_text("#rc-pair-say")
+        _, cx = cx_get(base)
+        check("dark for the night" in say and cx["pairing"]["qr"] is False, f"remote: night mode: no code on the dark panel, the link instead ({say!r})")
+        # A device links: the window goes, and the page says so.
+        get_json(base + "/mock/connect?dark=0&link=1")
+        page.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('A device was linked'))", timeout=20000)
+        check(not page.is_visible("#rc-pair"), "remote: a device linked: a toast, the window gone from the page")
         no_leaks(page, "remote")
         words = page.evaluate("() => { const e = document.querySelector('#rc'); return [e.innerText, ...[...e.querySelectorAll('[title],[placeholder]')].map(x => x.title + ' ' + x.placeholder)].join(' '); }")
         hits = sorted({m.group(0).lower() for m in CX_JARGON.finditer(words)})
         check(not hits, f"remote: no internals in the card's words {hits}")
         page.click("#rc li[data-k='a1b2c3d4e5f60718'] button")
-        page.wait_for_function("document.querySelectorAll('#rc li[data-k]').length === 1", timeout=20000)
+        page.wait_for_function("document.querySelectorAll('#rc li[data-k]').length === 2", timeout=20000)
         _, cx = cx_get(base)
-        check([c["k"] for c in cx["controllers"]] == ["3f9a0c1d2e4b5a67"], "remote: Remove takes the device off the panel")
+        check("a1b2c3d4e5f60718" not in [c["k"] for c in cx["controllers"]] and len(cx["controllers"]) == 2, "remote: Remove takes the device off the panel")
         # The API key: the routes refuse without it; the card's reads carry it.
         key = "smoke-remote-key"
         page.evaluate(f"localStorage.setItem('odmd.apiKey', JSON.stringify({json.dumps(key)}))")
