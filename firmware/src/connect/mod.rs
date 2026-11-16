@@ -166,17 +166,13 @@ pub struct Stored {
     /// The controller list's blob (`KeyList::encode`), if any.
     pub keys: Option<Vec<u8>>,
     pub name: Option<String>,
-    /// The identity was made again and the controllers dropped (`cx_reset`):
-    /// Settings says to pair again, until a pairing or a switch-off.
-    pub reset: bool,
 }
 
 /// One write to NVS, made by the main task (`Command::ConnectStore`).
 pub enum Store {
     On(bool),
-    /// A new identity, with the controller list it starts with; `reset`:
-    /// made again for an id the server dropped (`cx_reset`).
-    Identity { dev: [u8; 16], secret: [u8; 32], keys: Vec<u8>, reset: bool },
+    /// A new identity, with the controller list it starts with.
+    Identity { dev: [u8; 16], secret: [u8; 32], keys: Vec<u8> },
     Keys(Vec<u8>),
     Name(String),
     /// The identity and the controllers go (the switch and the name stay).
@@ -202,9 +198,6 @@ pub struct Shared {
     pub start_now: bool,
     /// A store is being made (one at a time).
     pub storing: bool,
-    /// Remote control was reset (a new identity, the controllers gone):
-    /// pair again. Cleared by a switch-off (and, with P1's F3, a pairing).
-    pub reset: bool,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -274,7 +267,6 @@ pub fn init(s: Stored) {
         forget: false,
         start_now: false,
         storing: false,
-        reset: s.reset,
     });
 }
 
@@ -484,14 +476,13 @@ fn opt_u32(v: Option<u32>) -> String {
 #[optimize(size)]
 #[inline(never)]
 fn lite_fields() -> String {
-    let reset = shared(|s| s.reset).unwrap_or(false);
     let l = LITE.lock().unwrap_or_else(|p| p.into_inner());
     #[cfg(feature = "connect-test")]
     let stack = format!(r#","stack_unused":{}"#, l.stack_unused);
     #[cfg(not(feature = "connect-test"))]
     let stack = "";
     format!(
-        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"reset":{reset},"watched":{},"last_error":{},"last_error_s":{}{stack}"#,
+        r#""state":{},"since_s":{},"opened":{},"reconnects":{},"resumed":{},"handshake_ms":{},"refused":{},"too_old":{},"watched":{},"last_error":{},"last_error_s":{}{stack}"#,
         json_string(l.state),
         l.since_s,
         l.opened,

@@ -371,6 +371,25 @@ class Lane:
             await asyncio.sleep(3)
             cfg = (await self.http("GET", "/api/config"))[1] or {}
             self.expect(cfg.get("set") in ("", None), "...and the playlist unchanged", f"set {cfg.get('set')!r}")
+            # A real playlist on the card, racing a LAN field: both stay,
+            # and the player is on it.
+            sets = ((await cmd("playlists")) or {}).get("r", {}).get("sets") or []
+            self.expect(bool(sets), "the card has a playlist to switch to", f"{sets}")
+            await asyncio.sleep(1.2)
+            dwell = (((await self.http("GET", "/api/config"))[1] or {}).get("dwell_max") or 10) + 1
+            f = a.frame("playlist", {"set": sets[0]})
+            await a.ws.send_bytes(f)
+            code, _ = await self.http("PUT", "/api/config", {"dwell_max": dwell})
+            r = await a.ack(f)
+            await self.wait("on the playlist", lambda: self._manifest(sets[0]), 300)
+            cfg = (await self.http("GET", "/api/config"))[1] or {}
+            self.expect(code == 200 and r and (r.get("ok")) and cfg.get("set") == sets[0] and cfg.get("dwell_max") == dwell,
+                        "a remote playlist racing a LAN field: both kept, the player on it", f"ack {r}, set {cfg.get('set')!r}, dwell_max {cfg.get('dwell_max')} (want {dwell})")
+            await asyncio.sleep(1.2)
+            r = await cmd("playlist", {"set": ""})
+            await self.wait("back on the main list", lambda: self._manifest("filelist"), 300)
+            self.ok("back to the main list", json.dumps(r))
+            await asyncio.sleep(1.2)
             r = await cmd("controllers")
             ctls = (r or {}).get("r") or []
             self.expect(r and r.get("ok") and any(x.get("k") == tk.hex() and x.get("last_s") is not None for x in ctls), "controllers: the list with last use", json.dumps(r)[:300])
@@ -508,37 +527,45 @@ class Lane:
             await self.open_session("back once the server is", before_sess=rec.sess, timeout=1200)
             self.ok("server back: reconnected by itself")
 
-            # The server lost the record (a registration that never said
-            # hello is deleted): 404 at the upgrade, a new id, the
-            # controllers kept.
-            d = Controller(self.ctl_base, dev, "dropped")
+            # The server lost the record. With controllers: a refusal like
+            # 403, retried every 15 minutes, nothing erased (the owner may
+            # choose Forget).
+            d = Controller(self.ctl_base, dev, "kept")
             # A fresh attach: this session's sess (several reconnects ago
             # the controller's copy went stale).
             await a.ws.close()
             await a.attach(http)
             await asyncio.sleep(1)
-            r = await cmd("add-controller", {"pub": d.pub.hex(), "label": "dropped"})
-            self.expect(r and r.get("ok"), "a controller added before the id is lost", json.dumps(r))
+            r = await cmd("add-controller", {"pub": d.pub.hex(), "label": "kept"})
+            self.expect(r and r.get("ok"), "a second controller before the id is lost", json.dumps(r))
             await asyncio.sleep(2)
             regs = self.srv.registered
             gone = self.srv.panels.pop(dev)
             if gone.panel is not None and not gone.panel.closed:
                 await gone.panel.close(code=1001)
-            await self.wait("registered again after a 404", lambda: self._dev_changed(dev), 900)
-            new_dev = next(iter(self.srv.panels))
-            await self.open_session("open under the id made again", timeout=600)
+            await self.wait("refused after a 404 with controllers", lambda: self._info(lambda i: i.get("refused") is True), 900)
             info = await self.connect_info()
-            ks = [x.get("k") for x in info.get("controllers", [])]
-            self.expect(self.srv.registered == regs + 1 and d.k.hex() not in ks and d.k not in self.rec().keys,
-                        "404 at the upgrade: registered again, the old controllers dropped (they cannot follow a new id)", f"{odc.dev_text(new_dev)}, controllers {ks}")
-            self.expect(info.get("reset") is True and info.get("refused") is False, "404: Remote control says it was reset (pair again), not refused", f"reset {info.get('reset')}, state {info.get('state')!r}")
+            ks = sorted(x.get("k") for x in info.get("controllers", []))
+            await asyncio.sleep(20)
+            self.expect(self.srv.registered == regs and ks == sorted([tk.hex(), d.k.hex()]) and not self.srv.panels,
+                        "404 with controllers: refused, nothing erased, no new registration", f"controllers {ks}, state {info.get('state')!r}")
+            # With none (the legitimate case: a registration that never said
+            # hello is deleted): a new id by itself.
+            for k in (d.k, tk):
+                code, _ = await self.http("DELETE", f"/api/connect/controllers/{k.hex()}")
+                self.expect(code == 200, f"DELETE controller {k.hex()[:6]} on the LAN", f"{code}")
+            await self.http("PUT", "/api/connect", {"enabled": True})
+            await self.wait("registered again after a 404 with no controllers", lambda: self._new_record(), 900)
+            new_dev = next(iter(self.srv.panels))
+            await self.open_session("open under the new id", timeout=600)
+            info = await self.connect_info()
+            self.expect(self.srv.registered == regs + 1 and info.get("refused") is False, "404 with no controllers: a new id, open", odc.dev_text(new_dev))
             dev = new_dev
 
             # Switch off.
             code, info = await self.http("PUT", "/api/connect", {"enabled": False})
             await self.wait("switched off", lambda: self._info(lambda i: i.get("state") == "off" and self.panel_ws() is None), 300)
             self.ok("PUT /api/connect off: closed, off")
-            self.expect((await self.connect_info()).get("reset") is False, "a switch-off clears the reset notice", "")
             st_off = await self.status()
             await self.http("PUT", "/api/connect", {"enabled": True})
             await self.open_session("on again", before_sess=None, timeout=600)
@@ -556,6 +583,13 @@ class Lane:
             dev = new_dev
             await self.open_session("open under the new identity", timeout=600)
 
+        # A remote brightness, then a planned restart after the 5 s save
+        # window: it is kept (NVS and the card's copy, which wins at boot).
+        rec = self.rec()
+        f = odc.sign_command(key, odc.command_body(dev, bytes.fromhex(rec.sess), 10**13, "brightness", {"v": 77}))
+        got = await self.injected_ack("a brightness before the restart", f, tk)
+        self.expect(got.get("ok"), "remote brightness 77 before a restart", json.dumps(got))
+        await asyncio.sleep(8)
         # A planned restart: the identity is in NVS, back by itself after the hold.
         regs = self.srv.registered
         self.emu.resets_allowed += 1
@@ -569,6 +603,8 @@ class Lane:
         st = await self.status()
         self.expect(self.srv.registered == regs and dev in self.srv.panels, "after a restart: the same identity, no new registration", f"uptime {st.get('uptime_secs')}")
         self.expect(st.get("uptime_secs", 0) >= 30, "after a restart: not before the hold", f"open at {st.get('uptime_secs')} s")
+        cfg = (await self.http("GET", "/api/config"))[1] or {}
+        self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
 
@@ -577,6 +613,12 @@ class Lane:
 
     async def _playing(self, path):
         return ((await self.status()).get("now_playing") or {}).get("path") == path
+
+    async def _manifest(self, name):
+        return name in ((await self.status()).get("manifest") or "")
+
+    async def _new_record(self):
+        return bool(self.srv.panels) and self.rec() and self.rec().panel is not None
 
     async def _info(self, f):
         return f(await self.connect_info())

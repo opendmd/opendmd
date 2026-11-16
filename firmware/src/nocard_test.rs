@@ -46,7 +46,7 @@ fn run(ctx: &Ctx) {
     }
     let shared = next.clone();
     let (tx, rx) = crate::chan::channel();
-    if ctx.cmd.send(Command::ApplyConfig { settings: Box::new(next), panel: None, look_named: false, boot_named: false, reply: tx }).is_err() {
+    if ctx.cmd.send(Command::ApplyConfig { settings: Box::new(next), panel: None, look_named: false, boot_named: false, only_set: false, reply: tx }).is_err() {
         log::error!("nocard-test: no main task");
         return;
     }

@@ -654,6 +654,10 @@ pub enum Command {
         /// The request named `boot_formula` (the same, for the start-up
         /// show's Formula).
         boot_named: bool,
+        /// Only `settings.set` is asked (Remote control's playlist): the
+        /// rest is this task's own settings as they are when it is taken,
+        /// so nothing queued before it is overwritten.
+        only_set: bool,
         reply: Reply,
     },
     /// Rebuild the engine and its on-card index — a fresh streaming pass over
@@ -716,11 +720,10 @@ pub enum Command {
     /// NVS is the main task's. Answered `Ok` once written.
     #[cfg(feature = "connect")]
     ConnectStore { what: Box<crate::connect::Store>, reply: Reply },
-    /// Remote control's brightness or playlist: only that field, applied
-    /// onto this task's own settings (never a copy of all of them, which a
-    /// LAN change made meanwhile would lose). Brightness is live at once
-    /// and saved once commands stop (`REMOTE_SAVE_AFTER`); a playlist goes
-    /// through `ApplyConfig`'s own checks and rebuild.
+    /// Remote control's brightness: only that field, applied onto this
+    /// task's own settings (never a copy of all of them, which a LAN change
+    /// made meanwhile would lose); live at once, saved once commands stop
+    /// (`REMOTE_SAVE_AFTER`). (A playlist is `ApplyConfig` with `only_set`.)
     #[cfg(feature = "connect")]
-    RemoteConfig { brightness: Option<u8>, set: Option<String>, reply: Reply },
+    RemoteConfig { brightness: u8, reply: Reply },
 }

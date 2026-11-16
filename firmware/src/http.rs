@@ -3642,6 +3642,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                 panel: panel_op,
                 look_named,
                 boot_named,
+                only_set: false,
                 reply: tx,
             })
             .is_err()

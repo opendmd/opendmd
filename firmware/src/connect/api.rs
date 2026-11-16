@@ -57,11 +57,8 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
         match change(&c.cmd, move |_| Ok((Store::On(on), on)), |s, on| {
             s.on = on;
             // On from Settings: at once (no hold, no backoff; after two
-            // crashes too). Off clears "reset: pair again".
+            // crashes too).
             s.start_now = on;
-            if !on {
-                s.reset = false;
-            }
         }) {
             Ok(()) => {
                 log::info!("connect: Remote control switched {}", if on { "on" } else { "off" });
@@ -78,7 +75,6 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
             s.keys = KeyList::new();
             s.keys_changed = true;
             s.forget = true;
-            s.reset = false;
         }) {
             Ok(()) => {
                 log::info!("connect: identity forgotten, every controller removed");

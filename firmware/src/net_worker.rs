@@ -249,6 +249,7 @@ fn save_wifi(
         panel: None,
         look_named: false,
         boot_named: false,
+        only_set: false,
         reply: tx,
     })
     .map_err(|_| "playback not running")?;

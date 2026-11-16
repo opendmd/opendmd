@@ -9,7 +9,7 @@
 //! | S3 | 100 KB: open in practice |
 //! | After a server close | 0-30 s spread, then 5 s doubling to 15 min, with jitter (`Backoff`) |
 //! | Refused (4403, or HTTP 403 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |
-//! | The id unknown (HTTP 404 at the upgrade: the server drops a registration that never said `hello` within 10 min) | register again, the controllers kept; the usual backoff |
+//! | The id unknown (HTTP 404 at the upgrade) | with no controllers (the server drops a registration that never said `hello` within 10 min): register again, at most 3 a day, on the usual backoff. With controllers: refused, as 403, nothing erased (Forget on the LAN starts again) |
 //! | Too old (4426, or 426 at registration) | `too_old`, again a day later. Too new (4406) is transient: the usual backoff |
 //! | An upgrade answered without `odc1` | a failed attempt: the usual backoff (never "update needed"). A close right after an upgrade that named it is judged by its code, as above |
 //! | Stay away (4429, or 429) | the minutes it says (1 to a day; 15 if it says none) |
@@ -179,9 +179,9 @@ pub struct Client {
     /// Registrations made again for a dropped id: how many since `at`
     /// (at most [`REREGISTER_MAX`] a day, then refused).
     reregs: (u32, Instant),
-    /// The server no longer knows this id (HTTP 404 at the upgrade: a
-    /// registration that never said `hello`, deleted): register anew,
-    /// keeping the controllers.
+    /// The server no longer knows this id (HTTP 404 at the upgrade) and no
+    /// controller does either (a registration that never said `hello`,
+    /// deleted): register anew.
     reregister: bool,
     /// `keys` and `info` against the server's budget for them (1 a second,
     /// a burst of 4): the next may go at this time; sends left in the burst.
@@ -195,7 +195,7 @@ pub struct Client {
     /// A configuration change the player has not answered yet.
     pub(super) pending: Option<Pending>,
     /// Remote config commands: one a second.
-    pub(super) config_rate: proto::Bucket,
+    pub(super) config_rate: Vec<(KeyId, proto::Bucket)>,
     /// The settings' card copy (`settings_card`) is due then: once remote
     /// config commands stop (one card write for a drag), or at the
     /// session's end.
@@ -265,7 +265,7 @@ impl Client {
             status_sent: None,
             link,
             pending: None,
-            config_rate: proto::Bucket::new(1, core_now()),
+            config_rate: Vec::new(),
             card_due: None,
             last_use: Vec::new(),
         }
@@ -838,21 +838,17 @@ impl Client {
         let Some(secret) = self.reg_secret.take() else {
             return Err(End::new(Cause::Register, "no secret"));
         };
-        // A new identity starts with the image's first list. One made again
-        // for an id the server dropped starts so too: its controllers know
-        // only the old id and cannot follow, so Remote control says it was
-        // reset and asks for them to pair again (`reset`).
+        // A new identity starts with the image's first list (a panel only
+        // registers again when it has no controllers: `policy`).
         let keys = super::first_keys();
         let blob = keys.encode();
-        let reset = self.reregister;
         let stored = super::change(
             &self.link.cmd,
-            move |_| Ok((Store::Identity { dev: dev.0, secret, keys: blob, reset }, ())),
+            move |_| Ok((Store::Identity { dev: dev.0, secret, keys: blob }, ())),
             move |s, ()| {
                 s.identity = Some((dev, secret));
                 s.keys = keys;
                 s.keys_changed = true;
-                s.reset |= reset;
             },
         );
         match stored {
@@ -1240,8 +1236,8 @@ impl Client {
         match p.rx.try_recv() {
             Ok(answer) => {
                 let p = self.pending.take().expect("held");
-                if super::dispatch::settle(&self.link, p, answer) {
-                    self.card_due = Some(Instant::now() + crate::config::REMOTE_SAVE_AFTER);
+                if let Some(after) = super::dispatch::settle(&self.link, p, answer) {
+                    self.save_card_after(after);
                 }
             }
             Err(crate::chan::TryRecvError::Empty) if p.until > Instant::now() => {}
@@ -1250,6 +1246,31 @@ impl Client {
                 self.pending = None;
                 crate::state::drop_spent();
             }
+        }
+    }
+
+    /// One config command from `k`, within its 1 a second? (At most
+    /// `MAX_COUNTERS` keys tracked, as the core's counters.)
+    pub(super) fn config_rate_take(&mut self, k: KeyId) -> bool {
+        let now = core_now();
+        if let Some((_, b)) = self.config_rate.iter_mut().find(|(x, _)| *x == k) {
+            return b.take(now);
+        }
+        if self.config_rate.len() >= proto::MAX_COUNTERS {
+            return false;
+        }
+        let mut b = proto::Bucket::new(1, now);
+        let ok = b.take(now);
+        self.config_rate.push((k, b));
+        ok
+    }
+
+    /// The card's copy due `after` from now (or sooner if already).
+    pub(super) fn save_card_after(&mut self, after: Duration) {
+        let at = Instant::now() + after;
+        self.card_due = Some(self.card_due.map_or(at, |d| d.min(at)));
+        if after.is_zero() {
+            self.save_card(true);
         }
     }
 
@@ -1295,9 +1316,14 @@ impl Client {
         match (e.cause, e.code) {
             // The id is gone (a registration that never said `hello` is
             // deleted, or the record lost): a new one, on the usual backoff.
-            (Cause::Upgrade, 404) if self.identity.is_some() && self.rereg_allowed() => {
+            // The id is gone and no controller knows it (a registration that
+            // never said hello is deleted): a new one. With controllers it
+            // is a refusal like 403, nothing erased (a server that lost its
+            // records must not wipe every panel's pairings): the owner
+            // chooses Forget on the LAN.
+            (Cause::Upgrade, 404) if self.identity.is_some() && self.keys.is_empty() && self.rereg_allowed() => {
                 self.reregister = true;
-                error("the server no longer knows this id: registering again (the controllers must pair again)".into());
+                error("the server no longer knows this id (no controllers yet): registering again".into());
                 None
             }
             (Cause::ServerClose, proto::CLOSE_REFUSED) | (Cause::Upgrade, 403 | 404) => {

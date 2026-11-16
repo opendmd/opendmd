@@ -163,12 +163,13 @@ The server hashes `hello.secret` and compares it with the stored hash;
 else it closes 4403 and the panel waits 15 minutes (Settings says to set
 Remote control up again). A newer panel connection replaces an older one.
 
-An id the server does not know at the upgrade (HTTP 404: a registration
-that never said `hello` within 10 minutes is deleted, or a record lost)
-makes the panel register again, at most three times a day (then it
-treats it as a refusal). The new id is one its controllers cannot learn,
-so the panel starts the new identity with no controllers and says so
-(`GET /api/connect` `reset`): they pair again. A panel that forgets its
+An id the server does not know at the upgrade (HTTP 404) is handled by
+whether anyone could know it. A panel with no controllers (a registration
+that never said `hello` within 10 minutes is deleted) registers again by
+itself, at most three times a day. A panel with controllers treats it as
+a refusal, like 4403: retried every 15 minutes, nothing erased, so a
+server that lost its records (a bad key deploy, lost storage) cannot wipe
+pairings; the owner chooses Forget on the LAN to start again. A panel that forgets its
 identity sends `forget` if it is online; offline, the old record stays at
 the server, never used.
 

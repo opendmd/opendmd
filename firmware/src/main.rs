@@ -1183,8 +1183,17 @@ fn main() -> Result<()> {
                     panel: panel_op,
                     look_named,
                     boot_named,
+                    only_set,
                     reply,
                 } => {
+                    // Only the playlist asked (Remote control): this task's
+                    // own settings now, with it (a copy, on the display
+                    // core: a playlist change is rare and rebuilds anyway).
+                    if only_set {
+                        let set = std::mem::take(&mut next.set);
+                        *next = settings.clone();
+                        next.set = set;
+                    }
                     // A look the request did not name is this task's own
                     // (the sender's copy may predate its Formula's delete).
                     if !look_named && next.look_formula != settings.look_formula {
@@ -1643,31 +1652,22 @@ fn main() -> Result<()> {
                     )));
                 }
                 #[cfg(feature = "connect")]
-                Command::RemoteConfig { brightness, set, reply } => {
+                Command::RemoteConfig { brightness: v, reply } => {
                     if !reply.claim() {
                         continue;
                     }
-                    if let Some(v) = brightness {
-                        if v > settings.max_brightness {
-                            let _ = reply.send(Err("brightness over the ceiling".into()));
-                            continue;
-                        }
-                        settings.brightness = v;
-                        if !sched.off() && ptest.is_none() {
-                            panel.set_brightness(sched.brightness(&settings));
-                        }
-                        remote_dirty = Some(Instant::now());
-                        let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
-                    } else if let Some(name) = set {
-                        // This task's own settings with the new playlist,
-                        // through ApplyConfig's checks (the set must open)
-                        // and rebuild, at the next turn of the loop. (A
-                        // copy here, on the display core: a playlist change
-                        // is rare and rebuilds the engine anyway.)
-                        let mut next = Box::new(settings.clone());
-                        next.set = name;
-                        let _ = cmd_tx.send(Command::ApplyConfig { settings: next, panel: None, look_named: true, boot_named: true, reply });
+                    if v > settings.max_brightness {
+                        let _ = reply.send(Err("brightness over the ceiling".into()));
+                        continue;
                     }
+                    settings.brightness = v;
+                    if !sched.off() && ptest.is_none() {
+                        panel.set_brightness(sched.brightness(&settings));
+                    }
+                    remote_dirty = Some(Instant::now());
+                    // A planned restart meanwhile writes them first.
+                    SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+                    let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
                 }
                 #[cfg(feature = "connect")]
                 Command::ConnectStore { what, reply } => {

@@ -62,8 +62,8 @@ impl Client {
             Remote::Next => self.link.cmd.send(Command::Skip).map(|_| None).map_err(|_| Refusal::Busy),
             Remote::Prev => self.back(),
             Remote::Pause => self.pause(),
-            Remote::Brightness { v } => self.config(Some(v), None),
-            Remote::Playlist { set } => self.config(None, Some(set)),
+            Remote::Brightness { v } => self.config(k, Some(v), None),
+            Remote::Playlist { set } => self.config(k, None, Some(set)),
             Remote::Playlists => self.playlists(),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
                 self.last_use.iter().find(|(x, _)| x == k).map(|(_, at)| at.elapsed().as_secs())
@@ -129,13 +129,14 @@ impl Client {
     /// settings shared once the player has applied them. One at a time.
     #[optimize(size)]
     #[inline(never)]
-    fn config(&mut self, brightness: Option<u8>, set: Option<String>) -> Done {
+    fn config(&mut self, k: [u8; 8], brightness: Option<u8>, set: Option<String>) -> Done {
         if self.pending.is_some() {
             return Err(Refusal::Busy);
         }
-        // One a second (a drag of the slider sends 4: the last one wins
-        // a moment later; the player and the card are spared the rest).
-        if !self.config_rate.take(super::client::core_now()) {
+        // One a second from each controller (a drag of the slider sends 4:
+        // the last one wins a moment later; the player and the card are
+        // spared the rest), as the core keeps its 4 a second per key.
+        if !self.config_rate_take(k) {
             return Err(Refusal::Rate);
         }
         // The LAN's own rule for a playlist name, beside the remote one.
@@ -143,17 +144,27 @@ impl Client {
             return Err(Refusal::BadArg);
         }
         let (tx, rx) = mpsc::channel();
-        self.link
-            .cmd
-            .send(Command::RemoteConfig { brightness, set: set.clone(), reply: tx })
-            .map_err(|_| Refusal::Busy)?;
+        let cmd = match (brightness, &set) {
+            (Some(v), _) => Command::RemoteConfig { brightness: v, reply: tx },
+            // Only the playlist: the main task takes the rest from its own
+            // settings when it gets to it (`only_set`).
+            (None, s) => Command::ApplyConfig {
+                settings: Box::new(Settings { set: s.clone().unwrap_or_default(), ..Settings::default() }),
+                panel: None,
+                look_named: false,
+                boot_named: false,
+                only_set: true,
+                reply: tx,
+            },
+        };
+        self.link.cmd.send(cmd).map_err(|_| Refusal::Busy)?;
         crate::wake::kick();
         let p = Pending { rx, brightness, set, until: Instant::now() + CONFIG_WAIT };
         match p.rx.answer_within(http::TAKE_WAIT, http::PLAY_ANSWER) {
             mpsc::Handoff::Answered(answer) => {
                 let refused = answer.as_ref().err().map(|e| refusal_of(e));
-                if settle(&self.link, p, answer) {
-                    self.card_due = Some(Instant::now() + crate::config::REMOTE_SAVE_AFTER);
+                if let Some(after) = settle(&self.link, p, answer) {
+                    self.save_card_after(after);
                 }
                 refused.map_or(Ok(None), Err)
             }
@@ -284,24 +295,27 @@ fn refusal_of(e: &str) -> Refusal {
 #[optimize(size)]
 #[inline(never)]
 /// Only the field asked changes in the shared settings (a LAN change made
-/// meanwhile stays); `true`: changed, the card's copy is due (made once
-/// commands stop: `Client::card_due`).
-pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> bool {
+/// meanwhile stays); `Some(after)`: changed, the card's copy is due that
+/// long from now. A brightness once commands stop; a playlist at once (the
+/// card's copy wins at boot, and a playlist change is rare).
+pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Option<Duration> {
     crate::state::drop_spent();
     match answer {
         Ok(_) => {
             let mut s = link.settings.lock().unwrap();
+            let mut after = crate::config::REMOTE_SAVE_AFTER;
             if let Some(v) = p.brightness {
                 s.brightness = v;
             }
             if let Some(set) = p.set {
                 s.set = set;
+                after = Duration::ZERO;
             }
-            true
+            Some(after)
         }
         Err(e) => {
             log::info!("connect: a remote setting refused: {e}");
-            false
+            None
         }
     }
 }
