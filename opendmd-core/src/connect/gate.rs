@@ -21,13 +21,30 @@
 //!   `psram-tls`, `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`). The 12 KB is no
 //!   longer internal, so 100 KB of internal free is the wrong question
 //!   (the carrier image's internal heap sits near 79 KB and never reaches
-//!   it). The internal side keeps the classic's gates, since everything but
-//!   mbedTLS still lands there and the classic's numbers are the ones
-//!   measured to be safe for that; PSRAM must have a 64 KB block, five
-//!   times the handshake's whole peak in one piece (every one of its
-//!   allocations fits in it with room; an 8 MB PSRAM always has it, so in
-//!   practice this only stops a handshake when PSRAM is missing or broken,
-//!   where mbedTLS would fall back to the internal heap unbudgeted).
+//!   it). PSRAM must have a 64 KB block, five times the handshake's whole
+//!   peak in one piece (every one of its allocations fits in it with room;
+//!   an 8 MB PSRAM always has it, so in practice this only stops a
+//!   handshake when PSRAM is missing or broken). There is no internal
+//!   fallback to budget for: IDF's `EXTERNAL_MEM_ALLOC` allocator asks
+//!   `MALLOC_CAP_SPIRAM` only, so with no PSRAM block mbedTLS's allocation
+//!   fails and the handshake with it. Only a `connect-measure` build
+//!   installs the firmware's own allocator (`tls_calloc`: PSRAM, then
+//!   internal RAM, counted); a shipping build uses it for one struct, the
+//!   pinned root the verify callback parses (a few hundred bytes).
+//!
+//!   The internal free gates (48 KB full, 44 KB resumed) are the
+//!   classic's, borrowed until the S3 is measured on its own: everything
+//!   but mbedTLS still lands in internal RAM. The rig's evidence so far
+//!   (carrier-connect, 2026-11-16): a handshake dipped internal free by
+//!   about 22 KB, from 79 KB to a floor of 57 KB, so 48 KB leaves about
+//!   26 KB through one. The internal largest-block gate is 8 KB, not the
+//!   classic's 16 KB: the 16 KB was for mbedTLS's own 4 KB input record
+//!   and working numbers, and no internal allocation on the psram-tls
+//!   path is near it. The largest are a WiFi or lwIP frame (about 1.6 KB),
+//!   the worker's binary message buffer (`BIN_KEEP`, about 1 KB), the
+//!   upgrade's answer head (up to 1 KB) and the mbedTLS context structs
+//!   the worker boxes (under 1 KB); 8 KB is five times the largest of
+//!   them, as the PSRAM gate is to its peak.
 
 /// The heap as the gate reads it, bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +78,9 @@ pub const CLASSIC: Gates = Gates { full: 48 * KB, resumed: 44 * KB, largest: 16 
 /// An ESP32-S3 with mbedTLS in internal RAM.
 pub const S3_INTERNAL_TLS: Gates = Gates { full: 100 * KB, resumed: 100 * KB, largest: 16 * KB, psram_largest: 0 };
 /// An ESP32-S3 with mbedTLS in PSRAM (`psram-tls`).
-pub const S3_PSRAM_TLS: Gates = Gates { full: 48 * KB, resumed: 44 * KB, largest: 16 * KB, psram_largest: 64 * KB };
+/// Internal free borrowed from [`CLASSIC`] pending an S3 measurement;
+/// largest block 8 KB (the module's notes: what the internal side holds).
+pub const S3_PSRAM_TLS: Gates = Gates { full: 48 * KB, resumed: 44 * KB, largest: 8 * KB, psram_largest: 64 * KB };
 
 /// The first condition a handshake does not meet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,11 +93,11 @@ pub enum Unmet {
     PsramLargest { have: u32, need: u32 },
 }
 
-impl Unmet {
-    /// For `GET /api/connect` `waiting`: "internal heap 79 KB < 100 KB".
-    /// KB rounded down, so the two sides never print equal.
+impl core::fmt::Display for Unmet {
+    /// "internal heap 79 KB < 100 KB": KB rounded down, so the two sides
+    /// never print equal.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn describe(&self) -> String {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (what, have, need) = match *self {
             Unmet::Free { have, need } => ("internal heap", have, need),
             Unmet::Largest { have, need } => ("internal largest block", have, need),
@@ -86,10 +105,38 @@ impl Unmet {
         };
         // `have < need`: show bytes where whole KB would read the same.
         if have / KB < need / KB {
-            format!("{what} {} KB < {} KB", have / KB, need / KB)
+            write!(f, "{what} {} KB < {} KB", have / KB, need / KB)
         } else {
-            format!("{what} {have} B < {need} B")
+            write!(f, "{what} {have} B < {need} B")
         }
+    }
+}
+
+impl Unmet {
+    /// For `GET /api/connect` `waiting` (human-readable, not for parsing).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    /// Whether [`describe`](Self::describe) would give `s`, without
+    /// allocating (the worker asks every 2 s while it waits).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn reads_as(&self, s: &str) -> bool {
+        struct Cmp<'a>(&'a str);
+        impl core::fmt::Write for Cmp<'_> {
+            fn write_str(&mut self, part: &str) -> core::fmt::Result {
+                match self.0.strip_prefix(part) {
+                    Some(rest) => {
+                        self.0 = rest;
+                        Ok(())
+                    }
+                    None => Err(core::fmt::Error),
+                }
+            }
+        }
+        let mut c = Cmp(s);
+        core::fmt::write(&mut c, format_args!("{self}")).is_ok() && c.0.is_empty()
     }
 }
 
@@ -152,8 +199,12 @@ mod tests {
     fn psram_tls_still_needs_internal_room() {
         let low = Heap { free: 40 * 1024, ..RIG };
         assert_eq!(check(&S3_PSRAM_TLS, &low, false), Err(Unmet::Free { have: 40 * 1024, need: 48 * 1024 }));
-        let frag = Heap { largest: 8 * 1024, ..RIG };
-        assert_eq!(check(&S3_PSRAM_TLS, &frag, true).unwrap_err().describe(), "internal largest block 8 KB < 16 KB");
+        let frag = Heap { largest: 6 * 1024, ..RIG };
+        assert_eq!(check(&S3_PSRAM_TLS, &frag, true).unwrap_err().describe(), "internal largest block 6 KB < 8 KB");
+        // 8 KB passes here; the classic still asks 16 KB (mbedTLS internal).
+        let eight = Heap { largest: 8 * 1024, ..RIG };
+        assert_eq!(check(&S3_PSRAM_TLS, &eight, false), Ok(()));
+        assert!(check(&CLASSIC, &Heap { psram_largest: 0, ..eight }, false).is_err());
     }
 
     #[test]
@@ -162,6 +213,20 @@ mod tests {
         let e = check(&S3_PSRAM_TLS, &none, false).unwrap_err();
         assert_eq!(e, Unmet::PsramLargest { have: 0, need: 64 * 1024 });
         assert_eq!(e.describe(), "PSRAM largest block 0 KB < 64 KB");
+    }
+
+    #[test]
+    fn reads_as_matches_describe_exactly() {
+        let e = Unmet::Free { have: 79_196, need: 100 * 1024 };
+        assert!(e.reads_as(&e.describe()));
+        assert!(!e.reads_as("internal heap 77 KB < 100 K"));
+        assert!(!e.reads_as("internal heap 77 KB < 100 KB!"));
+        assert!(!e.reads_as(""));
+        assert!(!Unmet::Free { have: 76 * 1024, need: 100 * 1024 }.reads_as(&e.describe()));
+        // The same KB on both readings: no new string needed.
+        assert!(Unmet::Free { have: 79_000, need: 100 * 1024 }.reads_as(&e.describe()));
+        let p = Unmet::PsramLargest { have: 0, need: 64 * 1024 };
+        assert!(p.reads_as("PSRAM largest block 0 KB < 64 KB") && !p.reads_as(&e.describe()));
     }
 
     #[test]

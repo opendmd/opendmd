@@ -448,6 +448,13 @@ pub(crate) static TEST_NO_CARD: AtomicBool = AtomicBool::new(false);
 /// ... and for the next send's card write failing (`{"test_fail_write":true}`).
 #[cfg(feature = "connect-test")]
 pub(crate) static TEST_FAIL_WRITE: AtomicBool = AtomicBool::new(false);
+/// ... and for the lookup's lane: look `HOST` up (port 443) even though the
+/// image names `ADDR` (`{"test_lookup":true}`), waiting this long for it
+/// (`{"test_dns_wait_ms":n}`, 0: the usual `DNS_WAIT`).
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_LOOKUP: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "connect-test")]
+pub(crate) static TEST_DNS_WAIT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 // --- Signals from the rest of the firmware --------------------------------------
 
@@ -552,6 +559,16 @@ fn uptime_s() -> u32 {
 #[optimize(size)]
 #[inline(never)]
 pub(crate) fn set_state(s: &'static str) {
+    set_state_for(s, None);
+}
+
+/// The state, and with it `waiting` (`unmet`: what the heap gate found
+/// short, for [`WAITING_FOR_MEMORY`]; else `None`), under one lock: a
+/// reader never sees "waiting for memory" with `waiting` null. The text
+/// is made only when it reads differently.
+#[optimize(size)]
+#[inline(never)]
+fn set_state_for(s: &'static str, unmet: Option<opendmd_core::connect::gate::Unmet>) {
     lite(|l| {
         if l.state != s {
             if s == WAITING_FOR_MEMORY {
@@ -559,7 +576,11 @@ pub(crate) fn set_state(s: &'static str) {
             }
             l.state = s;
             l.since_s = uptime_s();
-            l.waiting = None;
+        }
+        match unmet {
+            None => l.waiting = None,
+            Some(u) if l.waiting.as_deref().is_some_and(|w| u.reads_as(w)) => {}
+            Some(u) => l.waiting = Some(u.describe()),
         }
     });
     tele(|t| {
@@ -573,17 +594,11 @@ pub(crate) fn set_state(s: &'static str) {
 /// The state a handshake waits in for the heap gate.
 pub(crate) const WAITING_FOR_MEMORY: &str = "waiting for memory";
 
-/// What the heap gate found unmet, for `waiting` (replaced only when it
-/// reads differently).
+/// "waiting for memory", with what the heap gate found unmet (`waiting`).
 #[optimize(size)]
 #[inline(never)]
 pub(crate) fn set_waiting(unmet: opendmd_core::connect::gate::Unmet) {
-    let d = unmet.describe();
-    lite(|l| {
-        if l.waiting.as_deref() != Some(d.as_str()) {
-            l.waiting = Some(d);
-        }
-    });
+    set_state_for(WAITING_FOR_MEMORY, Some(unmet));
 }
 
 /// A failure worth a line and `last_error` (never a secret: no message

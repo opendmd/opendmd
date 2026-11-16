@@ -21,6 +21,10 @@ function said(c) {
   if (s == 'backoff' || s == 'waiting for network') return 'On: opendmd.dev isn’t reachable right now, trying again';
   if (s == 'held for an update') return 'Paused while the panel updates';
   if (s.startsWith('off after')) return 'Paused after two restarts in a row: switch it off and on again';
+  // `waiting` is the panel's own plain words (shown, never parsed).
+  if (s == 'waiting for memory') return 'On: waiting for free memory' + (c.waiting ? ` (${c.waiting})` : '');
+  if (s == 'waiting for quiet') return 'On: waiting until uploads to the panel finish';
+  if (s == 'looking up the server') return 'On: looking up opendmd.dev…';
   return 'On: connecting…';
 }
 

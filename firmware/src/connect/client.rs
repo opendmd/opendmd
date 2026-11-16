@@ -6,7 +6,8 @@
 //! |---|---|
 //! | Full handshake | only with 48 KB free and a 16 KB block ([`Cfg`], `opendmd_core::connect::gate`), and 10 s without a LAN upload, stream or heavy request (`super::lan_busy`). Otherwise wait: "waiting for memory" (`waiting` names the unmet condition), "waiting for quiet" |
 //! | Resumed handshake (a TLS ticket held) | 44 KB until it is measured (D3); the same quiet |
-//! | S3 | 100 KB: open in practice. With mbedTLS in PSRAM (`psram-tls`): the classic's internal gates, and a 64 KB PSRAM block |
+//! | S3 | 100 KB: open in practice. With mbedTLS in PSRAM (`psram-tls`): the classic's internal free gates, an 8 KB internal block, and a 64 KB PSRAM block |
+//! | Looking up the server | on its own task, one at a time, waited for 25 s ("looking up the server"; `opendmd_core::connect::dns`). Unanswered by then: one failure (its late error is not another; a late address is used next time). Still running at the next attempt: reported as stuck, one failure. DNS failures back off no further than 30 s |
 //! | After a server close | 0-30 s spread, then 5 s doubling to 15 min, with jitter (`Backoff`) |
 //! | Refused (4403, or HTTP 403 at the upgrade) | straight to the 15 min cap; `refused` (Settings: set up again) |
 //! | The id unknown (HTTP 404 at the upgrade) | with no controllers (the server drops a registration that never said `hello` within 10 min): register again, at most 3 a day, on the usual backoff. With controllers: refused, as 403, nothing erased (Forget on the LAN starts again) |
@@ -43,7 +44,7 @@
 
 use super::dispatch::{Link, Pending};
 use super::measure::{cfg, cfg_gen, Cfg};
-use super::tls::{self, now_us, rand_u32, random, Conn, Phase, Purpose, Ticket, BIN_KEEP, BLOCK_MAX, DNS, DNS_WAIT, ERR_PEER_CLOSE_NOTIFY, ERR_WANT_READ, ERR_WANT_WRITE, ROOTS, ROOT_USED, SLICE, TLS_PEAK};
+use super::tls::{self, now_us, rand_u32, random, Conn, Phase, Purpose, Ticket, BIN_KEEP, BLOCK_MAX, DNS, ERR_PEER_CLOSE_NOTIFY, ERR_WANT_READ, ERR_WANT_WRITE, ROOTS, ROOT_USED, SLICE, TLS_PEAK};
 use super::{error, lite, set_state, shared, tele, Cause, End, Store};
 use crate::state::{free_heap, largest_free_block};
 use opendmd_core::connect::gate;
@@ -52,7 +53,7 @@ use esp_idf_sys as sys;
 use opendmd_core::connect::keys::{KeyId, KeyList};
 use opendmd_core::connect::qr::Qr;
 use opendmd_core::connect::proto::{self, Caps, Dev, ServerMsg, Session};
-use opendmd_core::connect::{self as cx, Backoff, Event, BACKOFF_CAP};
+use opendmd_core::connect::{self as cx, dns, Backoff, Event, BACKOFF_CAP};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
@@ -721,7 +722,6 @@ impl Client {
         let free = free_heap();
         let heap = gate::Heap { free, largest: largest_free_block() as u32, psram_largest: psram_largest(gates.psram_largest) };
         if let Err(unmet) = gate::check(&gates, &heap, resumed) {
-            set_state(super::WAITING_FOR_MEMORY);
             super::set_waiting(unmet);
             tele(|t| t.gate_waits += 1);
             self.not_before = now + Duration::from_secs(2);
@@ -761,11 +761,16 @@ impl Client {
     }
 
     /// The server's address: the configured one, a recent lookup, or
-    /// `None` while one runs on its own task (or failed: counted).
+    /// `None` while one runs on its own task (or failed: counted once).
+    /// The pacing is `opendmd_core::connect::dns`'s.
     #[optimize(size)]
     #[inline(never)]
     fn address(&mut self, c: &Cfg) -> Option<SocketAddr> {
-        if !c.addr.is_empty() {
+        #[cfg(feature = "connect-test")]
+        let fixed = !c.addr.is_empty() && !super::TEST_LOOKUP.load(Relaxed);
+        #[cfg(not(feature = "connect-test"))]
+        let fixed = !c.addr.is_empty();
+        if fixed {
             return match c.addr.parse::<std::net::SocketAddrV4>() {
                 Ok(a) => Some(SocketAddr::V4(a)),
                 Err(_) => {
@@ -779,41 +784,60 @@ impl Client {
                 return Some(*a);
             }
         }
-        let done = {
+        let wait = tls::dns_wait();
+        let (step, answer, ran) = {
             let mut d = DNS.lock().unwrap_or_else(|p| p.into_inner());
-            match d.as_mut() {
-                Some(j) if j.host == c.host && j.answer.is_some() => d.take().and_then(|j| j.answer),
-                // Still running (this host's, or another's left to finish:
-                // one lookup at a time).
-                Some(j) if j.answer.is_none() => {
-                    let late = j.host == c.host && !j.given_up && j.started.elapsed() > DNS_WAIT;
-                    if late {
+            let job = d.as_ref().map(|j| dns::Job {
+                same_host: j.host == c.host,
+                answer: j.answer.as_ref().map(|(r, _)| r.is_ok()),
+                given_up: j.given_up,
+                elapsed: j.started.elapsed(),
+            });
+            let ran = job.map_or(0, |j| j.elapsed.as_secs());
+            let step = dns::step(job, wait);
+            let answer = match step {
+                dns::Step::Use | dns::Step::Fail => d.take().and_then(|j| j.answer),
+                dns::Step::GiveUp => {
+                    if let Some(j) = d.as_mut() {
                         j.given_up = true;
                     }
-                    drop(d);
-                    if late {
-                        self.failed(End::new(Cause::Dns, format!("{}: no answer within {} s", c.host, DNS_WAIT.as_secs())));
-                    } else {
-                        set_state("looking up the server");
-                        self.not_before = Instant::now() + DNS_POLL;
-                    }
-                    return None;
+                    None
                 }
-                _ => None,
-            }
+                // A late error, or another host's answer: dropped.
+                dns::Step::Start => {
+                    *d = None;
+                    None
+                }
+                dns::Step::Poll | dns::Step::Stuck => None,
+            };
+            (step, answer, ran)
         };
-        match done {
-            Some((Ok(a), ms)) => {
+        match (step, answer) {
+            (dns::Step::Use, Some((Ok(a), ms))) => {
                 tele(|t| t.dns_ms = ms);
                 self.resolved = Some((c.host.to_string(), a, Instant::now()));
                 Some(a)
             }
-            Some((Err(e), ms)) => {
+            (dns::Step::Fail, Some((Err(e), ms))) => {
                 tele(|t| t.dns_ms = ms);
                 self.failed(End::new(Cause::Dns, e));
                 None
             }
-            None => {
+            (dns::Step::GiveUp, _) => {
+                self.failed(End::new(Cause::Dns, format!("{}: no answer within {} s", c.host, wait.as_secs_f32())));
+                None
+            }
+            (dns::Step::Stuck, _) => {
+                // One lookup task at a time: none starts until it ends.
+                self.failed(End::new(Cause::Dns, format!("{}: the last lookup is stuck ({ran} s, no answer); none new until it ends", c.host)));
+                None
+            }
+            (dns::Step::Poll, _) => {
+                set_state("looking up the server");
+                self.not_before = Instant::now() + DNS_POLL;
+                None
+            }
+            _ => {
                 if let Err(e) = tls::lookup(c.host.to_string()) {
                     self.failed(End::new(Cause::Dns, e));
                 } else {
@@ -1444,7 +1468,12 @@ impl Client {
             set_state("job: failed, next at its interval");
             return;
         }
-        let wait = self.policy(&e).unwrap_or_else(|| self.backoff.failed(rand_u32()));
+        // A lookup costs the server nothing: DNS failures back off no
+        // further than `DNS_BACKOFF_CAP`.
+        let wait = self.policy(&e).unwrap_or_else(|| match e.cause {
+            Cause::Dns => self.backoff.failed_up_to(rand_u32(), dns::DNS_BACKOFF_CAP),
+            _ => self.backoff.failed(rand_u32()),
+        });
         self.wait_for(wait);
     }
 

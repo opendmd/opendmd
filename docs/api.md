@@ -919,7 +919,9 @@ shown here (only `POST /api/connect/pair`'s caller gets the link). `state` is
 `off`, `waiting after boot`, `waiting for network`, `waiting for clock`,
 `waiting for quiet` (a LAN upload or heavy request in the last 10 s),
 `waiting for memory` (`waiting` says which condition is unmet, e.g.
-`internal heap 77 KB < 100 KB`; `null` in any other state), `registering`, `connecting`, `handshake`,
+`internal heap 77 KB < 100 KB`; `null` in any other state),
+`looking up the server` (the server's DNS lookup, on its own task, at
+most 25 s; a failed one is `backoff`, at most 30 s), `registering`, `connecting`, `handshake`,
 `upgrading`, `open`, `backoff`, `refused: set Remote control up again`
 (`refused` true: the server does not know this panel; `POST
 /api/connect/forget` makes a new identity), `update needed` (`too_old`),
@@ -928,6 +930,13 @@ no longer knows the panel's id makes it `refused` too when it has
 controllers (nothing is erased: `POST /api/connect/forget` starts again);
 with none yet, the panel registers a new id by itself (at most three
 times a day). The panel's secret is never shown.
+
+`waiting` is for people: show it as it is, never parse it (its numbers
+and wording may change). It starts with one of `internal heap`
+(internal RAM free), `internal largest block` (the largest piece of
+it) or `PSRAM largest block` (an ESP32-S3 whose TLS lives in PSRAM),
+then what there is and what a handshake needs, e.g. `internal largest
+block 6 KB < 8 KB`.
 
 ### PUT /api/connect
 

@@ -11765,6 +11765,28 @@ def remote_pass(browser, base: str | None = None, errors: list[str] | None = Non
         _, cx = cx_get(base)
         check(cx["enabled"] is True and page.inner_text("#rc-state") == "On: ready for your devices" and page.is_visible("#rc-this"),
               f"remote: the switch turns it on: saved, the state in words ({page.inner_text('#rc-state')!r})")
+        # The waits in words: the panel's own `waiting` while short of
+        # memory (shown as it is, never parsed), plain words for quiet and
+        # the lookup; never "connecting…" for any of them.
+        def rc_said(state, want, waiting=None):
+            q = "state=" + urllib.parse.quote(state) + ("&waiting=" + urllib.parse.quote(waiting) if waiting is not None else "")
+            get_json(base + "/mock/connect?" + q)
+            try:
+                page.wait_for_function(f"document.querySelector('#rc-state').textContent === {json.dumps(want)}", timeout=20000)
+            except Exception:  # noqa: BLE001
+                pass
+            return page.inner_text("#rc-state")
+        want = "On: waiting for free memory (internal heap 40 KB < 48 KB)"
+        t = rc_said("waiting for memory", want, "internal heap 40 KB < 48 KB")
+        check(t == want, f"remote: waiting for memory: the panel's reason shown in words ({t!r})")
+        t = rc_said("waiting for memory", "On: waiting for free memory", "")
+        check(t == "On: waiting for free memory", f"remote: red: waiting for memory with no reason: no empty brackets, no null ({t!r})")
+        t = rc_said("waiting for quiet", "On: waiting until uploads to the panel finish")
+        check(t == "On: waiting until uploads to the panel finish", f"remote: waiting for quiet: said in plain words ({t!r})")
+        t = rc_said("looking up the server", "On: looking up opendmd.dev…")
+        check(t == "On: looking up opendmd.dev…" and "connecting" not in t, f"remote: looking up the server: said, not 'connecting' ({t!r})")
+        t = rc_said("open", "On: ready for your devices")
+        check(t == "On: ready for your devices", f"remote: back to open ({t!r})")
         check(page.is_visible("#rc-nudge") and "API key" in page.inner_text("#rc-nudge") and "bad" in (page.get_attribute("#rc-nudge", "class") or ""),
               "remote: with no API key on the panel, a warning to set one before linking")
         check(page.get_attribute("#rc-name", "placeholder") == get_json(base + "/api/config")["hostname"],
