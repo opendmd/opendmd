@@ -726,4 +726,9 @@ pub enum Command {
     /// (`REMOTE_SAVE_AFTER`). (A playlist is `ApplyConfig` with `only_set`.)
     #[cfg(feature = "connect")]
     RemoteConfig { brightness: u8, reply: Reply },
+    /// Remote control's screen (the pairing QR code, "Remote control
+    /// added"), made on CPU0 by the network worker, drawn instead of
+    /// playing while it is up; `None` takes it down. No reply.
+    #[cfg(feature = "connect")]
+    ConnectScreen(Option<Box<crate::connect::Screen>>),
 }

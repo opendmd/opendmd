@@ -388,7 +388,7 @@ fn build() -> Value {
             "pub": hex(&c_pub),
             "label": label,
             "mac": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
-            "mac2": hex(&pair::paired_mac(&s, &w.dev.0, &c_pub)),
+            "mac2": hex(&pair::paired_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
             "mac_for_a_swapped_key": hex(&pair::pair_mac(&s, &w.dev.0, &a_pub, label.as_bytes())),
             "mac_for_a_rewritten_label": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub, b"C tablet")),
             "message": proto_pair(&c_pub, label, &pair::pair_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
@@ -405,6 +405,7 @@ fn build() -> Value {
             "confirm": pair::confirm_code(&c_pub),
             "link": format!("https://opendmd.dev/c#add={}.{}", w.dev.text(), inv),
         },
+        "qr_code": qr_code(&format!("https://opendmd.dev/c#{s}")),
         "commands": commands,
         "acks": {
             "ok": proto::ack_ok(&key_id(&a_pub), 1, None),
@@ -453,6 +454,29 @@ fn the_pinned_cases_hold() {
         assert_eq!(got, c["expect"].as_str().unwrap(), "{}", c["name"]);
     }
     assert_eq!(KeyList::decode(&unhex(pinned["panel"]["key_blob"].as_str().unwrap())).unwrap(), w.keys);
+}
+
+/// The pairing QR code for `link`: the mask the core picks, the matrix for
+/// every mask (rows, `#` dark, `.` light), and the panel's QR screen (rows,
+/// `#` lit, `.` off), for `tools/connect/qr_check.py`'s other encoder and
+/// decoder.
+fn qr_code(link: &str) -> Value {
+    use opendmd_core::canvas::{Canvas, WIDTH};
+    use opendmd_core::connect::{qr, screen};
+    let rows = |q: &qr::Qr| -> Vec<String> { (0..qr::SIZE).map(|y| (0..qr::SIZE).map(|x| if q.dark(x, y) { '#' } else { '.' }).collect()).collect() };
+    let best = qr::encode(link.as_bytes()).unwrap();
+    let mut c = Canvas::new();
+    screen::pair(&mut c, &best);
+    let lit: Vec<String> = screen::lit_rows(&c).iter().map(|r| (0..WIDTH).map(|x| if r >> (WIDTH - 1 - x) & 1 == 1 { '#' } else { '.' }).collect()).collect();
+    json!({
+        "note": "version 3, level L, byte mode; masks[m] is the matrix with mask m; screen is the panel's 128 x 32 QR screen, the code at x 4, y 1",
+        "text": link,
+        "mask": best.mask(),
+        "masks": (0..8).map(|m| rows(&qr::encode_with_mask(link.as_bytes(), m).unwrap())).collect::<Vec<_>>(),
+        "screen": lit,
+        "qr_x": screen::QR_X,
+        "qr_y": screen::QR_Y,
+    })
 }
 
 /// A guest's `pair` as it sends it.

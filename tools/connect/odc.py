@@ -315,8 +315,9 @@ def pair_mac(s: str, dev: bytes, pub: bytes, label: bytes) -> bytes:
     return mac256(s.encode(), PAIR_MAC_DOMAIN, dev, pub, label)
 
 
-def paired_mac(s: str, dev: bytes, pub: bytes) -> bytes:
-    return mac256(s.encode(), PAIRED_MAC_DOMAIN, dev, pub)
+def paired_mac(s: str, dev: bytes, pub: bytes, label: bytes) -> bytes:
+    """label: the bytes the panel was sent (as for pair_mac)."""
+    return mac256(s.encode(), PAIRED_MAC_DOMAIN, dev, pub, label)
 
 
 def add_mac(s: str, dev: bytes, pub: bytes, label: bytes) -> bytes:
@@ -352,7 +353,7 @@ class Window:
                 self.open = False
             raise Bad("bad-mac")
         self.open = False
-        return paired_mac(self.secret, dev, pub)
+        return paired_mac(self.secret, dev, pub, label)
 
 
 # --- Text rules ------------------------------------------------------------------

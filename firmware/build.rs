@@ -102,7 +102,7 @@ fn main() {
     println!("cargo:rerun-if-changed=sdkconfig.connect");
     // Those variables point a build at another server, root or key: only an
     // emulator image (feature `connect-test`) may take them.
-    for k in ["OPENDMD_CONNECT_HOST", "OPENDMD_CONNECT_ADDR", "OPENDMD_CONNECT_HOLD_S", "OPENDMD_CONNECT_TEST_ROOT", "OPENDMD_CONNECT_TEST_KEY", "OPENDMD_CONNECT_PATH", "OPENDMD_CONNECT_TOKEN", "OPENDMD_CONNECT_ENABLED"] {
+    for k in ["OPENDMD_CONNECT_HOST", "OPENDMD_CONNECT_ADDR", "OPENDMD_CONNECT_HOLD_S", "OPENDMD_CONNECT_PAIR_TTL_S", "OPENDMD_CONNECT_TEST_ROOT", "OPENDMD_CONNECT_TEST_KEY", "OPENDMD_CONNECT_PATH", "OPENDMD_CONNECT_TOKEN", "OPENDMD_CONNECT_ENABLED"] {
         println!("cargo:rerun-if-env-changed={k}");
         if std::env::var_os(k).is_some_and(|v| !v.is_empty()) && std::env::var_os("CARGO_FEATURE_CONNECT_TEST").is_none() {
             panic!("{k} is set: it is for the emulator lane's image only (feature connect-test); unset it");

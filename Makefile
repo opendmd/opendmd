@@ -208,6 +208,8 @@ test:
 	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
 	uv run --quiet tools/connect/vectors_check.py
+	@echo "==> Checking the pairing QR code (tools/connect/qr_check.py): the core's matrices against qrcodegen's, the panel's QR screen decoded by ZXing"
+	uv run --quiet tools/connect/qr_check.py
 	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features player,ota --lib a_player_without_formulas
 	@echo "==> Testing $(RENDER)"
@@ -1316,12 +1318,14 @@ emu-leak: emu-build emu-card
 # after 20 days) pinned beside the real ones and the lane's test controller
 # key; never a device's. EMU_CONNECT_OK.
 EMU_CONNECT_DIR = $(EMU_DIR)/connect
+# The image's pairing window (5 minutes on a device): the lane waits one out.
+EMU_CONNECT_PAIR_TTL_S = 90
 EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-connect-4mb-full.bin
 emu-connect-certs:
 	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs-p1/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect/emu_lane.py certs $(EMU_CONNECT_DIR)/certs-p1; fi
 emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
-	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 \
+	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 OPENDMD_CONNECT_PAIR_TTL_S=$(EMU_CONNECT_PAIR_TTL_S) \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-connect: emu-build emu-card

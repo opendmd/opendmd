@@ -936,6 +936,14 @@ fn main() -> Result<()> {
     // What status named while the message is up (nothing plays then): put
     // back with the paused frame, if one is.
     let mut update_named: Option<(String, String)> = None;
+    // Remote control's screen (`Command::ConnectScreen`) and when it goes
+    // by itself (the pairing window's time, or "added"'s 10 s), shown on
+    // the update screen's path when no update is; `cx_redraw`: a new one
+    // replaced the one on the panel.
+    #[cfg(feature = "connect")]
+    let mut cx_screen: Option<(Box<connect::Screen>, Instant)> = None;
+    #[cfg(feature = "connect")]
+    let mut cx_redraw = false;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -1670,6 +1678,19 @@ fn main() -> Result<()> {
                     let _ = reply.send(Ok(Applied::unchanged(engine.as_ref().map_or(0, |e| e.catalog_len()))));
                 }
                 #[cfg(feature = "connect")]
+                Command::ConnectScreen(screen) => {
+                    // (A window's QR code goes by itself a little after its
+                    // time, should the worker not say so.)
+                    cx_screen = screen.map(|s| {
+                        let for_ = match *s {
+                            connect::Screen::Pair(_) => connect::PAIR_TTL + Duration::from_secs(5),
+                            connect::Screen::Added(_) => connect::ADDED_FOR,
+                        };
+                        (s, Instant::now() + for_)
+                    });
+                    cx_redraw = true;
+                }
+                #[cfg(feature = "connect")]
                 Command::ConnectStore { what, reply } => {
                     if !reply.claim() {
                         continue;
@@ -1803,6 +1824,20 @@ fn main() -> Result<()> {
         // A firmware update's stage (one relaxed load); not over night
         // mode's dark panel.
         let update = if sched.off() { show::NO_UPDATE } else { show::update_stage() };
+        // Remote control's screen, when no update's is up.
+        #[cfg(feature = "connect")]
+        let update = {
+            if cx_screen.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
+                cx_screen = None;
+            }
+            match cx_screen.as_ref().map(|(s, _)| &**s) {
+                Some(s) if update == show::NO_UPDATE && !sched.off() => match s {
+                    connect::Screen::Pair(_) => show::CONNECT_PAIR,
+                    connect::Screen::Added(_) => show::CONNECT_ADDED,
+                },
+                _ => update,
+            }
+        };
         let updating = update != show::NO_UPDATE || update_shown != show::NO_UPDATE;
         if runner.in_sequence() && !sched.off() && ptest.is_none() && !updating {
             if let Some(e) = engine.as_mut() {
@@ -1852,6 +1887,20 @@ fn main() -> Result<()> {
             }
             let was_shown = update_shown;
             let had_saved = update_saved.is_some();
+            #[cfg(feature = "connect")]
+            let cx_draw = |c: &mut Canvas| match cx_screen.as_ref().map(|(s, _)| &**s) {
+                Some(connect::Screen::Pair(q)) => opendmd_core::connect::screen::pair(c, q),
+                Some(connect::Screen::Added(l)) => opendmd_core::connect::screen::added(c, l),
+                None => c.clear(),
+            };
+            #[cfg(feature = "connect")]
+            let other: Option<&dyn Fn(&mut Canvas)> = Some(&cx_draw);
+            #[cfg(not(feature = "connect"))]
+            let other: Option<&dyn Fn(&mut Canvas)> = None;
+            #[cfg(feature = "connect")]
+            let redraw = std::mem::take(&mut cx_redraw);
+            #[cfg(not(feature = "connect"))]
+            let redraw = false;
             update_screen(
                 update,
                 &mut update_shown,
@@ -1861,6 +1910,8 @@ fn main() -> Result<()> {
                 &mut canvas,
                 &mut looks,
                 &settings,
+                other,
+                redraw,
             );
             if was_shown == show::NO_UPDATE && update_shown != show::NO_UPDATE {
                 let mut s = status.lock().unwrap();
@@ -3866,8 +3917,10 @@ fn update_screen(
     canvas: &mut Canvas,
     looks: &mut formula_look::Looks,
     settings: &Settings,
+    other: Option<&dyn Fn(&mut Canvas)>,
+    redraw: bool,
 ) {
-    if stage == *shown {
+    if stage == *shown && !(redraw && show::connect_stage(stage)) {
         return;
     }
     if *shown == show::NO_UPDATE {
@@ -3891,7 +3944,18 @@ fn update_screen(
             None => canvas.clear(),
         }
         looks.redraw();
-        log::info!("update screen: off (the update did not go through); playback resumes");
+        if show::connect_stage(*shown) {
+            log::info!("remote control screen: off; playback resumes");
+        } else {
+            log::info!("update screen: off (the update did not go through); playback resumes");
+        }
+    } else if show::connect_stage(stage) {
+        match other {
+            Some(draw) => draw(canvas),
+            None => canvas.clear(),
+        }
+        // (10: `show::CONNECT_PAIR`, a const of `connect` builds only.)
+        log::info!("remote control screen: {}", if stage == 10 { "pairing QR code" } else { "added" });
     } else {
         show::draw_update(canvas, stage);
         log::info!(

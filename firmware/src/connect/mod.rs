@@ -25,25 +25,34 @@
 //!
 //! **Parts**: [`tls`] (TCP, mbedTLS, the pinned roots, DNS), [`client`]
 //! (the session's state, gates, backoff, registration), [`dispatch`]
-//! (signed commands to the player), [`api`] (the LAN routes), and
+//! (signed commands to the player), [`pair`] (pairing windows, the QR
+//! code and the screens), [`api`] (the LAN routes), and
 //! `measure` (only with `connect-measure`: spike S0's telemetry and test
 //! hooks, never in a shipping build).
 //!
-//! **Not here yet** (Connect P1's later branches): pairing windows and the
-//! QR screen (F3: a guest's `pair` is answered `closed`; the panel, the
-//! source of truth for its windows, will send `pair-close` the moment one
-//! dies), and GIF sends
-//! (F4: `send` is `not-allowed`, chunks are dropped, `hello` says
-//! `send: false`).
+//! **Pairing** (`docs/connect-protocol.md` 6.1): `POST /api/connect/pair`
+//! opens a window ([`Pairing`]: a fresh secret, 5 minutes, one use, three
+//! tries) and answers the link; with `?qr=1` the panel shows the QR code
+//! of `https://opendmd.dev/c#<S>` too. The client announces the window
+//! (`pair-open`), checks a guest's `pair` MACs and stores the key from the
+//! turn's top level (never under the session's read path: the worker's
+//! stack), answers `paired`, and says `pair-close` the moment a window
+//! dies. The QR and "Remote control added" screens are drawn by the main
+//! task from a [`Screen`] the client sends (`Command::ConnectScreen`).
+//!
+//! **Not here yet** (Connect P1's F4): GIF sends (`send` is
+//! `not-allowed`, chunks are dropped, `hello` says `send: false`).
 
 pub mod api;
 mod client;
 mod dispatch;
 #[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 mod measure;
+mod pair;
 mod tls;
 
 pub use client::Client;
+pub use opendmd_core::connect::pair::Window;
 
 /// What the client reaches the player through (the worker's handles).
 #[optimize(size)]
@@ -179,6 +188,39 @@ pub enum Store {
     Forget,
 }
 
+/// An open pairing window (`POST /api/connect/pair`): the core's window
+/// (the secret, its time, its tries), whether the panel shows its QR code,
+/// and its number (each new window a new one: the client's announcement
+/// and screen follow it).
+pub struct Pairing {
+    pub win: Window,
+    pub qr: bool,
+    pub seq: u32,
+}
+
+/// What the panel shows for Remote control instead of playing
+/// (`Command::ConnectScreen`; `None` takes it down).
+pub enum Screen {
+    /// The pairing QR code (computed on CPU0), until the window dies.
+    Pair(Box<opendmd_core::connect::qr::Qr>),
+    /// "Remote control added", with the new device's name, for
+    /// [`ADDED_FOR`].
+    Added(String),
+}
+
+/// How long a pairing window stays open: the protocol's 5 minutes (an
+/// emulator image: `OPENDMD_CONNECT_PAIR_TTL_S`, its lane's shorter one).
+#[cfg(feature = "connect-test")]
+pub const PAIR_TTL: Duration = match option_env!("OPENDMD_CONNECT_PAIR_TTL_S") {
+    Some(v) => Duration::from_secs(client::parse_u64(v)),
+    None => opendmd_core::connect::pair::PAIR_TTL,
+};
+#[cfg(not(feature = "connect-test"))]
+pub const PAIR_TTL: Duration = opendmd_core::connect::pair::PAIR_TTL;
+
+/// How long "Remote control added" stays up.
+pub const ADDED_FOR: Duration = Duration::from_secs(10);
+
 /// What the client and the LAN routes share. Changes bump [`Shared::gen`];
 /// the client acts on them at its next turn (sends `keys` or `info`, or
 /// says `forget` and drops the identity).
@@ -198,6 +240,11 @@ pub struct Shared {
     pub start_now: bool,
     /// A store is being made (one at a time).
     pub storing: bool,
+    /// The pairing window, if one was opened (it may have died since: the
+    /// client drops it at its next turn and says `pair-close`).
+    pub pairing: Option<Pairing>,
+    /// The last window's number.
+    pub pair_seq: u32,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -267,6 +314,8 @@ pub fn init(s: Stored) {
         forget: false,
         start_now: false,
         storing: false,
+        pairing: None,
+        pair_seq: 0,
     });
 }
 

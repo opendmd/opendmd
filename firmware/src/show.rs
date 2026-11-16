@@ -175,6 +175,17 @@ pub const INSTALLING: u8 = 2;
 /// Installing, with an updater in `ota_0` that leaves the panel dark
 /// (`crate::ota::updater_lights_panel` false): the screen says so.
 pub const INSTALLING_DARK: u8 = 3;
+/// Remote control's screens on the same path (`main::update_screen`):
+/// the pairing QR code, and "Remote control added" (`connect::Screen`,
+/// sent by the network worker). A firmware update's stages win over them.
+#[cfg(feature = "connect")]
+pub const CONNECT_PAIR: u8 = 10;
+#[cfg(feature = "connect")]
+pub const CONNECT_ADDED: u8 = 11;
+/// One of Remote control's stages (not an update's).
+pub fn connect_stage(stage: u8) -> bool {
+    stage >= 10
+}
 static STAGE: AtomicU8 = AtomicU8::new(NO_UPDATE);
 /// The version being installed (the bundle's, at most 32 bytes as its
 /// header holds it): written before [`STAGE`] goes up, read by the main

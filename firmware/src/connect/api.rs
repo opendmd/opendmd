@@ -1,29 +1,56 @@
-//! Remote control's LAN routes (`docs/api.md` "Remote control"; the API
-//! key applies to them as to every `/api/` route):
+//! Remote control's LAN routes (`docs/api.md` "Remote control"). Every one
+//! is under `/api/`, so `httpd::gate` asks for the API key where one is set
+//! (`access::needs_key`) before any of these runs, the pairing route
+//! included: it is no weaker than the rest of the LAN API.
 //!
 //! - `GET /api/connect`: whether it is on, its state, the controllers
-//!   (labels and dates stay on the panel; never the panel's secret).
-//! - `PUT /api/connect` `{"enabled":bool}`: the switch (on starts at once).
+//!   (labels and dates stay on the panel; never the panel's secret), an
+//!   open pairing window's time left (never its secret).
+//! - `PUT /api/connect` `{"enabled":bool}` and/or `{"name":str}`: the
+//!   switch (on starts at once; off closes any pairing window), the
+//!   panel's name (`""`: its hostname).
+//! - `POST /api/connect/pair[?qr=1]`: a new pairing window (any open one
+//!   goes); the answer's `link` carries the secret, for this caller only.
+//!   With `qr=1` the panel shows the QR code until the window dies.
+//! - `DELETE /api/connect/pair`: the window goes (and the QR code).
 //! - `POST /api/connect/forget`: a new identity; every controller goes.
 //! - `DELETE /api/connect/controllers/<k>`: one controller goes.
 //!
-//! Pairing (`POST /api/connect/pair`, `DELETE /api/connect/pair`) comes
-//! with P1's F3.
+//! The routes only make the secret (random bytes and base32) and change
+//! the shared state: hashing it (`pair_id`), the QR code and the MAC checks
+//! run on the network worker, at its turn's top level.
 
-use super::{change, shared, Store};
+use super::client::core_now;
+use super::{change, shared, Pairing, Store, Window, PAIR_TTL};
 use crate::http::Ctx;
-use crate::httpd::{json_string, Method, Respond, Server};
+use crate::httpd::{json_string, query_param, Method, Respond, Server};
 use opendmd_core::connect::codec::unhex;
-use opendmd_core::connect::keys::KeyList;
+use opendmd_core::connect::json::Value;
+use opendmd_core::connect::keys::{clean_text, KeyList};
+use opendmd_core::connect::pair::secret_from_random;
+use opendmd_core::connect::proto::MAX_NAME_CHARS;
 use std::sync::Arc;
 
+/// The links a pairing secret goes in (`docs/connect-protocol.md` 6.1).
+pub const LINK: &str = "https://opendmd.dev/connect/#pair=";
+pub const QR_LINK: &str = "https://opendmd.dev/c#";
 
 /// `GET /api/connect`'s body.
 #[optimize(size)]
 #[inline(never)]
 fn connect_json() -> String {
-    let (on, registered, controllers, name) = shared(|s| (s.on, s.identity.is_some(), s.keys.controllers_result(|_| None), s.name.clone())).unwrap_or((false, false, "[]".into(), String::new()));
-    format!(r#"{{"enabled":{on},"registered":{registered},"name":{},"controllers":{controllers},"pairing":null,{}}}"#, json_string(&name), super::lite_fields())
+    let now = core_now();
+    let (on, registered, controllers, name, pairing) = shared(|s| {
+        let pairing = s.pairing.as_ref().and_then(|p| p.win.left(now).map(|l| format!(r#"{{"expires_s":{},"qr":{}}}"#, l.as_secs(), p.qr)));
+        (s.on, s.identity.is_some(), s.keys.controllers_result(|_| None), s.name.clone(), pairing)
+    })
+    .unwrap_or((false, false, "[]".into(), String::new(), None));
+    format!(
+        r#"{{"enabled":{on},"registered":{registered},"name":{},"controllers":{controllers},"pairing":{},{}}}"#,
+        json_string(&name),
+        pairing.as_deref().unwrap_or("null"),
+        super::lite_fields()
+    )
 }
 
 /// What a store's failure answers.
@@ -37,6 +64,29 @@ fn refused(req: &mut crate::httpd::Req, e: &str) -> anyhow::Result<()> {
     req.error(500, "500 Internal Server Error", e)
 }
 
+/// `PUT /api/connect`'s body: `enabled` and/or `name`, nothing else.
+#[optimize(size)]
+#[inline(never)]
+fn put_body(body: &[u8]) -> Option<(Option<bool>, Option<String>)> {
+    let v = opendmd_core::connect::json::parse(body).ok()?;
+    let Value::Object(ref m) = v else { return None };
+    if m.is_empty() || m.iter().any(|(k, _)| k != "enabled" && k != "name") {
+        return None;
+    }
+    let on = match v.get("enabled") {
+        None => None,
+        Some(e) => Some(e.as_bool()?),
+    };
+    let name = match v.get("name") {
+        None => None,
+        // "" puts the hostname back; anything else is cleaned as a
+        // controller's `name` command is.
+        Some(n) if n.as_str()?.trim().is_empty() => Some(String::new()),
+        Some(n) => Some(clean_text(n.as_str()?, 4 * MAX_NAME_CHARS, MAX_NAME_CHARS)?),
+    };
+    Some((on, name))
+}
+
 #[optimize(size)]
 #[inline(never)]
 pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
@@ -47,25 +97,67 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
         let Some(body) = crate::http::json_body(req)? else {
             return Ok(());
         };
-        // `{"enabled": bool}` and nothing else, read by the protocol's strict
-        // JSON reader (no serde derive for one field).
-        let v = opendmd_core::connect::json::parse(&body).ok();
-        let on = match v.as_ref().and_then(|v| v.get("enabled")).and_then(|e| e.as_bool()) {
-            Some(on) if matches!(v, Some(opendmd_core::connect::json::Value::Object(ref m)) if m.len() == 1) => on,
-            _ => return req.bad_request(r#"the body is {"enabled": true|false}"#),
+        let Some((on, name)) = put_body(&body) else {
+            return req.bad_request(r#"the body is {"enabled": true|false} and/or {"name": "..."} (up to 32 characters; "" for the hostname)"#);
         };
-        match change(&c.cmd, move |_| Ok((Store::On(on), on)), |s, on| {
-            s.on = on;
-            // On from Settings: at once (no hold, no backoff; after two
-            // crashes too).
-            s.start_now = on;
-        }) {
-            Ok(()) => {
-                log::info!("connect: Remote control switched {}", if on { "on" } else { "off" });
-                req.json(&connect_json())
+        if let Some(name) = name {
+            if let Err(e) = change(&c.cmd, move |_| Ok((Store::Name(name.clone()), name)), |s, n| {
+                s.name = n;
+                s.name_changed = true;
+            }) {
+                return refused(req, &e);
             }
-            Err(e) => refused(req, &e),
+            log::info!("connect: the panel renamed on the LAN");
         }
+        if let Some(on) = on {
+            if let Err(e) = change(&c.cmd, move |_| Ok((Store::On(on), on)), |s, on| {
+                s.on = on;
+                // On from Settings: at once (no hold, no backoff; after two
+                // crashes too). Off: no window stays open.
+                s.start_now = on;
+                if !on {
+                    s.pairing = None;
+                }
+            }) {
+                return refused(req, &e);
+            }
+            log::info!("connect: Remote control switched {}", if on { "on" } else { "off" });
+        }
+        req.json(&connect_json())
+    })?;
+
+    server.route("/api/connect/pair", Method::Post, #[optimize(size)] move |req| {
+        let qr = query_param(req.query(), "qr").as_deref() == Some("1");
+        // 100 random bits; nothing here hashes it (the worker does).
+        let secret = secret_from_random(&super::tls::random::<13>());
+        let link = format!("{LINK}{secret}");
+        let now = core_now();
+        let opened = shared(move |s| {
+            if !s.on {
+                return false;
+            }
+            s.pair_seq = s.pair_seq.wrapping_add(1);
+            s.pairing = Some(Pairing { win: Window::open_for(secret, now, PAIR_TTL), qr, seq: s.pair_seq });
+            s.gen = s.gen.wrapping_add(1);
+            true
+        })
+        .unwrap_or(false);
+        if !opened {
+            req.header("Cache-Control", "no-store")?;
+            return req.error(409, "409 Conflict", "Remote control is off: switch it on first");
+        }
+        crate::wake::kick();
+        let online = super::lite(|l| l.state == "open");
+        log::info!("connect: a pairing window opened on the LAN{}", if qr { ", its QR code on the panel" } else { "" });
+        req.header("Cache-Control", "no-store")?;
+        req.json(&format!(r#"{{"link":{},"expires_s":{},"qr":{qr},"online":{online}}}"#, json_string(&link), PAIR_TTL.as_secs()))
+    })?;
+
+    server.route("/api/connect/pair", Method::Delete, #[optimize(size)] move |req| {
+        if shared(|s| s.pairing.take().is_some()).unwrap_or(false) {
+            log::info!("connect: the pairing window closed on the LAN");
+        }
+        req.json(&connect_json())
     })?;
 
     let c = ctx.clone();
@@ -75,6 +167,7 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
             s.keys = KeyList::new();
             s.keys_changed = true;
             s.forget = true;
+            s.pairing = None;
         }) {
             Ok(()) => {
                 log::info!("connect: identity forgotten, every controller removed");
