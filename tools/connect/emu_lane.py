@@ -75,6 +75,8 @@ HOST = "connect.test"
 # The image's pairing window (Makefile EMU_CONNECT_PAIR_TTL_S).
 PAIR_TTL_S = int(os.environ.get("EMU_CONNECT_PAIR_TTL_S", "90"))
 SCREEN = re.compile(r"remote control screen: (pairing QR code|added|off)")
+CANVAS = re.compile(r"remote control screen: canvas ([0-9a-f]{8}), brightness (\d+)")
+PAIR_BRIGHTNESS = 96
 LANE_KEY = "emu-lane-api-key-0123"
 PORT = 8080
 CTL_PORT = 8787
@@ -551,6 +553,8 @@ class Lane:
             await self.wait("refused", lambda: self._info(lambda i: i.get("refused") is True), 300)
             st = await self.status()
             self.ok("4403: refused, Settings told to set up again", f"state {(st.get('connect') or {}).get('state')!r}")
+            code, _ = await self.http("POST", "/api/connect/pair")
+            self.expect(code == 409, "red: POST /api/connect/pair while refused: 409, no window", f"{code}")
             await asyncio.sleep(20)
             self.expect(self.panel_ws() is None, "4403: no attempt on the normal schedule", "")
             await self.http("PUT", "/api/connect", {"enabled": True})
@@ -619,10 +623,22 @@ class Lane:
             st_on = await self.status()
             self.report["heap_idle"] = {"off": st_off.get("heap"), "on_idle": st_on.get("heap")}
 
-            # Forget: the old identity says forget; a new one is made.
+            # Forget: the old identity says forget; a new one is made. An
+            # open window is closed at the server first.
             regs = self.srv.registered
+            await asyncio.sleep(1.5)
+            mark = len(self.srv.said)
+            fsecret, _ = await self.open_window()
+            fpid = odc.pair_id(fsecret).hex()
+            await self.panel_says("pair-open before the forget", "pair-open", mark, lambda m: m.get("pair_id") == fpid)
+            mark = len(self.srv.said)
             code, info = await self.http("POST", "/api/connect/forget")
             self.expect(code == 200, "POST /api/connect/forget", f"{code}")
+            await self.panel_says("forget said", "forget", mark)
+            said = self.srv.said[mark:]
+            ci = next((i for i, m in enumerate(said) if m.get("t") == "pair-close" and m.get("pair_id") == fpid), None)
+            fi = next((i for i, m in enumerate(said) if m.get("t") == "forget"), None)
+            self.expect(ci is not None and fi is not None and ci < fi, "forget: the open window's pair-close, then forget", f"pair-close at {ci}, forget at {fi}")
             await self.wait("a new identity", lambda: self._dev_changed(dev), 900)
             new_dev = next(iter(self.srv.panels))
             self.expect(dev not in self.srv.panels and self.srv.registered == regs + 1, "forget: the old record deleted, a new id registered", odc.dev_text(new_dev))
@@ -725,6 +741,26 @@ class Lane:
         pid = odc.pair_id(secret).hex()
         await self.panel_says("pair-open for the window", "pair-open", mark, lambda m: m.get("pair_id") == pid)
         await self.screen_says("pairing QR code", line)
+        # Red: commands while the QR code is up never paint over it, and its
+        # brightness stays the screen's own.
+        async def first_canvas():
+            hits = self.emu.find(CANVAS, line)
+            return hits[0][1].groups() if hits else None
+        crc0, b0 = await self.wait("the QR screen's canvas line", first_canvas, 120, every=1)
+        cfg = (await self.http("GET", "/api/config"))[1] or {}
+        mx = cfg.get("max_brightness", 255)
+        self.expect(int(b0) == min(PAIR_BRIGHTNESS, mx), "the QR code at its fixed mid brightness", f"brightness {b0}")
+        st = await self.status()
+        path = (st.get("now_playing") or {}).get("next") or "@formula:starfield"
+        c_play, _ = await self.http("POST", "/api/play", {"path": path})
+        c_bright, _ = await self.http("PUT", "/api/config", {"brightness": min(200, mx)})
+        await asyncio.sleep(1.5)
+        c_play2, _ = await self.http("POST", "/api/play", {"path": "@formula:starfield"})
+        await asyncio.sleep(8)
+        seen = [m.groups() for _, m in self.emu.find(CANVAS, line)]
+        self.expect(all(c == crc0 and int(b) == int(b0) for c, b in seen) and (await self.connect_info()).get("pairing", {}).get("qr") is True,
+                    "red: a play, a brightness and a Formula while the QR code is up: the picture and its brightness unchanged",
+                    f"play {c_play}/{c_play2}, brightness {c_bright}; canvas lines {seen}")
         info = await self.connect_info()
         self.expect((info.get("pairing") or {}).get("qr") is True and secret not in json.dumps(info), "GET /api/connect: the window, its QR, never its secret", json.dumps(info.get("pairing")))
         g1 = Controller(self.ctl_base, dev, "Den phone")

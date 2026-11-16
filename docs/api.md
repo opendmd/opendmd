@@ -927,7 +927,8 @@ times a day). The panel's secret is never shown.
 
 ### PUT /api/connect
 
-`{"enabled": bool}` and/or `{"name": "…"}`; anything else is a `400`.
+`{"enabled": bool}` and/or `{"name": "…"}`; anything else is a `400`
+(both are checked before either is saved).
 `enabled`: saved; on starts at once (no hold after boot, no backoff, also
 after a refusal or two crashes); off also closes any pairing window.
 `name`: the panel's name as controllers see it, up to 32 characters
@@ -943,17 +944,24 @@ curl -s -X PUT $DMD/api/connect --json '{"name":"Den panel"}'
 
 Open a pairing window: a fresh secret, good for one browser, 5 minutes and
 three tries (any window already open goes). Reply: `{"link",
-"expires_s", "qr", "online"}`, `link` being
-`https://opendmd.dev/c#<secret>`: open it in the browser to
-link (it pairs through the Connect server; `online`: the panel is
-connected to it now, else the window is announced once it is). `?qr=1`:
-the panel also shows the same link as a QR code
-until the window is used, cancelled or over, then "Remote control
-added" for 10 s after a pairing. `409` while Remote control is off. The
-API key applies (an API key is recommended before the first pairing: on
-a network without one, anyone on it could open a window). Sent with
+"expires_s", "qr", "dark", "online"}`, `link` being
+`https://opendmd.dev/c#<secret>`: open it in the browser to link (it
+pairs through the Connect server). `online`: the panel is connected to
+the server now; if not, the window is announced once it is, and the
+link only works from then. `?qr=1`: the panel also shows the same link
+as a QR code, at a fixed mid brightness, until the window is used,
+cancelled or over, then "Remote control added" for 10 s after a
+pairing. In night mode (`dark`: the panel is off for the night) no code
+is shown (`qr` false): use the link. `409` while Remote control is off,
+before the panel has its identity (a minute after switching it on), or
+while the server refuses it (`refused`, `too_old`). Sent with
 `Cache-Control: no-store`. The iPhone app pairs the same way, without
 the QR code.
+
+**Set an API key first.** A device paired here may control the panel
+and add others; on a network with no API key, anyone on the network
+could open a window and pair a device of their own. The API key applies
+to this route as to every other.
 
 ```sh
 curl -s -X POST "$DMD/api/connect/pair?qr=1"

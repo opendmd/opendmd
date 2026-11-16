@@ -936,7 +936,7 @@
   ],
   "pairing": {
     "label": "C tablet \"é\"",
-    "link": "https://opendmd.dev/connect/#pair=z5bltqg6537uvagizsvc",
+    "link": "https://opendmd.dev/c#z5bltqg6537uvagizsvc",
     "mac": "a710cd78940b618b745851978a3e5e65c7aa583ce38df874aaada9d7aabfe504",
     "mac2": "e6e233763ce99f7f6cde28d81975f7b41fb571c24b6144f21e15a744a333c395",
     "mac_for_a_rewritten_label": "e41894504dca1c08973927f7d967c599427a28795f3294bddc740f840b5f754b",

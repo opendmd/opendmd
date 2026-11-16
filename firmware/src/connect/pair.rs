@@ -18,12 +18,17 @@
 //!   then `paired {k, mac2}`, then
 //!   `pair-close`. A store that fails answers `busy`; the window is used
 //!   up either way.
+//! - **What can still be lost**: a session that ends between the store
+//!   and the answer (a read error, a close) drops `paired`: the key stays
+//!   stored (the device is listed in Settings, where it can be removed),
+//!   the controller sees no answer and asks for a new link. A store
+//!   refused `busy` twice answers `busy`.
 //! - **The screens**: the QR code while a window opened with `qr=1` is
 //!   open, then "Remote control added" for 10 s after a pairing, through
 //!   `Command::ConnectScreen` (the main task draws them).
 
 use super::api::LINK;
-use super::client::{core_now, Client, PairReq, Shown};
+use super::client::{core_now, Client, PairReq, Shown, PAIR_QUEUE};
 use super::tls::Phase;
 use super::{change, error, shared, Screen, Store, ADDED_FOR};
 use crate::state::Command;
@@ -33,12 +38,26 @@ use opendmd_core::connect::pair::{pair_id, PairError};
 use opendmd_core::connect::{proto, qr};
 use std::time::{Duration, Instant};
 
+/// A pairing whose MAC checked (the window spent), its key to store.
+pub(super) struct PairStore {
+    g: u8,
+    public: [u8; 32],
+    label: String,
+    mac2: [u8; 32],
+    /// Already tried once and refused `busy`.
+    retried: bool,
+}
+
 impl Client {
     /// The turn's pairing work (see the module's notes).
     #[optimize(size)]
     #[inline(never)]
     pub(super) fn pairing(&mut self) {
         let now = core_now();
+        // A store refused `busy` last turn: once more, then answered.
+        if let Some(p) = self.pair_store.take() {
+            self.store_paired(p);
+        }
         for r in std::mem::take(&mut self.pair_reqs) {
             self.pair_one(r, now);
         }
@@ -74,7 +93,7 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     pub(super) fn announce(&mut self, want: Option<([u8; 10], u32)>) -> Result<(), super::End> {
-        if !self.conn.as_ref().is_some_and(|c| c.phase == Phase::Open) || self.paired_due.is_some() {
+        if !self.conn.as_ref().is_some_and(|c| c.phase == Phase::Open) || !self.paired_due.is_empty() || self.pair_store.is_some() {
             // (Offline: said at the next session. A pairing's answer first.)
             return Ok(());
         }
@@ -103,11 +122,13 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn pair_one(&mut self, r: PairReq, now: Duration) {
-        let PairReq { g, public, label, mac } = r;
+        let PairReq { seq, g, public, label, mac } = r;
         let Some((dev, _)) = self.identity else { return };
+        // Checked against the window it came for: one cancelled or replaced
+        // since is closed to it.
         let checked = shared(|s| match s.pairing.as_mut() {
-            Some(p) => p.win.check(&dev.0, &public, label.as_bytes(), &mac, now),
-            None => Err(PairError::Closed),
+            Some(p) if Some(p.seq) == seq => p.win.check(&dev.0, &public, label.as_bytes(), &mac, now),
+            _ => Err(PairError::Closed),
         })
         .unwrap_or(Err(PairError::Closed));
         let answer = match checked {
@@ -121,16 +142,16 @@ impl Client {
             }
             // The window is used up. The label is cleaned only now.
             Ok(mac2) => match (clean_label(&label), usable_public_key(&public)) {
-                (Some(clean), true) => self.store_paired(g, public, clean, &mac2),
+                (Some(clean), true) => {
+                    self.store_paired(PairStore { g, public, label: clean, mac2, retried: false });
+                    return;
+                }
                 _ => {
                     log::info!("connect: a pairing's MAC was right but its label or key is not usable");
                     proto::paired_err(g, "bad-arg")
                 }
             },
         };
-        if answer.is_empty() {
-            return;
-        }
         if let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) {
             if let Err(e) = conn.text(&answer) {
                 self.end(e);
@@ -138,11 +159,16 @@ impl Client {
         }
     }
 
-    /// Store the paired key; the `paired` answer to send now, or `""` if
-    /// it waits for `keys` (then it is `paired_due`).
+    /// Store the paired key, then answer: `keys` and `paired` in the same
+    /// turn when the budget has a token (one back a second, up to 4), else
+    /// `paired` waits for `keys` (`paired_due`, `sync_out`). A store
+    /// refused `busy` (another store under way, or the main task slow to
+    /// answer) is tried once more next turn before `busy` is answered; the
+    /// window is spent either way.
     #[optimize(size)]
     #[inline(never)]
-    fn store_paired(&mut self, g: u8, public: [u8; 32], label: String, mac2: &[u8; 32]) -> String {
+    fn store_paired(&mut self, p: PairStore) {
+        let PairStore { g, public, label, mac2, retried } = p;
         let added = crate::clock::unix_valid().and_then(|t| u32::try_from(t).ok()).unwrap_or(0);
         let entry = Entry { public, flags: FLAG_CAN_ADD, label: label.clone(), added, added_by: None };
         let stored = change(
@@ -157,29 +183,42 @@ impl Client {
                 s.keys_changed = true;
             },
         );
-        if let Err(e) = stored {
-            error(format!("a pairing's key was not stored: {e}"));
-            return proto::paired_err(
-                g,
-                match e.as_str() {
-                    "Full" => "quota",
-                    "Duplicate" | "BadKey" | "BadLabel" => "bad-arg",
-                    _ => "busy",
-                },
-            );
+        let answer = match stored {
+            Err(e) if !retried && (e == "busy" || e == super::NOT_IN_TIME) => {
+                log::info!("connect: a pairing's key store: {e}; once more at the next turn");
+                self.pair_store = Some(PairStore { g, public, label, mac2, retried: true });
+                return;
+            }
+            Err(e) => {
+                error(format!("a pairing's key was not stored: {e}"));
+                proto::paired_err(
+                    g,
+                    match e.as_str() {
+                        "Full" => "quota",
+                        "Duplicate" | "BadKey" | "BadLabel" => "bad-arg",
+                        _ => "busy",
+                    },
+                )
+            }
+            Ok(()) => {
+                let k = key_id(&public);
+                log::info!("connect: a device paired on the panel (key {})", hex(&k[..4]));
+                self.added = Some((label, Instant::now() + ADDED_FOR));
+                let _ = self.sync_shared();
+                if self.paired_due.len() < PAIR_QUEUE {
+                    self.paired_due.push(proto::paired(g, &k, &mac2));
+                }
+                if let Err(e) = self.sync_out() {
+                    self.end(e);
+                }
+                return;
+            }
+        };
+        if let Some(conn) = self.conn.as_mut().filter(|c| c.phase == Phase::Open) {
+            if let Err(e) = conn.text(&answer) {
+                self.end(e);
+            }
         }
-        let k = key_id(&public);
-        log::info!("connect: a device paired on the panel (key {})", hex(&k[..4]));
-        self.added = Some((label, Instant::now() + ADDED_FOR));
-        // The new list to the server before the answer, if its budget
-        // allows now; else the answer waits for it (`sync_out`).
-        let _ = self.sync_shared();
-        let msg = proto::paired(g, &k, mac2);
-        self.paired_due = Some(msg);
-        if let Err(e) = self.sync_out() {
-            self.end(e);
-        }
-        String::new()
     }
 
     /// What the panel shows: the QR code of an open `qr=1` window, or

@@ -129,31 +129,41 @@ pub fn routes(server: &mut Server, ctx: Arc<Ctx>) -> anyhow::Result<()> {
         req.json(&connect_json())
     })?;
 
+    let c = ctx.clone();
     server.route("/api/connect/pair", Method::Post, #[optimize(size)] move |req| {
-        let qr = query_param(req.query(), "qr").as_deref() == Some("1");
+        // Night mode's dark panel shows no code: the link only.
+        let dark = c.status.lock().unwrap().mode == "off";
+        let qr = query_param(req.query(), "qr").as_deref() == Some("1") && !dark;
+        let (online, refused, too_old) = super::lite(|l| (l.state == "open", l.refused, l.too_old));
         // 100 random bits; nothing here hashes it (the worker does).
         let secret = secret_from_random(&super::tls::random::<13>());
         let link = format!("{LINK}{secret}");
         let now = core_now();
         let opened = shared(move |s| {
+            // A window nobody can reach is not opened: off, not registered
+            // yet, or refused by the server (or too old for it).
             if !s.on {
-                return false;
+                return Err("Remote control is off: switch it on first");
+            }
+            if s.identity.is_none() {
+                return Err("Remote control is not set up yet: try again in a minute");
+            }
+            if refused || too_old {
+                return Err(if refused { "opendmd.dev does not know this panel: Forget all, then link again" } else { "this panel needs a firmware update for Remote control" });
             }
             s.pair_seq = s.pair_seq.wrapping_add(1);
             s.pairing = Some(Pairing { win: Window::open_for(secret, now, PAIR_TTL), qr, seq: s.pair_seq });
             s.gen = s.gen.wrapping_add(1);
-            true
+            Ok(())
         })
-        .unwrap_or(false);
-        if !opened {
-            req.header("Cache-Control", "no-store")?;
-            return req.error(409, "409 Conflict", "Remote control is off: switch it on first");
+        .unwrap_or(Err("Remote control is not running"));
+        req.header("Cache-Control", "no-store")?;
+        if let Err(why) = opened {
+            return req.error(409, "409 Conflict", why);
         }
         crate::wake::kick();
-        let online = super::lite(|l| l.state == "open");
         log::info!("connect: a pairing window opened on the LAN{}", if qr { ", its QR code on the panel" } else { "" });
-        req.header("Cache-Control", "no-store")?;
-        req.json(&format!(r#"{{"link":{},"expires_s":{},"qr":{qr},"online":{online}}}"#, json_string(&link), PAIR_TTL.as_secs()))
+        req.json(&format!(r#"{{"link":{},"expires_s":{},"qr":{qr},"dark":{dark},"online":{online}}}"#, json_string(&link), PAIR_TTL.as_secs()))
     })?;
 
     server.route("/api/connect/pair", Method::Delete, #[optimize(size)] move |req| {

@@ -322,6 +322,10 @@ pub fn init(s: Stored) {
 /// How long a store waits for the main task to take it, then to answer.
 const STORE_TAKE: Duration = Duration::from_millis(800);
 const STORE_ANSWER: Duration = Duration::from_secs(3);
+/// ... and, once taken, how much longer its answer is waited for.
+const STORE_LATE: Duration = Duration::from_secs(5);
+/// A store taken but never answered.
+pub(crate) const NOT_IN_TIME: &str = "not answered in time";
 
 /// What a change does to the shared state once it is written.
 pub type Apply = Box<dyn FnOnce(&mut Shared) + Send>;
@@ -380,7 +384,18 @@ fn write(cmd: &mpsc::Sender<Command>, what: Store) -> Result<(), String> {
     match rx.answer_within(STORE_TAKE, STORE_ANSWER) {
         mpsc::Handoff::Answered(Ok(_)) => Ok(()),
         mpsc::Handoff::Answered(Err(e)) => Err(e),
-        mpsc::Handoff::Taken => Err("not answered in time".into()),
+        // Taken, not answered yet: the write is under way on the main task
+        // (a long frame or an index step ahead of it). Its answer, a while
+        // longer, so the shared state follows what NVS now holds; past that
+        // the change is not applied here (NVS wins at the next boot).
+        mpsc::Handoff::Taken => match rx.recv_timeout(STORE_LATE) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                log::warn!("connect: a store taken by the main task was not answered in {} s", (STORE_ANSWER + STORE_LATE).as_secs());
+                Err(NOT_IN_TIME.into())
+            }
+        },
         mpsc::Handoff::Withdrawn => Err("busy".into()),
     }
 }

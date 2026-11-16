@@ -392,7 +392,7 @@ fn build() -> Value {
             "mac_for_a_swapped_key": hex(&pair::pair_mac(&s, &w.dev.0, &a_pub, label.as_bytes())),
             "mac_for_a_rewritten_label": hex(&pair::pair_mac(&s, &w.dev.0, &c_pub, b"C tablet")),
             "message": proto_pair(&c_pub, label, &pair::pair_mac(&s, &w.dev.0, &c_pub, label.as_bytes())),
-            "link": format!("https://opendmd.dev/connect/#pair={s}"),
+            "link": format!("https://opendmd.dev/c#{s}"),
             "qr": format!("https://opendmd.dev/c#{s}"),
         },
         "invite": {

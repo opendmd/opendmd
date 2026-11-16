@@ -15,6 +15,11 @@ use crate::text::{self, Font};
 /// The quiet zone and the light modules: a plain white (the panel's
 /// brightness scales it).
 pub const LIGHT: Rgb = Rgb::new(255, 255, 255);
+/// The panel's brightness while the QR code is up, whatever the setting
+/// (under `max_brightness`): mid, so the lit quiet zone neither blooms
+/// into the dark modules nor fades on a camera (P1-PLAN 10.3; the rig's
+/// scan, D6, settles it).
+pub const PAIR_BRIGHTNESS: u8 = 96;
 /// The code's top-left module.
 pub const QR_X: usize = 4;
 pub const QR_Y: usize = 1;
