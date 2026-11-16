@@ -511,13 +511,9 @@ fn run(task: BootTask) {
                 None
             }
             Mount::Failed(e) if health.capped => {
-                publish(
-                    &status,
-                    None,
-                    false,
-                    Some(sdhealth::capped_error(remounts, Some(&e))),
-                    bus.attempts(),
-                );
+                // A card that needs its power cut says only that.
+                let e = if crate::sd::stuck() { e } else { sdhealth::capped_error(remounts, Some(&e)) };
+                publish(&status, None, false, Some(e), bus.attempts());
                 None
             }
             Mount::Failed(e) => {

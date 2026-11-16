@@ -3790,9 +3790,11 @@ fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
     s.title.clear();
 }
 
-/// A restart for the card's sake: the cache builder out of its card
-/// write, then [`restart`].
+/// A restart for the card's sake: uploads, OTA staging and Connect sends
+/// stopped and their files closed (`sd::stop_transfers`), the cache
+/// builder out of its card write, then [`restart`].
 fn restart_for_card(why: Reason) -> ! {
+    sd::stop_transfers(Duration::from_secs(3));
     cache_builder::quiesce(Duration::from_secs(3));
     restart(why)
 }
@@ -3820,7 +3822,11 @@ pub fn restart(why: Reason) -> ! {
             flush();
         }
     }
-    log::info!("restarting (panel off): {}", why.name());
+    // No reset mid-transfer: the card's I/O lock is taken (the transfer in
+    // flight ends first) and kept, so none starts. A card left in the
+    // middle of one can stay silent to every command until its power goes.
+    let held = cardspeed::hold_for_restart(Duration::from_secs(2));
+    log::info!("restarting (panel off{}): {}", if held { "" } else { "; a card transfer still in flight" }, why.name());
     if !logring::flush(config::RESTART_LOG_FLUSH) {
         log::warn!("log ring not drained before the restart");
     }

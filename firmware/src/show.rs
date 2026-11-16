@@ -81,8 +81,10 @@ const EMPTY_PLAYLIST: &str = "The playlist is empty";
 const CARD_UNREADABLE: &str = "Card unreadable: format in app";
 /// ... and while it does.
 const CARD_FORMATTING: &str = "Formatting the card";
+/// ... and when it has stopped answering until its power goes (`sd.stuck`).
+const CARD_STUCK: &str = "Card stuck: unplug power 10 s";
 // The small font's 4 px advance: 32 characters fill the 128 px panel.
-const _: () = assert!(CARD_UNREADABLE.len() <= 32 && CARD_FORMATTING.len() <= 32);
+const _: () = assert!(CARD_UNREADABLE.len() <= 32 && CARD_FORMATTING.len() <= 32 && CARD_STUCK.len() <= 32);
 /// How often the text is read from status.
 const TEXT_EVERY: Duration = Duration::from_millis(250);
 
@@ -153,7 +155,9 @@ impl Text {
 /// A mount error in plain words. Without a card-detect pin a missing card
 /// and one that does not answer look the same (a command timeout).
 fn plain(e: &str) -> &'static str {
-    if e.starts_with("card failed repeatedly") {
+    if e == opendmd_core::sd_check::NOT_ANSWERING {
+        CARD_STUCK
+    } else if e.starts_with("card failed repeatedly") {
         "The card keeps failing"
     } else if e.contains("FAT") {
         "The card can't be read"

@@ -1401,6 +1401,14 @@ impl Upload {
         if self.received >= self.len || buf.is_empty() {
             return Ok(0);
         }
+        // A restart for the card's sake: the upload ends here, cleanly.
+        if crate::sd::restarting() {
+            return Err(BodyError {
+                status: Some((503, "503 Service Unavailable")),
+                what: "the display is restarting".to_string(),
+            }
+            .into());
+        }
         let want = ((self.len - self.received) as usize).min(buf.len());
         if self.pos < self.prefix.len() {
             let n = want.min(self.prefix.len() - self.pos);

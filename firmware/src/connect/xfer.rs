@@ -460,6 +460,9 @@ impl Client {
         if super::TEST_FAIL_WRITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
             return Err(std::io::Error::other("a write failed (the lane's switch)"));
         }
+        if crate::sd::restarting() {
+            return Err(std::io::Error::other("the display is restarting"));
+        }
         if self.xfer.out.as_ref().is_some_and(|o| o.copy != copy) {
             self.xfer.out = None;
         }

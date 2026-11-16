@@ -139,6 +139,29 @@ pub fn init(mode: CardSpeed) {
     MODE.store(mode.as_u8(), Relaxed);
 }
 
+/// A restart is about to reset the chip (`crate::restart`): wait up to
+/// `timeout` for the card transfer in flight to end, then keep [`IO`] for
+/// good, so the reset never lands in the middle of one and none starts
+/// after. `false`: one was still going (a card that stopped answering
+/// mid-command); the restart goes ahead.
+pub fn hold_for_restart(timeout: std::time::Duration) -> bool {
+    let t = std::time::Instant::now();
+    loop {
+        match IO.try_lock() {
+            Ok(g) => {
+                core::mem::forget(g);
+                return true;
+            }
+            Err(std::sync::TryLockError::Poisoned(p)) => {
+                core::mem::forget(p.into_inner());
+                return true;
+            }
+            Err(std::sync::TryLockError::WouldBlock) if t.elapsed() >= timeout => return false,
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+}
+
 /// The card lost its SPI device in a failed clock change: the main task
 /// restarts (in `fast` the slow-clock record is already in RTC
 /// memory, so the next boot mounts at the safe clock).
@@ -213,7 +236,7 @@ static YIELD_US: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" fn d_read(pdrv: u8, buff: *mut u8, sector: u32, count: u32) -> DRESULT {
     READERS.fetch_add(1, Relaxed);
-    let r = transfer(false, &mut || ff_sdmmc_read(pdrv, buff, sector, count) == DRESULT_RES_OK);
+    let r = transfer(false, &mut || sectors(pdrv, false, buff, sector, count));
     READERS.fetch_sub(1, Relaxed);
     r
 }
@@ -227,13 +250,57 @@ unsafe extern "C" fn d_write(pdrv: u8, buff: *const u8, sector: u32, count: u32)
         let n = (count - done).min(WRITE_CHUNK);
         // SAFETY: within the caller's `count` sectors.
         let (b, at) = (buff.add(done as usize * 512), sector + done);
-        let r = transfer(true, &mut || ff_sdmmc_write(pdrv, b, at, n) == DRESULT_RES_OK);
+        let r = transfer(true, &mut || sectors(pdrv, true, b.cast_mut(), at, n));
         if r != DRESULT_RES_OK {
             return r;
         }
         done += n;
     }
     DRESULT_RES_OK
+}
+
+/// One read or write of `count` sectors, under [`IO`]: the IDF's own
+/// (`sdmmc_{read,write}_sectors`, what `ff_sdmmc_read`/`ff_sdmmc_write` call),
+/// so a failure's `esp_err_t` is kept (`sdhealth::io_failed`: RTC memory,
+/// for status and across the restart a trip makes) instead of only logged.
+/// While unmounting (no card here any more) the IDF's FatFs functions,
+/// which still have it.
+unsafe fn sectors(pdrv: u8, write: bool, buff: *mut u8, sector: u32, count: u32) -> bool {
+    let card = CARD.load(Relaxed);
+    if card.is_null() {
+        let r = if write { ff_sdmmc_write(pdrv, buff, sector, count) } else { ff_sdmmc_read(pdrv, buff, sector, count) };
+        return r == DRESULT_RES_OK;
+    }
+    let err = if write {
+        esp_idf_sys::sdmmc_write_sectors(card, buff.cast_const().cast(), sector as _, count as _)
+    } else {
+        esp_idf_sys::sdmmc_read_sectors(card, buff.cast(), sector as _, count as _)
+    };
+    if err == esp_idf_sys::ESP_OK {
+        return true;
+    }
+    let fault = opendmd_core::sd_check::IoFault {
+        write,
+        cmd: opendmd_core::sd_check::cmd_for(write, count, dma_capable(buff)),
+        sector,
+        count,
+        err,
+        khz: KHZ.load(Relaxed),
+    };
+    sdhealth::io_failed(&fault);
+    log::warn!("microSD: {}", fault.note());
+    false
+}
+
+/// Would the IDF move `buf` by DMA (4-aligned, internal DRAM), i.e. send
+/// one multi-block command rather than a sector at a time?
+fn dma_capable(buf: *const u8) -> bool {
+    let a = buf as usize;
+    #[cfg(esp32s3)]
+    let dram = 0x3fc8_8000..0x3fd0_0000;
+    #[cfg(not(esp32s3))]
+    let dram = 0x3ffa_e000..0x4000_0000;
+    a.is_multiple_of(4) && dram.contains(&a)
 }
 
 /// Between a write's chunks, the I/O lock free: let the reads waiting for
@@ -674,13 +741,9 @@ pub fn probe_soon(delay: std::time::Duration) {
 /// [`transfer`] (so an error slows the card down as any would).
 fn read_raw(buf: &mut [u32], sector: u32, count: u32) -> bool {
     transfer(false, &mut || {
-        let card = CARD.load(Relaxed);
-        // SAFETY: under `IO` (held by `transfer`), so `card` is the
+        // SAFETY: under `IO` (held by `transfer`), so `CARD` is the
         // mounted card or null; `buf` holds `count` sectors.
-        !card.is_null()
-            && unsafe {
-                esp_idf_sys::sdmmc_read_sectors(card, buf.as_mut_ptr().cast(), sector as _, count as _)
-            } == esp_idf_sys::ESP_OK
+        !CARD.load(Relaxed).is_null() && unsafe { sectors(0, false, buf.as_mut_ptr().cast(), sector, count) }
     }) == DRESULT_RES_OK
 }
 
