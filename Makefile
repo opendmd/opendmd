@@ -1654,7 +1654,6 @@ S3_FLASH_CMD_app = espflash flash --chip esp32s3 --port $(PORT) --baud $(S3_FLAS
 S3_FLASH_CMD = $(S3_FLASH_CMD_$(S3_FLASH))
 
 fw-s3-image:
-	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
 	@$(if $(filter connect-test,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),{ echo "S3_IMAGE=$(S3_IMAGE): connect-test is the emulator lane's only"; exit 1; },true)
 	@$(if $(S3_ON_WIFI),test -f "$(S3_CREDENTIALS)" || { echo "no $(S3_CREDENTIALS): S3_CREDENTIALS=<a file like firmware/.env.example>"; exit 2; },true)

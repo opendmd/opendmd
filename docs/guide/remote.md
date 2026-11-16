@@ -187,7 +187,8 @@ devices for when you switch it back on.
   registered; the public keys of the devices you linked (their names stay
   on the display, and the relay only passes them on); the name you gave the
   display; and, for today's limit, how much it received and a fingerprint
-  of each GIF sent, cleared the next day.
+  of each GIF sent that day (replaced the next time you send on a later
+  day).
 - **What it sees on the way**, and doesn't keep: the addresses your display
   and your phone connect from (part of each address is used for a moment
   to limit how often anyone can connect), the display's firmware version,
