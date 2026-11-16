@@ -35,6 +35,10 @@ Sprites from your own pictures.
 - Now's preview of a Formula that never repeats draws the same picture as
   the panel, and knows a Formula you showed on the panel from another one
   shown there since, even one with the same name.
+- A card that stops answering after a restart is now named for what it is:
+  the panel and the web app say to unplug the power for 10 seconds instead
+  of asking for a card, and restarts no longer cut a card off part way
+  through a write.
 
 ## 1.1.0-beta.2 · 2026-11-11
 

@@ -145,10 +145,11 @@ function mountDevice(el) {
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
   // A card the panel can't read (exFAT, as most cards over 32 GB come): say
-  // so, with the way out (js/card.js, imported when first used).
+  // so, with the way out (js/card.js, imported when first used). A card that
+  // has stopped answering (`sd.stuck`): the device's advice, to cut the power.
   const sdText = h('span.grow.bad', { id: 'now-sd-text' });
-  const sdLine = h('div.row', { id: 'now-sd', hidden: true, style: 'margin-top:12px' }, sdText,
-    h('button.sm', { id: 'now-format', onclick: () => import('./card.js').then((m) => m.formatCard()) }, 'Format card…'));
+  const fmtBtn = h('button.sm', { id: 'now-format', onclick: () => import('./card.js').then((m) => m.formatCard()) }, 'Format card…');
+  const sdLine = h('div.row', { id: 'now-sd', hidden: true, style: 'margin-top:12px' }, sdText, fmtBtn);
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
@@ -370,8 +371,10 @@ function mountDevice(el) {
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
     if (b) clear(banner, b);
-    sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
-    sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
+    const stuck = !sd.mounted && !!sd.stuck;
+    sdLine.hidden = !stuck && !unreadable;
+    fmtBtn.hidden = stuck;
+    sdText.textContent = stuck ? sd.error : sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
     nocard = !sd.mounted && !np.path && !!(sd.attempts || sd.error);
     still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
