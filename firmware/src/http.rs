@@ -249,7 +249,7 @@ fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &
 
 /// `/api/play` and `/api/play/formula`: hand the play to the main task and
 /// answer as it replies.
-fn send_play(req: &mut Req, c: &Ctx, path: String, live: bool, over: bool, psb: Option<Vec<u8>>) -> Result<()> {
+fn send_play(req: &mut Req, c: &Ctx, path: String, live: bool, over: bool, psb: Option<(Vec<u8>, u32)>) -> Result<()> {
     let ok = format!(
         r#"{{"ok":true,"path":{}{}}}"#,
         json_string(&path),
@@ -2798,7 +2798,7 @@ fn applied_json(a: &Applied) -> String {
 fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::Write) {
     let _ = write!(
         out,
-        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{},"next":{}}},"paused":{},"transfer":{},"#,
+        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}{},"next":{}}},"paused":{},"transfer":{},"#,
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),
@@ -2806,6 +2806,7 @@ fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::
         s.frame,
         formula_json(&s.path),
         kept_json(s),
+        identity_json(s),
         opt_json((!s.next.is_empty()).then_some(s.next.as_str())),
         s.paused,
         stream::transfers() > 0 || stream::uploads() > 0,
@@ -2856,8 +2857,9 @@ fn event_json(s: &Status, brightness: u8, ev: &mut crate::events::Event) {
     drop(formula);
     let _ = write!(
         ev,
-        r#"{},"next":{}}},"paused":{},"entries":{},"manifest":{},"index_state":{},"brightness":{},"#,
+        r#"{}{},"next":{}}},"paused":{},"entries":{},"manifest":{},"index_state":{},"brightness":{},"#,
         kept_json(s),
+        identity_json(s),
         opt_json((!s.next.is_empty()).then_some(s.next.as_str())),
         s.paused,
         s.entries,
@@ -3042,6 +3044,26 @@ fn kept_json(s: &Status) -> String {
         Some((ordinal, secs)) if ordinal == s.ordinal => format!(r#","kept_s":{secs}"#),
         _ => String::new(),
     }
+}
+
+/// `now_playing`'s `,"seed":N` while a Formula is on screen (the seed it
+/// opened with, Q16.16: 65,536 is 1) and `,"sent":N` while the Formula
+/// sent to the panel is (`@formula:~sent`: the CRC-32 of its compiled
+/// bytes, as the handler took them); empty otherwise.
+fn identity_json(s: &Status) -> String {
+    let mut out = String::new();
+    // (Not while a title card has the path, `show.rs`.)
+    let formula = opendmd_core::synth::is_formula(&s.path) || opendmd_core::synth::formula_file(&s.path).is_some();
+    if let Some(seed) = s.seed.filter(|_| formula) {
+        out = format!(r#","seed":{seed}"#);
+    }
+    match s.sent {
+        Some((ordinal, crc)) if ordinal == s.ordinal && opendmd_core::synth::is_sent(&s.path) => {
+            out += &format!(r#","sent":{crc}"#);
+        }
+        _ => {}
+    }
+    out
 }
 
 /// The compiled Formulas this player plays (`opendmd_psi::psb::ABI`; null
@@ -3844,5 +3866,7 @@ fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         if len == 0 || got < len {
             return req.bad_request("the body is the compiled Formula (Content-Length bytes)");
         }
-        send_play(req, c, path, live, over, Some(psb))
+        // Its identity, here on CPU0 (~0.1 ms for 16 KB): `now_playing.sent`.
+        let crc = opendmd_core::www_pack::crc32(&psb);
+        send_play(req, c, path, live, over, Some((psb, crc)))
     }

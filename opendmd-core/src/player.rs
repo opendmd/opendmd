@@ -642,6 +642,15 @@ impl<R: Read + io::Seek> FrameSource<R> {
         }
     }
 
+    /// The `seed` of the Formula it plays ([`SynthSource::seed`](crate::synth::SynthSource::seed)).
+    #[cfg(feature = "psi")]
+    pub fn seed(&self) -> Option<i32> {
+        match &self.dec {
+            Dec::Synth(s) => s.seed(),
+            _ => None,
+        }
+    }
+
     /// Loop a virtual file in place ([`SynthSource::rewind`](crate::synth::SynthSource::rewind)):
     /// true if this is one (nothing reopened, nothing allocated), false for
     /// a GIF, which the caller rewinds and reopens.

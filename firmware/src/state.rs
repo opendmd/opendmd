@@ -284,6 +284,14 @@ pub struct Status {
     /// ordinal of its start and its seconds (`0`: until something else
     /// plays). Reported only while that start is on screen.
     pub kept: Option<(u64, u32)>,
+    /// The `seed` the Formula on screen opened with (Q16.16, 0..1), set
+    /// at each start (`Engine::seed`); `None` for anything else.
+    pub seed: Option<i32>,
+    /// The Formula sent to the panel (`@formula:~sent`): the ordinal of
+    /// the start that plays it and the CRC-32 of its compiled bytes (a
+    /// live edit: the same start, the edit's bytes). Reported only while
+    /// that start is on screen.
+    pub sent: Option<(u64, u32)>,
     pub paused: bool,
     /// The main loop's clock (`Duration`s below are since this); a handler
     /// reads it to stamp `t_ms` and to extrapolate the position.
@@ -395,6 +403,8 @@ impl Status {
             title: String::new(),
             next: String::new(),
             kept: None,
+            seed: None,
+            sent: None,
             paused: false,
             epoch,
             frame_elapsed: Duration::ZERO,
@@ -601,10 +611,11 @@ pub enum Command {
         /// Draw the formula over the file on screen instead of playing it
         /// (`formula_look::Looks::show_over`; `""` takes it off).
         over: bool,
-        /// The editor's Formula, compiled (`POST /api/play/formula`):
-        /// held as the sent one (`synth::set_sent`) before `path`
-        /// (`@formula:~sent?…`) plays.
-        psb: Option<Vec<u8>>,
+        /// The editor's Formula, compiled (`POST /api/play/formula`), and
+        /// its CRC-32 (made by the handler, on CPU0): held as the sent one
+        /// (`synth::set_sent`) before `path` (`@formula:~sent?…`) plays;
+        /// the CRC is `now_playing.sent` while it is on screen.
+        psb: Option<(Vec<u8>, u32)>,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
     /// Previous: play the entry of Recently played one older than the one on

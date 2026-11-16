@@ -1187,6 +1187,12 @@ impl PsiFx {
         self.inputs.seed = seed;
     }
 
+    /// The `seed` it plays with (Q16.16, 0..1): a preview given it draws a
+    /// `loop forever` formula's picture as the panel does.
+    pub fn seed(&self) -> i32 {
+        self.inputs.seed
+    }
+
     fn set_sliders(&mut self, s: [i32; 3]) {
         self.inputs.a = s[0];
         self.inputs.b = s[1];
