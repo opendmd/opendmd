@@ -20,7 +20,7 @@ it can be written ahead. Write for a panel's owner: GIFs, Formulas, playlists,
 the web app. No internals.
 -->
 
-## 1.1.0-beta.3 · 2026-11-13
+## 1.1.0-beta.3 · 2026-11-19
 
 Sprites from your own pictures, and Remote control to try.
 
