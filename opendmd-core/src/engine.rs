@@ -1442,8 +1442,9 @@ impl Engine {
 
     /// How long from `now` the engine needs nothing of the card or the heap
     /// beyond what it holds: until the steps ahead are due
-    /// ([`ahead_due`](Self::ahead_due), [`AHEAD_LEAD`] before the
-    /// [`turn_end`](Self::turn_end)), then the switch and its transition.
+    /// ([`ahead_due`](Self::ahead_due), [`AHEAD_LEAD`] or a shorter loop
+    /// before the [`turn_end`](Self::turn_end)), then the switch and its
+    /// transition.
     /// In a file's first loop that is up to its dwell's `max`: the loop's
     /// end may come first, and the tick that sees it ends the window (the
     /// caller asks again each tick; with a linger the switch's steps come
@@ -1473,13 +1474,14 @@ impl Engine {
     }
 
     /// The step [`ahead_step`](Self::ahead_step) would take now, if one is
-    /// due: from [`AHEAD_LEAD`] before the file on screen is expected to
-    /// end its turn ([`turn_end`](Self::turn_end)), or while it lingers at
-    /// its end; once its first frame is up and no transition runs, unless
-    /// the engine is paused, holding (a caller's sequence: what comes next
-    /// is the caller's), about to skip, or done for this turn. `None` once
-    /// the next file is as ready as it will get. The caller decides whether
-    /// it has the time (and the heap) for that step before the next frame.
+    /// due: from [`AHEAD_LEAD`] (or a shorter loop) before the file on
+    /// screen is expected to end its turn ([`turn_end`](Self::turn_end)),
+    /// or while it lingers at its end; once its first frame is up and no
+    /// transition runs, unless the engine is paused, holding (a caller's
+    /// sequence: what comes next is the caller's), about to skip, or done
+    /// for this turn. `None` once the next file is as ready as it will
+    /// get. The caller decides whether it has the time (and the heap) for
+    /// that step before the next frame.
     pub fn ahead_due(&self, now: Duration) -> Option<AheadStage> {
         if self.ahead.blocked
             || self.hold
@@ -1534,9 +1536,9 @@ impl Engine {
     /// transition, `want` and [`AHEAD_LEAD`] (looping as it would under a
     /// longer `min`); latched for the turn, so the window is not cut short
     /// when the caller stops asking half way, and only before the next
-    /// file is chosen ahead (else its copy would wait through it). The firmware asks while the
-    /// FAT index's build has had no window for a while (short GIFs that
-    /// play once give none).
+    /// file is chosen ahead (else its copy would wait through it). The
+    /// firmware asks while the FAT index's build has had no slice for a
+    /// while (short GIFs that play once give none).
     pub fn set_quiet_wanted(&mut self, want: Duration) {
         if want.is_zero() || self.hold {
             return;
