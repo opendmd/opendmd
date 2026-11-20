@@ -422,7 +422,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `wifi_eap_ttls` | `mschapv2` | TTLS's inner method: `mschapv2`, `pap`, `mschap` or `chap` (PEAP's is always MSCHAPv2) |
 | `brightness` | 0..=`max_brightness`, 96 | panel brightness |
 | `max_brightness` | 16..=255, 144 | the ceiling `brightness` may not pass |
-| `dwell_min`, `dwell_max` | seconds, 3 and 30 | how long a file stays up (below 1 reads as 1; `dwell_max` ≥ `dwell_min`, else `400`) |
+| `dwell_min`, `dwell_max` | seconds, 1 and 30 | how long a file stays up (below 1 reads as 1; `dwell_max` ≥ `dwell_min`, else `400`) |
 | `shuffle` | bool, true | shuffle the playlist |
 | `platforms` | string, `""` | comma-separated platform prefixes to play, e.g. `"MD,SNES"`; empty = all |
 | `set` | string, `""` | the playlist (see "Fields that recur") |

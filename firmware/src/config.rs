@@ -316,8 +316,9 @@ pub const SHUFFLE: bool = true;
 
 /// Dwell policy defaults, in seconds. `opendmd_core::engine::DwellPolicy`
 /// ends a GIF's turn once it has looped at least once *and* `min` has
-/// elapsed, or unconditionally at `max`.
-pub const DWELL_MIN_SECS: u64 = 3;
+/// elapsed, or unconditionally at `max`. A 1 s `min`: a GIF plays once,
+/// and only one shorter than a second loops until a second is up.
+pub const DWELL_MIN_SECS: u64 = 1;
 pub const DWELL_MAX_SECS: u64 = 30;
 
 /// How a new file comes in, unless NVS says otherwise (`transition`, as

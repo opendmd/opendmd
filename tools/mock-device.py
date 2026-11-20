@@ -726,7 +726,7 @@ DEFAULT_SETTINGS = {
     "wifi_eap_ttls": "mschapv2",
     "brightness": 96,
     "max_brightness": BRIGHTNESS_SAFE_MAX,
-    "dwell_min": 3,
+    "dwell_min": 1,
     "dwell_max": 30,
     "shuffle": True,
     "platforms": "",

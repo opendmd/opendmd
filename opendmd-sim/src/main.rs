@@ -120,7 +120,7 @@ struct Args {
     screenshot_at: u64,
 
     /// Minimum seconds to hold one GIF.
-    #[arg(long = "min-dwell", default_value_t = 3.0)]
+    #[arg(long = "min-dwell", default_value_t = 1.0)]
     min_dwell: f64,
 
     /// Maximum seconds to hold one GIF.

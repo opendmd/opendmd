@@ -335,7 +335,7 @@ impl FormulaKeep {
 impl Default for DwellPolicy {
     fn default() -> Self {
         DwellPolicy {
-            min: Duration::from_secs(3),
+            min: Duration::from_secs(1),
             max: Duration::from_secs(30),
             min_loops: 1,
         }
