@@ -702,6 +702,10 @@ struct Playing {
     loop_len: Duration,
     loop_at: Duration,
     loop_pos: Duration,
+    /// The last two loops were the same length, and the file is not a
+    /// virtual one (whose passes may vary): the next loop is taken to be
+    /// as long ([`sure_end`](Self::sure_end)).
+    loop_steady: bool,
     /// The least this turn lasts on top of its dwell's `min`, latched from
     /// [`Engine::set_quiet_wanted`] (zero: none).
     floor: Duration,
@@ -761,6 +765,7 @@ impl Playing {
             loop_len: Duration::ZERO,
             loop_at: Duration::ZERO,
             loop_pos: Duration::ZERO,
+            loop_steady: false,
             floor: Duration::ZERO,
             linger: false,
         }
@@ -769,7 +774,9 @@ impl Playing {
     /// A loop just ended at `now`: note its length.
     fn looped(&mut self, now: Duration) {
         let pos = self.frame_at + self.frame_delay;
-        self.loop_len = pos.saturating_sub(self.loop_pos);
+        let len = pos.saturating_sub(self.loop_pos);
+        self.loop_steady = !self.loop_len.is_zero() && len == self.loop_len && self.gif.kind() != "synth";
+        self.loop_len = len;
         self.loop_pos = pos;
         self.loop_at = now;
     }
@@ -813,15 +820,20 @@ impl Playing {
     }
 
     /// The soonest this turn can end under `dwell`: not before `min` (the
-    /// floor's) is up, nor before its next loop's end, which wall time
-    /// reaches no sooner than content time (a loop's length on from the
-    /// last loop's end, `min_loops` of them; in the first loop, the end of
-    /// the frame on screen), each less `WAKE_SLACK`; at `max` at the latest.
+    /// floor's) is up, nor before its next loop's end, which comes no
+    /// sooner than the frame on screen's (the next frame due, the tick that
+    /// sees the end), nor, once the last two loops were the same length
+    /// (a GIF; not a virtual file, whose passes vary), before a loop's
+    /// length on from the last loop's end (`min_loops` of them: wall time
+    /// reaches content time no sooner); each less `WAKE_SLACK`; at `max`
+    /// at the latest. (A first loop, a loop of another length than the one
+    /// before — a fallback's restart —, a live retune: the frame on screen
+    /// only.)
     fn sure_end(&self, dwell: DwellPolicy) -> Duration {
         let cap = self.started_at.saturating_add(dwell.max);
         let by_time = self.started_at.saturating_add(dwell.min.max(self.floor));
-        let by_loop = if self.loop_len.is_zero() {
-            self.started_at.saturating_add(self.frame_at + self.frame_delay)
+        let by_loop = if !self.loop_steady {
+            self.next_frame_at
         } else {
             let n = dwell.min_loops.saturating_sub(self.loops).max(1);
             self.loop_len
@@ -1319,6 +1331,7 @@ impl Engine {
             p.started_at = at;
             p.loops = 0;
             p.loop_len = Duration::ZERO;
+            p.loop_steady = false;
             p.loop_pos = p.frame_at + p.frame_delay;
             p.loop_at = at;
             p.linger = false;
@@ -2011,6 +2024,7 @@ impl Engine {
             loop_len,
             loop_at,
             loop_pos,
+            loop_steady,
             floor,
             linger,
         } = playing;
@@ -2046,6 +2060,7 @@ impl Engine {
                     loop_len,
                     loop_at,
                     loop_pos,
+                    loop_steady,
                     floor,
                     linger,
                 });
@@ -5487,5 +5502,72 @@ mod tests {
         assert_eq!(e.quiet_for(ms(600)), ms(1000) - WAKE_SLACK - ms(600));
         assert_eq!(e.ahead_due(ms(28_999)), None);
         assert_eq!(e.ahead_due(ms(29_000)), Some(AheadStage::Pick));
+    }
+
+    #[test]
+    fn the_sure_window_trusts_a_loop_only_after_two_of_the_same_length() {
+        // A 0.5 s GIF under a 0.6 s minimum with `min_loops` 4: once two
+        // loops have matched, the sure end is the fourth loop's; a loop
+        // that comes out shorter (a fallback's restart, a pass of another
+        // length) drops it back to the frame on screen.
+        let ms = Duration::from_millis;
+        let dwell = DwellPolicy { min: ms(600), max: ms(30_000), min_loops: 4 };
+        let mut e = timed_rig(2, &frames_gif(5, 10), dwell);
+        e.set_transition(Transition::NONE);
+        e.set_ahead_linger(Duration::ZERO);
+        let mut canvas = Canvas::new();
+        for t in (0..=1000).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        let p = e.current.as_ref().unwrap();
+        assert_eq!((p.loops, p.loop_len, p.loop_steady), (2, ms(500), true));
+        // Two loops to go, 0.5 s each, from the last at 1 s.
+        assert_eq!(p.sure_end(dwell), ms(2000) - WAKE_SLACK);
+        // A first loop only: the frame on screen (the next is due at 1.1 s)
+        // or `min`, whichever is later.
+        let p = e.current.as_mut().unwrap();
+        p.loop_steady = false;
+        assert_eq!(p.sure_end(dwell), ms(1100) - WAKE_SLACK);
+        // A loop shorter than the last: not steady.
+        p.loop_steady = true;
+        p.frame_at += ms(300);
+        p.looped(ms(1300));
+        assert!(!p.loop_steady && p.loop_len < ms(500));
+        assert_eq!(p.sure_end(dwell), p.next_frame_at - WAKE_SLACK);
+        assert!(e.quiet_for(ms(1050)) <= ms(1100) - ms(1050));
+    }
+
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_live_retune_keeps_the_sure_window_to_the_frame_on_screen() {
+        // A Formula played for 9 s (under a 10 s minimum), then edited
+        // live: its clock starts again, its frames' position does not.
+        // Under no minimum from then, the sure window is the frame on
+        // screen's, not 9 s on.
+        let ms = Duration::from_millis;
+        let mut e = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            DwellPolicy { min: Duration::from_secs(10), max: Duration::from_secs(30), min_loops: 1 },
+        );
+        e.set_transition(Transition::NONE);
+        let mut c = Canvas::new();
+        let a = crate::fx_psi::path("rgb(a, x, 0)", "a=0.5");
+        let b = crate::fx_psi::path("rgb(a, y, 0)", "a=1");
+        e.play_now(&a, ms(0)).unwrap();
+        e.note_sent();
+        let mut t = 0;
+        while t < 9_000 {
+            e.tick(ms(t), &mut c).unwrap();
+            t += 20;
+        }
+        e.retune(&b, ms(t), None, crate::fx_psi::Retune::Edit).unwrap().unwrap();
+        e.set_dwell(DwellPolicy { min: Duration::ZERO, max: Duration::from_secs(30), min_loops: 0 });
+        e.tick(ms(t), &mut c).unwrap();
+        let due = e.frame_due().unwrap();
+        let sure = ms(t) + e.quiet_for(ms(t));
+        assert!(sure <= due, "sure to {sure:?}, frame due {due:?}, retuned at {t} ms");
+        let p = e.current.as_ref().unwrap();
+        assert!(p.frame_at > ms(8_000), "the position runs on: {:?}", p.frame_at);
     }
 }
