@@ -2305,7 +2305,11 @@ fn main() -> Result<()> {
         // of the card or the heap (night mode "off": nothing decoded); a
         // build that has had no window for a while asks the turns for one
         // (short GIFs that play once give none).
-        fatidx::set_quiet(if off { Duration::from_secs(60) } else { eng.quiet_for(tick_now) });
+        if off {
+            fatidx::set_quiet(Duration::from_secs(60), Duration::from_secs(60));
+        } else {
+            fatidx::set_quiet(eng.quiet_for(tick_now), eng.quiet_loose_for(tick_now));
+        }
         eng.set_quiet_wanted(fatidx::quiet_wanted());
         let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();

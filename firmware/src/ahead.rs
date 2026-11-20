@@ -52,7 +52,18 @@ counters!(
     OPEN_HELD,
     // Card errors seen at the last check.
     ERRORS,
+    // Turns that lingered on their last frame for the steps
+    // (`config::AHEAD_LINGER`), the longest (µs), and those whose linger
+    // ran out (the switch opened what was left).
+    LINGERS,
+    LINGER_MAX,
+    LINGER_OUT,
+    // Times the steps waited for the FAT index's slice to leave the card.
+    SLICE_WAITS,
 );
+
+/// When the linger under way began (`uclock::now_us`, low bits; 0: none).
+static LINGER_AT: AtomicU32 = AtomicU32::new(0);
 
 /// What a step of `stage` takes from the heap, and the time it needs.
 fn needs(stage: AheadStage) -> (usize, Duration) {
@@ -68,6 +79,20 @@ fn needs(stage: AheadStage) -> (usize, Duration) {
 /// no good, and the switch's own open then counts as it always did), or if
 /// the heap is low.
 pub fn guard(eng: &mut Engine) {
+    let at = LINGER_AT.load(Relaxed);
+    if eng.is_lingering() {
+        if at == 0 {
+            LINGER_AT.store((crate::uclock::now_us() as u32).max(1), Relaxed);
+            LINGERS.fetch_add(1, Relaxed);
+        }
+    } else if at != 0 {
+        LINGER_AT.store(0, Relaxed);
+        let us = (crate::uclock::now_us() as u32).wrapping_sub(at);
+        LINGER_MAX.fetch_max(us, Relaxed);
+        if us >= config::AHEAD_LINGER.as_micros() as u32 {
+            LINGER_OUT.fetch_add(1, Relaxed);
+        }
+    }
     let held = eng.ahead_path().is_some_and(|(_, open)| open);
     let errors = crate::sdhealth::errors_seen();
     if ERRORS.swap(errors, Relaxed) != errors && held {
@@ -106,6 +131,16 @@ pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &crate::ucloc
         // what is left at the switch (as before there was a linger).
         if eng.is_lingering() {
             eng.stop_ahead();
+        }
+        return false;
+    }
+    // The index build's slice on the card stops first: the steps are due
+    // where the player's quiet window ends, and it stops at its next read
+    // once the window is closed (a lingering turn waits for it, within the
+    // linger's bound; between frames the steps come a frame later).
+    if crate::fatidx::slice_running() {
+        if eng.ahead_due(epoch.elapsed()).is_some() {
+            SLICE_WAITS.fetch_add(1, Relaxed);
         }
         return false;
     }
@@ -181,7 +216,8 @@ pub fn summary(eng: Option<&Engine>) -> String {
     let n = HELD_N.load(Relaxed);
     format!(
         ", ahead: {} ready, {} used, {} dropped (heap {}, card {}, asked {}), {} heap skips, picks used {}, \
-         held avg {} B (min {} max {}), steps {} max pick/open/parse {}/{}/{} us, overruns {}",
+         held avg {} B (min {} max {}), steps {} max pick/open/parse {}/{}/{} us, overruns {}, \
+         lingers {} (max {} us, {} ran out), waits for the index {}",
         st.ready,
         st.used,
         st.dropped,
@@ -198,5 +234,9 @@ pub fn summary(eng: Option<&Engine>) -> String {
         OPEN_MAX.load(Relaxed),
         PARSE_MAX.load(Relaxed),
         OVERRUNS.load(Relaxed),
+        LINGERS.load(Relaxed),
+        LINGER_MAX.load(Relaxed),
+        LINGER_OUT.load(Relaxed),
+        SLICE_WAITS.load(Relaxed),
     )
 }

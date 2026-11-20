@@ -39,7 +39,7 @@ use opendmd_core::follow::{self as rules, Action, Follow, Game, Observed, State,
 use opendmd_core::http_client;
 use opendmd_core::index::{write_index_resolving_then, IndexHeader};
 use opendmd_core::manifest::{self, Entry};
-use opendmd_core::overrides::Override;
+use opendmd_core::overrides::{Dwell, Override};
 use opendmd_core::synth;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -1328,7 +1328,7 @@ impl Runner {
                 let logo = game.logo.clone();
                 let played =
                     logo.as_deref()
-                        .is_some_and(|p| match engine.play_now_with(p, now, None) {
+                        .is_some_and(|p| match engine.play_now_with(p, now, Some(logo_dwell())) {
                             Ok(()) => true,
                             Err(e) => {
                                 log::warn!("follow: logo {p}: {e}");
@@ -1426,6 +1426,16 @@ impl Runner {
         if let Some(e) = engine {
             e.set_hold(false);
         }
+    }
+}
+
+/// The console's logo stays at least [`config::FOLLOW_LOGO_SECS`] (looping
+/// as it must), whatever the playlist's own minimum: the 3 s it had when
+/// that was the default.
+fn logo_dwell() -> Override {
+    Override {
+        dwell: Some(Dwell::Secs(config::FOLLOW_LOGO_SECS)),
+        ..Override::default()
     }
 }
 
