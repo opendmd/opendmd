@@ -132,7 +132,7 @@ pub fn reset_now() -> Reset {
         sys::esp_reset_reason_t_ESP_RST_WDT => Reset::Wdt,
         sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => Reset::DeepSleep,
         sys::esp_reset_reason_t_ESP_RST_BROWNOUT => Reset::Brownout,
-        sys::esp_reset_reason_t_ESP_RST_SDIO => Reset::Sdio,
+        sys::esp_reset_reason_t_ESP_RST_SDIO => Reset::Sdio, #[cfg(esp32s3)] r @ (sys::esp_reset_reason_t_ESP_RST_USB | sys::esp_reset_reason_t_ESP_RST_JTAG | sys::esp_reset_reason_t_ESP_RST_PWR_GLITCH) => s3_reset(r), // (S3 only, on this line so the lines below keep their numbers: `s3_reset`)
         _ => Reset::Unknown,
     }
 }
@@ -318,21 +318,17 @@ fn this_boot() -> Option<Entry> {
     ring::newest_first(&Rtc).find(|e| e.seq == seq)
 }
 
-/// How many boots in a row, this one and those just before it, came out of
-/// a crash (0: none since the last clean boot). Brownouts are power, not
-/// firmware: they neither count nor end the run
-/// (`opendmd_core::restarts::crash_streak`). Remote control holds back 15
-/// minutes after one, and stays off after two until a clean boot or a
-/// switch-on in Settings (`connect::client`), so a crash it causes cannot
-/// loop and lock out an update over the LAN.
+/// What this boot and those just before it say
+/// (`opendmd_core::restarts::crash_streak`): the boots out of a crash since
+/// the last clean boot (brownouts are power, not firmware: they neither
+/// count nor end the run), and whether brownouts soon after start-up keep
+/// restarting it. Remote control holds back 15 minutes after one crash or
+/// such a run of brownouts, and stays off after two crashes until a clean
+/// boot or a switch-on in Settings (`connect::client`), so a crash it
+/// causes cannot loop and lock out an update over the LAN.
 #[cfg(feature = "connect")]
-pub fn crash_boots_in_a_row() -> u32 {
-    let seq = BOOT_SEQ.load(Relaxed);
-    let this = ring::boot_kind(reset_now(), this_boot().map(|e| e.reason));
-    let before = ring::newest_first(&Rtc)
-        .filter(|e| e.seq != seq)
-        .map(|e| ring::boot_kind(e.reset, Some(e.reason)));
-    ring::crash_streak(core::iter::once(this).chain(before))
+pub fn crash_streak() -> ring::Streak {
+    ring::crash_streak_in(&Rtc, BOOT_SEQ.load(Relaxed), reset_now())
 }
 
 /// Why this boot's restart was made, in plain words (`reset_note`, when
@@ -380,4 +376,18 @@ pub fn status_json() -> String {
     }
     out.push(']');
     out
+}
+
+/// The S3's own reset causes (`reset_now`): its USB-Serial-JTAG and JTAG
+/// resets (a host opening the port, a debugger) are the reset button's kind,
+/// the ring kept; a power glitch is the supply's, like a brownout. The
+/// classic reports none of them. (At the end of the file, so the classic's
+/// log lines keep their numbers.)
+#[cfg(esp32s3)]
+#[allow(non_upper_case_globals)]
+fn s3_reset(r: sys::esp_reset_reason_t) -> Reset {
+    match r {
+        sys::esp_reset_reason_t_ESP_RST_PWR_GLITCH => Reset::Brownout,
+        _ => Reset::External,
+    }
 }

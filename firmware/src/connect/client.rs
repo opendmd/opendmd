@@ -15,7 +15,7 @@
 //! | An upgrade answered without `odc1` | a failed attempt: the usual backoff (never "update needed"). A close right after an upgrade that named it is judged by its code, as above |
 //! | Stay away (4429, or 429) | the minutes it says (1 to a day; 15 if it says none) |
 //! | Too much (1009: a frame over the server's size; 4429 "1": over its text budget) | the usual backoff, and the panel keeps under the budgets itself: text ≤ 2,048 B (`Conn::text`), `keys`/`info` at most one a second after `hello`'s two, status one every 2 s, acks no faster than the commands' 4 a second per key, 8 per panel |
-//! | After boot | [`HOLD_S`] (180 s). After a crash boot 15 min; after two crash boots in a row off until a clean boot or a switch-on in Settings (a brownout boot is neither a crash nor clean: power, not firmware) |
+//! | After boot | [`HOLD_S`] (180 s). After a crash boot 15 min; after two crash boots in a row off until a clean boot or a switch-on in Settings (a brownout boot is neither a crash nor clean: power, not firmware; three or more in a row, each soon after start-up, hold 15 min, never off) |
 //! | Switched on in Settings | at once: no hold, no backoff |
 //! | Clock | SNTP first; after 60 s without it, the build date as the floor |
 //! | An update under way | closed, held until the restart (`super::updating`) |
@@ -67,7 +67,8 @@ pub const HOLD_S: u64 = match option_env!("OPENDMD_CONNECT_HOLD_S") {
 };
 #[cfg(not(feature = "connect-test"))]
 pub const HOLD_S: u64 = 180;
-/// After a crash boot.
+/// After a crash boot, or brownouts soon after start-up again and again
+/// (`opendmd_core::restarts::Streak::power_loop`).
 const CRASH_HOLD_S: u64 = 15 * 60;
 
 /// A build-time number (`OPENDMD_CONNECT_HOLD_S`, `_PAIR_TTL_S`).
@@ -262,10 +263,10 @@ impl Client {
     #[inline(never)]
     pub fn new(link: Link) -> Client {
         tls::install_allocator();
-        let crashes = crate::restarts::crash_boots_in_a_row();
-        let (hold_s, crash_off) = match crashes {
-            0 => (Some(HOLD_S), false),
-            1 => (Some(uptime_s() + CRASH_HOLD_S), false),
+        let streak = crate::restarts::crash_streak();
+        let (hold_s, crash_off) = match (streak.crashes, streak.power_loop) {
+            (0, false) => (Some(HOLD_S), false),
+            (0 | 1, _) => (Some(uptime_s() + CRASH_HOLD_S), false),
             _ => (None, true),
         };
         log::info!(
@@ -274,15 +275,16 @@ impl Client {
             tls::TLS_IN,
             tls::TLS_OUT,
             ROOTS.len(),
-            match crashes {
-                0 => String::new(),
-                1 => "; a crash boot since the last clean boot: held 15 minutes".into(),
-                n => format!("; {n} crash boots in a row: off until switched on in Settings"),
+            match (streak.crashes, streak.power_loop) {
+                (0, false) => String::new(),
+                (0, true) => "; brownouts soon after start-up, again and again: held 15 minutes".into(),
+                (1, _) => "; a crash boot since the last clean boot: held 15 minutes".into(),
+                (n, _) => format!("; {n} crash boots in a row: off until switched on in Settings"),
             }
         );
         tele(|t| {
             t.rust_bytes = tls::rust_bytes();
-            t.crash_boot = crashes > 0;
+            t.crash_hold = streak.crashes > 0 || streak.power_loop;
         });
         Client {
             conn: None,
