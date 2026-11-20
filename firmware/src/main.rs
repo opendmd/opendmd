@@ -2302,8 +2302,11 @@ fn main() -> Result<()> {
             eng.tick(tick_now, &mut canvas)?
         };
         // The FAT index's build works only while the player needs nothing
-        // of the card or the heap (night mode "off": nothing decoded).
+        // of the card or the heap (night mode "off": nothing decoded); a
+        // build that has had no window for a while asks the turns for one
+        // (short GIFs that play once give none).
         fatidx::set_quiet(if off { Duration::from_secs(60) } else { eng.quiet_for(tick_now) });
+        eng.set_quiet_wanted(fatidx::quiet_wanted());
         let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
         let card_io = crate::cardspeed::take_player();
@@ -2547,6 +2550,12 @@ fn main() -> Result<()> {
             }
             TickOutcome::Idle if off => config::OFF_SLEEP,
             TickOutcome::Idle => {
+                // A turn over, waiting on its last frame for the next
+                // file's steps ahead: they run after this, up to the
+                // linger's end (no frame is due before it).
+                if eng.is_lingering() {
+                    slot = eng.frame_due();
+                }
                 // Between frames: the formula look's own frame, if one is
                 // due (not while paused: the picture holds; not while a
                 // transition runs: its steps, at most 20 ms apart, draw
@@ -3396,6 +3405,10 @@ fn engine_over(
     engine.set_overrides(overrides);
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
+    // A turn that ends before its next file could be opened ahead (a GIF
+    // playing once: its loop's end comes unannounced) waits on its last
+    // frame for the steps (`ahead.rs`), up to this.
+    engine.set_ahead_linger(config::AHEAD_LINGER);
     if FRAME_SHOWN.load(Ordering::Relaxed) {
         // A playlist change: the panel shows the old playlist's last frame.
         engine.carry_over();

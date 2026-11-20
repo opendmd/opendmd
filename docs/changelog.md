@@ -41,6 +41,9 @@ panel copes better with WiFi drops and low memory.
   3 seconds have passed. The shortest time a GIF stays is now 1 second by
   default. A panel that has already saved its settings keeps the time it
   has; change it under **Settings › Playback** ("Each GIF stays").
+  While the panel is indexing its card (a new card, or after GIFs were
+  added or removed), a short GIF may repeat for a few seconds now and
+  then, to give the indexing time.
 
 ## 1.1.0-beta.3 · 2026-11-19
 

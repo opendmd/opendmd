@@ -3,7 +3,10 @@
 //! ahead" in CLAUDE.md).
 //!
 //! The engine says which step is due — the pick (scheduler + catalog
-//! lookup), the open of the copy, its header — and this decides whether
+//! lookup), the open of the copy, its header: from a second (or a loop)
+//! before the file on screen is expected to end its turn, or, when that
+//! could not be told (a GIF playing once), while it lingers on its last
+//! frame (`config::AHEAD_LINGER`) — and this decides whether
 //! there is time and heap for it now: it runs on the display task, between
 //! a frame going up and the next one being due, only with
 //! `config::AHEAD_*_SLACK` to spare, no transfer on the card and the cache
@@ -99,6 +102,11 @@ pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &crate::ucloc
     // The A/B switch for measurements: a probe build with `ahead-off`
     // never steps ahead (everything else identical).
     if cfg!(feature = "ahead-off") || crate::cache_builder::task_up() || crate::cache_builder::transfer_in_flight() {
+        // A turn over and waiting for the steps: it moves on now, opening
+        // what is left at the switch (as before there was a linger).
+        if eng.is_lingering() {
+            eng.stop_ahead();
+        }
         return false;
     }
     let mut ran = false;

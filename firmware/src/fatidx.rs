@@ -1395,6 +1395,7 @@ pub fn tick() {
                 crate::state::largest_free_block()
             );
             *JOB.lock().unwrap_or_else(|p| p.into_inner()) = Some(job);
+            FED_MS.store(now, Relaxed);
             BUILDING.store(true, Relaxed);
             run_slice();
         }
@@ -1530,6 +1531,23 @@ static QUIET_UNTIL: AtomicU32 = AtomicU32::new(0);
 /// The main loop's word on the player (each tick): quiet for `d` from now.
 pub fn set_quiet(d: Duration) {
     QUIET_UNTIL.store(uptime_ms().wrapping_add(d.as_millis().min(60_000) as u32), Relaxed);
+}
+
+/// Uptime (ms) when the build under way last had a slice of at least
+/// [`config::FATIDX_SLICE_MIN_MS`] (or started, or found the player's
+/// window but something else in the way).
+static FED_MS: AtomicU32 = AtomicU32::new(0);
+
+/// The quiet the main loop asks the player's turns for
+/// (`Engine::set_quiet_wanted`): [`config::FATIDX_QUIET_WANT`] while a build
+/// is under way and has had no slice for [`config::FATIDX_STARVED_MS`],
+/// else none.
+pub fn quiet_wanted() -> Duration {
+    if BUILDING.load(Relaxed) && since(uptime_ms(), FED_MS.load(Relaxed)) >= config::FATIDX_STARVED_MS {
+        config::FATIDX_QUIET_WANT
+    } else {
+        Duration::ZERO
+    }
 }
 
 enum Stage {
@@ -1794,11 +1812,15 @@ fn run_slice() {
     let quiet = QUIET_UNTIL.load(Relaxed);
     let left = quiet.wrapping_sub(now) as i32;
     let until = now.wrapping_add(if left > 0 { (left as u32).min(config::FATIDX_SLICE_MS) } else { 0 });
-    if until.wrapping_sub(now) < config::FATIDX_SLICE_MIN_MS
-        || crate::cache_builder::task_up()
+    if until.wrapping_sub(now) < config::FATIDX_SLICE_MIN_MS {
+        return;
+    }
+    if crate::cache_builder::task_up()
         || crate::cache_builder::transfer_in_flight()
         || (crate::state::free_heap() as usize) < config::FATIDX_SLICE_KEEP
     {
+        // The player's window was there: not what holds the build up.
+        FED_MS.store(now, Relaxed);
         return;
     }
     let mut g = JOB.lock().unwrap_or_else(|p| p.into_inner());
@@ -1806,6 +1828,11 @@ fn run_slice() {
     guard(0).store(GUARD_MAGIC, Relaxed);
     let r = job.slice(until);
     guard(0).store(0, Relaxed);
+    // Fed when the slice had its window's worth: one cut short (a first
+    // loop's end the window ran to) leaves the build asking for one.
+    if since(uptime_ms(), now) >= config::FATIDX_SLICE_MIN_MS || matches!(r, Ok(true)) {
+        FED_MS.store(now, Relaxed);
+    }
     match r {
         Ok(false) => {}
         Err(e) if e.kind() == io::ErrorKind::OutOfMemory => {}

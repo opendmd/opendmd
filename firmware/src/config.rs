@@ -378,6 +378,12 @@ pub const AHEAD_YIELD_HEAP: usize = 20 * 1024;
 pub const AHEAD_PICK_SLACK: Duration = Duration::from_millis(9);
 pub const AHEAD_OPEN_SLACK: Duration = Duration::from_millis(16);
 pub const AHEAD_PARSE_SLACK: Duration = Duration::from_millis(7);
+/// A turn that ends before its next file was opened ahead (a GIF that plays
+/// once: its loop's end is known only as it comes) waits on its last frame
+/// for the steps, at most this long (`Engine::set_ahead_linger`); it moves
+/// on as soon as they are done (a few ms) or refused. Room for the three
+/// steps' slacks (32 ms) and their work, with a margin.
+pub const AHEAD_LINGER: Duration = Duration::from_millis(80);
 
 /// Phosphor glow (`glow` short/long) keeps a 12 KB copy of the panel while
 /// it is lit (`Panel::blit`). It takes the copy only with at least this much
@@ -908,11 +914,22 @@ pub const FATIDX_MIN_GAP_S: u32 = 600;
 pub const FATIDX_BOOT_DELAY_S: u32 = 20;
 /// The FAT index build runs in slices on the network worker (its stack,
 /// no task of its own), each inside the player's quiet window
-/// (`Engine::quiet_for`: no transition, no file opened ahead or switched to
-/// while it runs), at most this long (ms), and only with at least
+/// (`Engine::quiet_for`: from the end of a file's transition until its
+/// next file is opened ahead, `AHEAD_LEAD` or a loop before its turn's
+/// predicted end, or until the end of a first loop, which a slice sees at
+/// its next read), at most this long (ms), and only with at least
 /// [`FATIDX_SLICE_MIN_MS`] of the window left.
 pub const FATIDX_SLICE_MS: u32 = 250;
 pub const FATIDX_SLICE_MIN_MS: u32 = 120;
+/// A build that has had no slice of [`FATIDX_SLICE_MIN_MS`] for this long
+/// (ms; short GIFs that play once, a second each, give none) asks
+/// the player for one: the next turn lasts long enough for
+/// [`FATIDX_QUIET_WANT`] of quiet after its transition
+/// (`Engine::set_quiet_wanted`; the file loops meanwhile), then the turns
+/// are their own length again until the build has gone this long again.
+pub const FATIDX_STARVED_MS: u32 = 8_000;
+/// Two or three slices at the network worker's poll (up to 1 s apart).
+pub const FATIDX_QUIET_WANT: Duration = Duration::from_secs(3);
 /// The free heap a slice leaves after its buffers (the network side's
 /// transients): a slice does not start below it, and stops between
 /// directories when the heap falls under it.
