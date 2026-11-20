@@ -231,6 +231,13 @@ pub static SAFE_START_UNTIL: AtomicU32 = AtomicU32::new(0);
 /// the setup AP): safe start's window is counted from here too.
 pub static NET_UP: AtomicBool = AtomicBool::new(false);
 
+/// A transition between GIFs is running (the main task's, once a tick):
+/// for the restart record's activity word (`restarts::activity_now`).
+pub static TRANSITIONING: AtomicBool = AtomicBool::new(false);
+/// The playing playlist's index is in RAM (the card refused its `.idx`):
+/// for the activity word too.
+pub static INDEX_IN_RAM: AtomicBool = AtomicBool::new(false);
+
 /// The prepared copy the player opened ahead for the next file
 /// (`Engine::ahead_step`, `sd::SdSource::open_ahead`), as
 /// `layout::prepared_key` of its card path (no mount point); 0 for none. Set

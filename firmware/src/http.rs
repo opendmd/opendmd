@@ -1159,6 +1159,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     server.route("/api/job", Method::Get, job_poll)?;
 
+    // The last crash's log lines (`logring::keep_crash_tail`): the log is
+    // sent from RTC memory as it is, no copy; the headers take a few small
+    // strings, freed with the request. 404 when no crash has left any since
+    // the last power-on.
+    server.route("/api/log/last", Method::Get, #[optimize(size)] |req| {
+        match crate::logring::crash_tail() {
+            Some((seq, bytes)) => {
+                req.header("X-Restart", &seq.to_string())?;
+                // A browser must not take the log's text for anything else.
+                req.header("X-Content-Type-Options", "nosniff")?;
+                req.ok("text/plain; charset=utf-8", bytes)
+            }
+            None => req.error(404, "404 Not Found", "no crash log kept (none since the last power-on)"),
+        }
+    })?;
+
     // What the Now view follows, pushed on change (events.rs): the event
     // built from a status snapshot like the slim read, none under the
     // status's low-heap mark.
@@ -1584,6 +1600,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     let c = ctx.clone();
     server.route("/api/wifi/scan", Method::Get, #[optimize(size)] move |req| {
+        // The driver holds every answering AP on the heap until it is read:
+        // not into a heap the display needs (`wifi_reconnect::Heap`).
+        let heap = crate::wifi::heap_now();
+        if !heap.scan_ok() {
+            log::warn!(
+                "/api/wifi/scan: refused, heap {} B free, largest block {} B",
+                heap.free, heap.largest
+            );
+            req.header("Retry-After", "5")?;
+            return req.error(503, "503 Service Unavailable", "the display is short of memory for a scan right now; retry shortly");
+        }
         let (tx, rx) = mpsc::channel();
         if c.net.send(NetCommand::Scan(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "network worker not running");
@@ -3354,13 +3381,14 @@ impl std::fmt::Write for Piecewise<'_> {
 fn net_json() -> String {
     let n = crate::netstat::json();
     format!(
-        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{},"player_busy":{},{}}}"#,
+        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{},"player_busy":{},{},{}}}"#,
         &n[..n.len() - 1],
         STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
         HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
         crate::httpd::bodies_stalled(),
         PLAYER_BUSY.load(std::sync::atomic::Ordering::Relaxed),
         crate::events::status_json(),
+        crate::wifi::status_fields(),
     )
 }
 

@@ -37,6 +37,14 @@
 //!   stderr and IDF's panic handler prints through the ROM. A Rust panic
 //!   first prints whatever the ring still holds ([`start`]'s hook), so the
 //!   lines leading up to it are not lost.
+//! - **A crash's last lines are kept** ([`keep_crash_tail`]): the ring is
+//!   RTC memory, which a panic or watchdog reset leaves as it was, and the
+//!   writers keep the ring's tail counter in an RTC word too ([`LAST_TAIL`]).
+//!   On a boot out of a crash, before [`start`] writes over it, the newest
+//!   [`CRASH_TAIL`] bytes of the crashed run's lines are copied into an RTC
+//!   buffer of their own (`opendmd_core::logtail` reads the ring), which
+//!   `GET /api/log/last` serves ([`crash_tail`]) until the next crash or a
+//!   power-on. No heap is held: the answer is sent from RTC memory.
 
 use core::ffi::{c_char, c_int};
 use core::fmt::{self, Write as _};
@@ -46,25 +54,14 @@ use std::time::{Duration, Instant};
 use esp_idf_hal::interrupt::IsrCriticalSection;
 use esp_idf_sys as sys;
 
-/// The ring's size in bytes (a power of two; lines longer than half of it
-/// are cut).
-pub const RING: usize = 4096;
-/// The longest line kept whole; the rest of a longer one is cut.
-const MAX_LINE: usize = 1536;
-/// A record: an 8-byte header — state (byte 0), kind (byte 1: [`TEXT`] or
-/// [`RAW`]), the reserved payload capacity (bytes 2-3), the written length
-/// (bytes 4-5) — then the payload,
-/// the whole padded to 8 bytes, so a gap at the end of the ring always has
-/// room for a filler header.
-const HDR: usize = 8;
-const WRITING: u8 = 0;
-const COMMITTED: u8 = 1;
-/// Filler: the rest of the ring up to its end is unused; go to 0.
-const WRAP: u8 = 2;
-/// Record kinds: a log line (through the console VFS), raw bytes
-/// (straight to the UART).
-const TEXT: u8 = 0;
-const RAW: u8 = 1;
+// The ring's size (a power of two; lines longer than [`MAX_LINE`] are
+// cut) and its records, in `opendmd_core::logtail` (which reads a crashed
+// run's back): an 8-byte header — state (byte 0), kind (byte 1: [`TEXT`]
+// or [`RAW`]), the reserved payload capacity (bytes 2-3), the written
+// length (bytes 4-5) — then the payload, the whole padded to 8 bytes, so a
+// gap at the end of the ring always has room for a filler header ([`WRAP`]).
+pub use opendmd_core::logtail::RING;
+use opendmd_core::logtail::{padded, COMMITTED, HDR, MAX_LINE, RAW, TEXT, WRAP, WRITING};
 
 #[repr(C, align(8))]
 struct Buf([u8; RING]);
@@ -79,6 +76,12 @@ static mut BUF: Buf = Buf([0; RING]);
 /// multiple of [`RING`].
 static TAIL: AtomicU32 = AtomicU32::new(0);
 static HEAD: AtomicU32 = AtomicU32::new(0);
+/// [`TAIL`] as the last reservation left it, and the same XOR
+/// [`TAIL_MAGIC`]: in RTC memory, so the boot after a crash knows where
+/// the crashed run stopped ([`keep_crash_tail`]). Written under [`LOCK`].
+#[link_section = ".rtc_noinit"]
+static mut LAST_TAIL: [u32; 2] = [0; 2];
+const TAIL_MAGIC: u32 = 0x7a11_0c0d;
 static LOCK: IsrCriticalSection = IsrCriticalSection::new();
 static DROPS: AtomicU32 = AtomicU32::new(0);
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -122,10 +125,6 @@ fn get_u16(at: usize) -> u16 {
     // SAFETY: inside the ring, a committed record's header.
     unsafe { core::ptr::copy_nonoverlapping(base().add(at), b.as_mut_ptr(), 2) };
     u16::from_le_bytes(b)
-}
-
-const fn padded(len: usize) -> usize {
-    (HDR + len + 7) & !7
 }
 
 /// A reserved record: `cap` bytes of payload at ring offset `at + HDR`,
@@ -179,7 +178,10 @@ fn reserve(len: usize) -> Option<Slot> {
     state(at).store(WRITING, Ordering::Relaxed);
     set_kind(at, TEXT);
     put_u16(at + 2, cap as u16);
-    TAIL.store(tail.wrapping_add((skip + need) as u32), Ordering::Release);
+    let new_tail = tail.wrapping_add((skip + need) as u32);
+    TAIL.store(new_tail, Ordering::Release);
+    rtc_word(0).store(new_tail, Ordering::Relaxed);
+    rtc_word(1).store(new_tail ^ TAIL_MAGIC, Ordering::Relaxed);
     Some(Slot {
         at,
         cap,
@@ -216,6 +218,98 @@ fn peek() -> Option<(u32, &'static [u8], usize, bool)> {
 
 fn release(head: u32, size: usize) {
     HEAD.store(head.wrapping_add(size as u32), Ordering::Release);
+}
+
+/// A word of [`LAST_TAIL`], for plain loads and stores only.
+fn rtc_word(i: usize) -> &'static AtomicU32 {
+    // SAFETY: `i < 2`; a 4-aligned word of RTC memory only ever accessed
+    // through this view.
+    unsafe { AtomicU32::from_ptr((&raw mut LAST_TAIL).cast::<u32>().add(i & 1)) }
+}
+
+// ---------------------------------------------------------------------------
+// A crash's last lines
+// ---------------------------------------------------------------------------
+
+/// Bytes of a crashed run's last lines kept ([`keep_crash_tail`]): a full
+/// heartbeat and the lines after it, or the dozen-odd short lines before a
+/// crash. (RTC slow memory is 8 KB, the log ring 4 KB of it: this leaves
+/// ~0.5 KB of it free on the classic.)
+pub const CRASH_TAIL: usize = 1792;
+
+#[repr(C, align(4))]
+struct Tail([u8; CRASH_TAIL]);
+
+#[link_section = ".rtc_noinit"]
+static mut CRASH: Tail = Tail([0; CRASH_TAIL]);
+/// [`CRASH`]'s record: magic, the restart entry's seq, the length, a
+/// checksum of the bytes.
+#[link_section = ".rtc_noinit"]
+static mut CRASH_HDR: [u32; 4] = [0; 4];
+const CRASH_MAGIC: u32 = 0xc4a5_1067;
+
+fn crash_word(i: usize) -> &'static AtomicU32 {
+    // SAFETY: `i < 4`, a word of `CRASH_HDR`, only accessed through this.
+    unsafe { AtomicU32::from_ptr((&raw mut CRASH_HDR).cast::<u32>().add(i & 3)) }
+}
+
+fn crash_sum(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5u32, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+}
+
+/// On a boot out of a crash, before [`start`]: `head` (a line or two about
+/// the crash, formatted here without the heap), then the newest of the
+/// crashed run's lines that fit, into [`CRASH`], for the restart entry
+/// `seq`. No heap; ~2 ms of byte copies.
+pub fn keep_crash_tail(seq: u32, head: fmt::Arguments) {
+    if STARTED.load(Ordering::Acquire) {
+        return;
+    }
+    // SAFETY: before `start` nothing writes the ring or `CRASH`; this is
+    // the boot's one task. Raw pointers, no references held past the call.
+    let ring = unsafe { core::slice::from_raw_parts(base(), RING) };
+    let out = unsafe { core::slice::from_raw_parts_mut((&raw mut CRASH).cast::<u8>(), CRASH_TAIL) };
+    let mut w = Fill { buf: out, len: 0 };
+    let _ = w.write_fmt(head);
+    let mut n = w.len;
+    let tail = rtc_word(0).load(Ordering::Relaxed);
+    if rtc_word(1).load(Ordering::Relaxed) == tail ^ TAIL_MAGIC {
+        n += opendmd_core::logtail::newest_text(ring, tail, &mut out[n..]);
+    } else {
+        let mut w = Fill { buf: &mut out[n..], len: 0 };
+        let _ = w.write_str("(the crashed run left no log ring tail)\n");
+        n += w.len;
+    }
+    crash_word(0).store(0, Ordering::Relaxed);
+    crash_word(1).store(seq, Ordering::Relaxed);
+    crash_word(2).store(n as u32, Ordering::Relaxed);
+    crash_word(3).store(crash_sum(&out[..n]), Ordering::Relaxed);
+    crash_word(0).store(CRASH_MAGIC, Ordering::Relaxed);
+}
+
+/// A power-on: RTC memory is garbage, and nothing kept is a crash's.
+pub fn forget_crash_tail() {
+    crash_word(0).store(0, Ordering::Relaxed);
+}
+
+/// Every boot, once [`keep_crash_tail`] has had its chance: the tail word
+/// is the previous run's until this run's first line, so a run that
+/// crashes before [`start`] is not shown the one before it.
+pub fn forget_last_tail() {
+    rtc_word(1).store(0, Ordering::Relaxed);
+}
+
+/// The last crash's lines ([`keep_crash_tail`]) and its restart entry's
+/// seq, if they are kept and whole.
+pub fn crash_tail() -> Option<(u32, &'static [u8])> {
+    let n = crash_word(2).load(Ordering::Relaxed) as usize;
+    if crash_word(0).load(Ordering::Relaxed) != CRASH_MAGIC || n > CRASH_TAIL {
+        return None;
+    }
+    // SAFETY: written once at boot (above), before any reader could exist;
+    // read-only afterwards.
+    let bytes = unsafe { core::slice::from_raw_parts((&raw const CRASH).cast::<u8>(), n) };
+    (crash_sum(bytes) == crash_word(3).load(Ordering::Relaxed)).then_some((crash_word(1).load(Ordering::Relaxed), bytes))
 }
 
 /// Lines dropped because the ring was full, since boot.

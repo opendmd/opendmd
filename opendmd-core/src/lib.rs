@@ -40,6 +40,7 @@ pub mod improv;
 pub mod index;
 pub mod inputs;
 pub mod layout;
+pub mod logtail;
 pub mod look;
 pub mod manifest;
 pub mod names_file;
@@ -69,6 +70,7 @@ pub mod tree;
 pub mod text;
 pub mod updater_picture;
 pub mod wifi_login;
+pub mod wifi_reconnect;
 pub mod www_pack;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};

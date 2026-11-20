@@ -39,6 +39,7 @@
 // Size, not speed, for code no frame runs (`#[optimize(size)]`: the
 // network worker, the HTTP status, boot, config; console-c).
 #![feature(optimize_attribute)]
+#![feature(alloc_error_hook)]
 mod ahead;
 mod arena;
 mod boot;
@@ -92,6 +93,8 @@ mod sched;
 mod sd;
 #[cfg(feature = "nocard-test")]
 mod nocard_test;
+#[cfg(feature = "emu-oom-test")]
+mod oom_test;
 mod settings_card;
 mod sdhealth;
 mod show;
@@ -2628,6 +2631,7 @@ fn main() -> Result<()> {
         state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
         // Then the formula look's buffers.
         let transitioning = eng.is_transitioning();
+        state::TRANSITIONING.store(transitioning, Ordering::Relaxed);
         if looks.yield_heap(eng.display_mut(&mut canvas), transitioning) {
             log::info!(
                 "formula look: heap low ({} B free), its buffers given back",
@@ -2712,7 +2716,8 @@ fn main() -> Result<()> {
                 deadline_misses,
                 worst_lateness_ms,
                 &misses,
-                &(sched.summary() + &follow::summary() + &ahead::summary(Some(eng))),
+                // (Made only when the heap has room for the whole line.)
+                &|| sched.summary() + &follow::summary() + &ahead::summary(Some(eng)),
             );
             log_us = uclock::since(last_heartbeat);
         }
@@ -2837,6 +2842,7 @@ fn rebuild_context(
                 free_heap()
             );
             *engine = Some(e);
+            state::INDEX_IN_RAM.store(false, Ordering::Relaxed);
             Ok(Applied {
                 entries,
                 index: Some(IndexSource::Loaded),
@@ -3284,21 +3290,29 @@ fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
         _ => {}
     }
     let path = short(path);
+    /// How it was served, formatted into the log line (no heap: this runs
+    /// on the display task at every GIF's start).
+    struct Served<'a>(Option<sd::Served>, &'a str);
+    impl core::fmt::Display for Served<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            match self.0 {
+                Some(sd::Served::Prepared { try_us }) => {
+                    write!(f, "prepared, open {:.1} ms", try_us as f32 / 1000.0)
+                }
+                Some(sd::Served::Original { miss_us }) => {
+                    write!(f, "original, miss {:.1} ms", miss_us as f32 / 1000.0)
+                }
+                Some(sd::Served::Ahead { try_us }) => {
+                    write!(f, "prepared, opened ahead in {:.1} ms", try_us as f32 / 1000.0)
+                }
+                None if self.1.starts_with('@') => f.write_str("drawn"),
+                Some(sd::Served::Direct) | None => f.write_str("as named"),
+            }
+        }
+    }
     log::info!(
         "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",
-        match served {
-            Some(sd::Served::Prepared { try_us }) => {
-                format!("prepared, open {:.1} ms", try_us as f32 / 1000.0)
-            }
-            Some(sd::Served::Original { miss_us }) => {
-                format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
-            }
-            Some(sd::Served::Ahead { try_us }) => {
-                format!("prepared, opened ahead in {:.1} ms", try_us as f32 / 1000.0)
-            }
-            None if path.starts_with('@') => "drawn".to_string(),
-            Some(sd::Served::Direct) | None => "as named".to_string(),
-        },
+        Served(served, path),
         free_heap(),
         largest_free_block()
     );
@@ -3666,6 +3680,7 @@ fn finish_build(
                     free_heap()
                 );
                 *engine = Some(built);
+                state::INDEX_IN_RAM.store(source == IndexSource::InRam, Ordering::Relaxed);
                 Ok(Applied {
                     entries,
                     index: Some(source),
@@ -4063,6 +4078,28 @@ fn reboot_to_apply(why: Reason) -> ! {
     restart(why)
 }
 
+/// Heartbeats logged short for the heap (`HEARTBEAT_FULL_*`).
+static HEARTBEATS_SHORT: AtomicU32 = AtomicU32::new(0);
+
+/// `, N heartbeats cut short` once there are any (no heap).
+struct ShortBeats(u32);
+
+impl core::fmt::Display for ShortBeats {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self.0 {
+            0 => Ok(()),
+            n => write!(f, ", {n} heartbeats cut short"),
+        }
+    }
+}
+
+/// The heartbeat line, every [`config::HEARTBEAT_INTERVAL`] on the display
+/// task. Its whole form is made of a dozen short strings, so it is logged
+/// only when the heap has a [`config::HEARTBEAT_FULL_BLOCK`] block and
+/// [`config::HEARTBEAT_FULL_FREE`] free (`schedule`, the scheduler's,
+/// Follow's and the read-ahead's parts, is made then too); otherwise a
+/// short line, formatted straight into the log ring without the heap: the
+/// heap's figures, the frame counts and what is going on.
 #[allow(clippy::too_many_arguments)]
 fn heartbeat(
     panel: &mut Panel,
@@ -4072,7 +4109,7 @@ fn heartbeat(
     deadline_misses: u64,
     worst_lateness_ms: u64,
     misses: &frametime::Misses,
-    schedule: &str,
+    schedule: &dyn Fn() -> String,
 ) {
     diag::check("heartbeat");
     restarts::alive();
@@ -4080,23 +4117,47 @@ fn heartbeat(
     state::MAIN_STACK_UNUSED.store(frametime::stack_unused(), Ordering::Relaxed);
     let sampled_min = floor.min;
     let free = free_heap();
+    let largest = largest_free_block() as u32;
     let min_free = min_free_heap();
     let refresh = panel.refresh_rate();
+    let activity = restarts::activity_now();
+    if largest < config::HEARTBEAT_FULL_BLOCK || free < config::HEARTBEAT_FULL_FREE {
+        let (wifi, n) = {
+            let mut s = status.lock().unwrap();
+            s.refresh_hz = refresh;
+            s.heap_idf_min = min_free;
+            (s.wifi, HEARTBEATS_SHORT.fetch_add(1, Ordering::Relaxed) + 1)
+        };
+        log::warn!(
+            "heartbeat (short #{n}, the heap is low): heap {free} B free, largest block {largest} B \
+             (floor {sampled_min} B, its largest {} B; idf-min {min_free} B), refresh {refresh} Hz, \
+             {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
+             transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi}; during: {activity}",
+            floor.at.map_or(0, |a| a.largest),
+            TRANSITIONS_CUT.load(Ordering::Relaxed),
+            httpd::streams_aborted(),
+            frametime::stack_unused(),
+        );
+        return;
+    }
     let (ip, wifi, entries) = {
         let mut s = status.lock().unwrap();
         s.refresh_hz = refresh;
         s.heap_idf_min = min_free;
         (s.ip.clone(), s.wifi, s.entries)
     };
+    let schedule = schedule();
+    let short = HEARTBEATS_SHORT.load(Ordering::Relaxed);
     log::info!(
-        "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
+        "heartbeat: heap {free} B free (largest {largest} B, floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}; buffers{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip} ({activity}{}), {schedule}{}{}{}{}{}{}{}; buffers{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
         httpd::streams_aborted(),
         frametime::stack_unused(),
+        ShortBeats(short),
         sd::period_summary(),
         cache_builder::heartbeat(entries, cache::peek()),
         sdhealth::heartbeat(),

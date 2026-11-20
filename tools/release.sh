@@ -188,7 +188,9 @@ else
   export UPDATER_BUILD=${UPDATER_BUILD:-$ROOT/target/updater}
 fi
 # make's own variables for every make below.
-MK=(DIST="$DIST" UPDATER_BUILD="$UPDATER_BUILD" FW_SIGN_KEY="$FW_SIGN_KEY")
+# FW_RELEASE_FEATURES= on the command line: a measurement or test feature set
+# in the environment never reaches a release build.
+MK=(DIST="$DIST" UPDATER_BUILD="$UPDATER_BUILD" FW_SIGN_KEY="$FW_SIGN_KEY" FW_RELEASE_FEATURES=)
 
 START_REF=$(git symbolic-ref -q --short HEAD || true)   # the branch this run started on
 START=$(git rev-parse HEAD)
@@ -448,6 +450,9 @@ else
     # runs the same check on what it publishes).
     tools/release-connect-check.sh "$app" "$VERSION" || die "$app: Remote control is not as the channel says (tools/release-connect-check.sh)"
     pass "$v: Remote control as the channel says ($( [[ "$VERSION" == *-* ]] && echo 'a beta: in it' || echo 'a final: not in it'))"
+    # No emulator lane's test hooks (release.yml runs the same check).
+    tools/release-test-features-check.sh "$app" || die "$app carries a test-only feature (tools/release-test-features-check.sh)"
+    pass "$v: no test-only feature"
     manifest="$(jq -r .version "$DIST/manifest-$v.json")"
     [ "$manifest" = "$VERSION" ] || die "manifest-$v.json says $manifest, want $VERSION"
     pass "manifest-$v.json version $manifest"

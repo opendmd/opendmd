@@ -40,6 +40,10 @@ emu-ballast = []
 # bytes in use logged every 20 s (`census:`), checked flat across 40+ GIFs.
 # Never in a release.
 emu-census = []
+# The emulator's low-heap lane (`make emu-oom`, src/oom_test.rs): WiFi
+# drops, a squeezed heap through a heartbeat and a reconnect, then an
+# out-of-memory abort and the next boot's record of it. Never in a release.
+emu-oom-test = []
 # The components a build can leave out (opendmd-notes docs/notes/firmware-build.md
 # "Feature flags"): all on by default, releases included; the Makefile's
 # FW_DISABLE=<name>[,<name>] builds without (`/api/status` and
