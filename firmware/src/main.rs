@@ -249,8 +249,10 @@ impl SafeStart {
 /// Whether a transition may take its buffers now: `need` is its 24 KB plus
 /// what the new file's decoder has still to allocate (a GIF's LZW state);
 /// the heap must keep [`config::TRANSITION_HEAP_RESERVE`] after both, and a
-/// 16 KB block (the LZW's largest piece) must exist. Called on the main task
-/// inside the tick; counts refusals.
+/// 16 KB block (the LZW's largest piece) must exist. No dissolve while an
+/// upload is in hand or was in the last [`config::TRANSITION_UPLOAD_QUIET_S`]
+/// (or a transfer shares the card). Called on the main task inside the tick;
+/// counts refusals.
 fn transition_gate(need: usize) -> bool {
     // A formula look held is not given back during a transition: keep more
     // room instead (the dissolve is cut, not the look).
@@ -259,7 +261,22 @@ fn transition_gate(need: usize) -> bool {
     } else {
         0
     };
-    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
+    // An upload in hand or just before (uploads come in runs), or a
+    // transfer on the card: the next upload's peak may come at any moment
+    // (the WiFi driver's receive buffers, a refused one's frames, a status
+    // reply beside it), and a dissolve's 24 KB under it took the heap under
+    // 20 KB in the emulator's simultaneous-upload bursts (every low there
+    // had a dissolve running), the more often with a switch a second. The
+    // dissolve is cut instead: a margin would not do, the heap is high
+    // at the switch (~60 KB) and the peak comes in the 400 ms after it.
+    // (Not a fallback's ask for the `gif` crate's decoder, which the file
+    // cannot play without: its own heap rule stands.)
+    let fallback = need >= opendmd_core::player::GIF_CRATE_BYTES;
+    let upload = !fallback
+        && (crate::stream::uploads_within(config::TRANSITION_UPLOAD_QUIET_S)
+            || crate::cache_builder::transfer_in_flight());
+    let ok = !upload
+        && free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
         && largest_free_block() >= 16 * 1024;
     if !ok {
         TRANSITIONS_CUT.fetch_add(1, Ordering::Relaxed);

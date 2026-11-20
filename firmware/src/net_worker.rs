@@ -1231,6 +1231,19 @@ mod lowwatch {
     pub static SOCKS: AtomicI32 = AtomicI32::new(0);
     pub static UPLOADS: AtomicU32 = AtomicU32::new(0);
     pub static PHASE: AtomicU32 = AtomicU32::new(0);
+    /// What the player held at the low: bit 0 a transition running, 1 the
+    /// read-ahead ring, 2 a copy open ahead, 3 the glow's copy, 4 a
+    /// formula look's buffers.
+    pub static PLAYER: AtomicU32 = AtomicU32::new(0);
+
+    fn player() -> u32 {
+        use std::sync::atomic::Ordering::Relaxed as R;
+        u32::from(crate::state::TRANSITIONING.load(R))
+            | u32::from(crate::readahead::ring_held()) << 1
+            | u32::from(crate::state::AHEAD_KEY.load(R) != 0) << 2
+            | u32::from(crate::state::GLOW_HELD.load(R)) << 3
+            | u32::from(crate::formula_look::HELD.load(R)) << 4
+    }
     static SNAP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static SNAP: [AtomicI32; 6] = [const { AtomicI32::new(0) }; 6];
 
@@ -1259,6 +1272,7 @@ mod lowwatch {
                 SOCKS.store(unsafe { super::opendmd_netdiag_socks() }, Relaxed);
                 UPLOADS.store(crate::stream::uploads(), Relaxed);
                 PHASE.store(crate::stream::phase(), Relaxed);
+                PLAYER.store(player(), Relaxed);
                 // SAFETY: posts a count to lwIP's thread.
                 unsafe { super::opendmd_netdiag_snap() };
                 SNAP_DUE.store(true, Relaxed);
@@ -1279,7 +1293,7 @@ mod lowwatch {
     pub fn take() -> String {
         let low = LOW.swap(u32::MAX, Relaxed);
         format!(
-            "lowwatch: window low {low} B free (rust {} B, sockets {}, uploads {}); now {} B free, rust {} B; at it: phase {:#x}, lwip rx {} pbufs {} B, tx {} B, pcbs {} tw {} socks {}",
+            "lowwatch: window low {low} B free (rust {} B, sockets {}, uploads {}); now {} B free, rust {} B; at it: phase {:#x}, lwip rx {} pbufs {} B, tx {} B, pcbs {} tw {} socks {}, player {:#x}",
             RUST.load(Relaxed),
             SOCKS.load(Relaxed),
             UPLOADS.load(Relaxed),
@@ -1292,6 +1306,7 @@ mod lowwatch {
             SNAP[3].load(Relaxed),
             SNAP[4].load(Relaxed),
             SNAP[5].load(Relaxed),
+            PLAYER.load(Relaxed),
         )
     }
 }

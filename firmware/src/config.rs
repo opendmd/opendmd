@@ -344,6 +344,14 @@ pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
 /// transients still find room. Measured on the device later.
 pub const LOOK_TRANSITION_MARGIN: usize = 8 * 1024;
 
+/// While an upload is in hand or a transfer shares the card, and for this
+/// long (s) after an upload was last asked for, taken or finished (uploads
+/// come in runs), a new file cuts in (`transitions_cut`): the upload's peak
+/// (six WiFi receive buffers ~10 KB, a refused one's frames, a status
+/// reply's segments ~4.4 KB beside it) under a dissolve's 24 KB took the
+/// heap under 20 KB in the emulator's simultaneous-upload bursts.
+pub const TRANSITION_UPLOAD_QUIET_S: u32 = 10;
+
 /// The next file is opened ahead (`Engine::ahead_step`, "The next file,
 /// ahead" in CLAUDE.md) only while a step leaves this much free after the
 /// bytes it takes ([`AHEAD_OPEN_BYTES`], [`AHEAD_PARSE_BYTES`]) and a 16 KB

@@ -142,6 +142,30 @@ pub fn phase() -> u32 {
 pub fn uploads() -> u32 {
     UPLOADS.load(Ordering::Relaxed)
 }
+
+/// The uptime second an upload was last asked for, taken or finished (0:
+/// none yet).
+static UPLOAD_AT_S: AtomicU32 = AtomicU32::new(0);
+
+fn note_upload() {
+    // SAFETY: a read of the system timer.
+    let s = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    UPLOAD_AT_S.store(s.max(1), Ordering::Relaxed);
+}
+
+/// An upload is in hand, or one was asked for, taken or finished within
+/// the last `secs` seconds: uploads come in runs (a folder, a client's
+/// retries), and the next one's peak may come at any moment
+/// (`transition_gate`).
+pub fn uploads_within(secs: u32) -> bool {
+    if uploads() > 0 {
+        return true;
+    }
+    let at = UPLOAD_AT_S.load(Ordering::Relaxed);
+    // SAFETY: a read of the system timer.
+    let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    at != 0 && now.wrapping_sub(at) <= secs
+}
 /// Transfers under way on the task (0 or 1): a heavy request elsewhere
 /// counts its swing against the heap (`opendmd_core::admit`).
 pub fn transfers() -> u32 {
@@ -418,6 +442,7 @@ fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
         // download as much as an upload (the emulator: a listing's ACKs
         // could not come in behind six of them, and it was cut short).
         let idle = jobs.is_empty() && !BUSY.load(Ordering::Acquire);
+        note_upload();
         if !ahead && idle && UPLOADS.load(Ordering::Acquire) < MAX_UPLOADS {
             UPLOADS.fetch_add(1, Ordering::AcqRel);
             jobs.push_back(Job::Upload { up, work });
@@ -467,6 +492,7 @@ fn run_upload(mut up: Upload, work: UploadWork, counted: bool) {
     // one after another met a 503 for every one (the API lane: ~10 s
     // between two small PUTs).
     if counted {
+        note_upload();
         UPLOADS.fetch_sub(1, Ordering::AcqRel);
         BUSY.store(false, Ordering::Release);
     }

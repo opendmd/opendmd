@@ -81,6 +81,12 @@ static STATE: Mutex<State> = Mutex::new(State {
 });
 /// The ring is held and a file followed (for the status without the lock).
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the ring is held (the emulator's low watch).
+#[cfg(feature = "emu-census")]
+pub fn ring_held() -> bool {
+    ACTIVE.load(Relaxed)
+}
 /// [`release`] found the lock busy: the task gives the ring back.
 static RELEASE: AtomicBool = AtomicBool::new(false);
 /// Slots closed while the lock was busy (bit `k`): see [`closed`].

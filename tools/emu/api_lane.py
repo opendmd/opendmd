@@ -607,6 +607,12 @@ class Lane:
         self.ok("first index build", f"{m[1]} records, stale false")
 
     def basics(self, api):
+        if getattr(self.a, "dwell_min", None):
+            _, r = api.json("PUT", "/api/config", {"dwell_min": self.a.dwell_min})
+            self.expect(r.get("ok") is True, "config", f"PUT dwell_min {self.a.dwell_min} answered {r}")
+            _, cfg = api.json("GET", "/api/config")
+            self.expect(cfg.get("dwell_min") == self.a.dwell_min, "config", f"dwell_min read back {cfg.get('dwell_min')}")
+            print(f"api: dwell_min {self.a.dwell_min} for this run (--dwell-min)", flush=True)
         st = api.status()
         for key in ("heap", "now_playing", "sd", "www"):
             self.expect(key in st, "status", f"no `{key}` in /api/status")

@@ -46,6 +46,9 @@ panel copes better with WiFi drops and low memory.
   seconds, repeating if it is shorter, to give the indexing time. GIFs
   with their own playing time in a playlist, and GIFs you send to the
   panel, are not affected.
+- While files are being uploaded to the panel (and for 10 seconds after),
+  the next GIF cuts in instead of dissolving: the panel keeps more memory
+  free for the upload.
 
 ## 1.1.0-beta.3 · 2026-11-19
 
