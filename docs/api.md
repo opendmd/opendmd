@@ -948,7 +948,16 @@ most 25 s; a failed one is `backoff`, at most 30 s), `registering`, `connecting`
 `upgrading`, `open`, `backoff`, `refused: set Remote control up again`
 (`refused` true: the server does not know this panel; `POST
 /api/connect/forget` makes a new identity), `update needed` (`too_old`),
-`held for an update`, `off after two crashes in a row`. A server that
+`held for an update`, `off after two crashes in a row`. A crash here is a
+boot out of a panic, a stack overflow, a heap check, a watchdog, a
+software restart the firmware did not record, or an unknown reset; a
+restart it planned (an update, a restart from the web app), a power-on,
+the reset button, a USB or JTAG reset (ESP32-S3) and a brownout (the
+supply dipping) are not. A brownout neither counts nor ends a run (a
+crash, a brownout and a crash are two in a row), and the planned
+restarts and resets above end one. One crash, or three brownouts in a
+row each within 20 minutes of start-up, hold Remote control back 15
+minutes after boot instead of 3; brownouts never switch it off. A server that
 no longer knows the panel's id makes it `refused` too when it has
 controllers (nothing is erased: `POST /api/connect/forget` starts again);
 with none yet, the panel registers a new id by itself (at most three
