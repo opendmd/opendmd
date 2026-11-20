@@ -247,7 +247,9 @@ pub struct Tele {
     pub last_error: Option<String>,
     pub last_error_s: u32,
     pub errors: u32,
-    pub crash_boot: bool,
+    /// This boot held back, or off, by the crash guard (`Client::new`: a
+    /// crash boot, or a run of brownouts soon after start-up).
+    pub crash_hold: bool,
 }
 
 impl Tele {
@@ -308,7 +310,7 @@ impl Tele {
             last_error: None,
             last_error_s: 0,
             errors: 0,
-            crash_boot: false,
+            crash_hold: false,
         }
     }
 }
@@ -337,9 +339,9 @@ pub fn tele<R: Default>(_: impl FnOnce(&mut Tele) -> R) -> R {
 #[inline(never)]
 pub fn reset() {
     tele(|t| {
-        let keep = (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_boot);
+        let keep = (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_hold);
         *t = Tele::new();
-        (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_boot) = keep;
+        (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_hold) = keep;
     });
 }
 
@@ -398,7 +400,7 @@ pub fn json() -> String {
     let (on, registered) = super::shared(|s| (s.on, s.identity.is_some())).unwrap_or((false, false));
     format!(
         concat!(
-            r#"{{"enabled":{},"registered":{},"crash_boot":{},"ask_taken":{},"dns_stack_unused":{},"host":{},"tickets":{},"ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
+            r#"{{"enabled":{},"registered":{},"crash_hold":{},"ask_taken":{},"dns_stack_unused":{},"host":{},"tickets":{},"ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
             r#""attempts":{},"full":{},"resumed_hist":{},"resume_missed":{},"#,
             r#""dns_ms":{},"tcp_ms":{},"upgrade_ms":{},"connect_ms":{},"hs_cpu_ms":{},"hs_cpu_max_ms":{},"#,
             r#""causes":{{{}}},"gate_waits":{},"quiet_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
@@ -408,7 +410,7 @@ pub fn json() -> String {
         ),
         on,
         registered,
-        t.crash_boot,
+        t.crash_hold,
         ASK_TAKEN.load(Relaxed),
         match DNS_STACK_LOW.load(Relaxed) {
             u32::MAX => "null".to_string(),

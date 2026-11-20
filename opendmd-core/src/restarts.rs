@@ -720,6 +720,164 @@ pub fn mark_update(store: &mut dyn Store) -> bool {
     }
 }
 
+/// What one boot says about a crash streak ([`crash_streak`]).
+#[cfg(feature = "connect")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootKind {
+    /// A power-on, the reset button (or a USB or JTAG reset), or a restart
+    /// this firmware planned and recorded (even when a brownout reset
+    /// followed it): ends a streak.
+    Clean,
+    /// A panic, a stack overflow, a watchdog, a heap check, an unrecorded
+    /// software restart, an unknown reset.
+    Crash,
+    /// A brownout: the supply dipped. A power fault says nothing about the
+    /// firmware, so it neither counts nor ends a streak (crash, brownout,
+    /// crash is two crashes in a row; a weak USB supply's brownouts are
+    /// none). Only a run of them soon after start-up holds Remote control
+    /// back ([`Streak::power_loop`]). The S3's brownout-loop guard
+    /// (`s3board.rs`) counts them on its own.
+    Power,
+    /// An entry never paired with a reset: a planned restart's record that
+    /// a later one (a panic while it shut down) overtook, as only the
+    /// newest pending entry is paired ([`boot`]). Skipped: the restart it
+    /// was is the newer entry's.
+    Stale,
+}
+
+/// How the boot with chip reset `reset` came about, given its entry's
+/// reason (`None`: the boot has no entry).
+///
+/// After a brownout reset the entry tells: a crash the firmware recorded
+/// (a panic, a stack overflow, a heap check) is a crash, a restart it
+/// planned (an update, a restart from the web app) is clean, and the rest
+/// (the boot's own `brownout` entry) is power. An unrecorded crash whose
+/// reset a brownout overtook (a watchdog's, or a panic cut short before
+/// its hook wrote) reads as power: the chip reports only the brownout, and
+/// the two cannot be told apart.
+#[cfg(feature = "connect")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn boot_kind(reset: Reset, reason: Option<Reason>) -> BootKind {
+    // Each reason by name, no catch-all: a new one is classified here on
+    // purpose (`boot_kinds_otherwise_as_before` goes through them all).
+    let planned = match reason {
+        None => false,
+        Some(r) => match r {
+            Reason::Panic
+            | Reason::StackOverflow
+            | Reason::Diag
+            | Reason::Crash
+            | Reason::Unrecorded
+            | Reason::Brownout
+            | Reason::PowerOn => false,
+            Reason::ApiReboot
+            | Reason::Ota
+            | Reason::ApTimeout
+            | Reason::FullSpeed
+            | Reason::CardClock
+            | Reason::FreshHeap
+            | Reason::PanelTrial
+            | Reason::CardFailure
+            | Reason::NewCard
+            | Reason::CardLost
+            | Reason::CardRetry
+            | Reason::NetworkOn => true,
+        },
+    };
+    let recorded_crash = matches!(
+        reason,
+        Some(Reason::Panic | Reason::StackOverflow | Reason::Diag)
+    );
+    match reset {
+        Reset::PowerOn | Reset::External => BootKind::Clean,
+        Reset::Pending => BootKind::Stale,
+        _ if recorded_crash => BootKind::Crash,
+        _ if planned && matches!(reset, Reset::Software | Reset::Brownout) => BootKind::Clean,
+        Reset::Brownout => BootKind::Power,
+        Reset::Software => match reason {
+            Some(Reason::Brownout) => BootKind::Power,
+            _ => BootKind::Crash,
+        },
+        _ => BootKind::Crash,
+    }
+}
+
+/// Power boots in a row soon after start-up that hold Remote control back
+/// ([`Streak::power_loop`]).
+#[cfg(feature = "connect")]
+pub const POWER_LOOP_BOOTS: u32 = 3;
+/// "Soon after start-up" for [`POWER_LOOP_BOOTS`]: the run that browned out
+/// had been up less than this (its last heartbeat's uptime; a run with no
+/// heartbeat counts). 20 minutes is Remote control's 15-minute hold with
+/// room for its first connection after it: a loop Remote control provokes
+/// (its TLS handshake and WiFi transmit dipping a weak supply, the first
+/// at its 3-minute boot hold) stays caught while the hold slows it, and a
+/// run that lasts past it with Remote control on ends the loop.
+#[cfg(feature = "connect")]
+pub const POWER_LOOP_UPTIME_MS: u32 = 20 * 60 * 1000;
+
+/// What the boots before this one say ([`crash_streak`]).
+#[cfg(feature = "connect")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Streak {
+    /// Boots out of a crash since the last clean boot.
+    pub crashes: u32,
+    /// This boot and the ones just before it are [`POWER_LOOP_BOOTS`] or
+    /// more brownouts in a row, each soon after start-up
+    /// ([`POWER_LOOP_UPTIME_MS`]): maybe a loop Remote control provokes. It
+    /// is held back as after one crash, never turned off.
+    pub power_loop: bool,
+}
+
+/// The streak from `boots`, this boot first, then the ones before it,
+/// newest first, each with the figures of the run that ended in it:
+/// crashes counted up to the first clean boot (brownouts and stale entries
+/// skipped), and a power loop from the brownouts at the head.
+#[cfg(feature = "connect")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn crash_streak(boots: impl IntoIterator<Item = (BootKind, Option<Figures>)>) -> Streak {
+    let mut s = Streak::default();
+    let mut head = true;
+    let mut short = 0;
+    for (k, f) in boots {
+        match k {
+            BootKind::Clean => break,
+            BootKind::Stale => {}
+            BootKind::Crash => {
+                s.crashes += 1;
+                head = false;
+            }
+            BootKind::Power if head => {
+                if f.is_none_or(|f| f.uptime_ms < POWER_LOOP_UPTIME_MS) {
+                    short += 1;
+                } else {
+                    head = false;
+                }
+            }
+            BootKind::Power => {}
+        }
+    }
+    s.power_loop = short >= POWER_LOOP_BOOTS;
+    s
+}
+
+/// [`crash_streak`] from the ring: this boot is the entry `boot_seq`
+/// ([`boot`]'s), with the chip's `reset` (its entry's reason, if it has
+/// one), then the entries before it, newest first.
+#[cfg(feature = "connect")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn crash_streak_in(store: &dyn Store, boot_seq: u32, reset: Reset) -> Streak {
+    let this = newest_first(store).find(|e| e.seq == boot_seq);
+    let first = (
+        boot_kind(reset, this.map(|e| e.reason)),
+        this.and_then(|e| e.figures),
+    );
+    let before = newest_first(store)
+        .filter(|e| e.seq != boot_seq)
+        .map(|e| (boot_kind(e.reset, Some(e.reason)), e.figures));
+    crash_streak(core::iter::once(first).chain(before))
+}
+
 /// Whether crash entry `e` is one the code in `files` (file names, as a
 /// panic's location gives them) can be blamed for: a panic located in one
 /// of them, a stack overflow of `task`, or an out-of-memory abort (a crash
@@ -992,5 +1150,352 @@ mod tests {
         assert_eq!(seqs, [2, 1, 0, u32::MAX, u32::MAX - 1, u32::MAX - 2]);
         push_minimal(&mut r, Reason::Panic, fig(3).unwrap(), &[]);
         assert_eq!(newest(&r).unwrap().seq, 3);
+    }
+    /// The restarts this firmware plans and records (`crate::restart`).
+    #[cfg(feature = "connect")]
+    const PLANNED: [Reason; 12] = [
+        Reason::ApiReboot,
+        Reason::Ota,
+        Reason::ApTimeout,
+        Reason::FullSpeed,
+        Reason::CardClock,
+        Reason::FreshHeap,
+        Reason::PanelTrial,
+        Reason::CardFailure,
+        Reason::NewCard,
+        Reason::CardLost,
+        Reason::CardRetry,
+        Reason::NetworkOn,
+    ];
+    /// The rest: crashes and the entries a boot writes from its reset alone.
+    #[cfg(feature = "connect")]
+    const NOT_PLANNED: [Reason; 7] = [
+        Reason::Panic,
+        Reason::StackOverflow,
+        Reason::Diag,
+        Reason::Crash,
+        Reason::Unrecorded,
+        Reason::Brownout,
+        Reason::PowerOn,
+    ];
+    #[cfg(feature = "connect")]
+    const RESETS: [Reset; 12] = [
+        Reset::Pending,
+        Reset::PowerOn,
+        Reset::External,
+        Reset::Software,
+        Reset::Panic,
+        Reset::IntWdt,
+        Reset::TaskWdt,
+        Reset::Wdt,
+        Reset::DeepSleep,
+        Reset::Brownout,
+        Reset::Sdio,
+        Reset::Unknown,
+    ];
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn every_reason_is_classified_on_purpose() {
+        // A new reason fails here until it is put in one of the lists (and
+        // boot_kind's match names it).
+        assert_eq!(PLANNED.len() + NOT_PLANNED.len(), Reason::ALL.len());
+        for r in Reason::ALL {
+            assert_eq!(
+                PLANNED.contains(&r) as u8 + NOT_PLANNED.contains(&r) as u8,
+                1,
+                "{r:?}"
+            );
+        }
+        for v in 0..=u8::MAX {
+            assert_eq!(
+                Reset::from_u8(v) == Reset::Unknown,
+                v as usize >= RESETS.len() - 1
+            );
+        }
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn boot_kinds_otherwise_as_before() {
+        use BootKind::*;
+        for reset in RESETS {
+            for reason in Reason::ALL.map(Some).into_iter().chain([None]) {
+                let want = match reset {
+                    Reset::PowerOn | Reset::External => Clean,
+                    Reset::Pending => Stale,
+                    Reset::Brownout => match reason {
+                        Some(Reason::Panic | Reason::StackOverflow | Reason::Diag) => Crash,
+                        Some(r) if PLANNED.contains(&r) => Clean,
+                        _ => Power,
+                    },
+                    Reset::Software => match reason {
+                        Some(r) if PLANNED.contains(&r) => Clean,
+                        Some(Reason::Brownout) => Power,
+                        _ => Crash,
+                    },
+                    _ => Crash,
+                };
+                assert_eq!(boot_kind(reset, reason), want, "{reset:?} {reason:?}");
+            }
+        }
+        // The cases by name.
+        assert_eq!(boot_kind(Reset::Software, None), Crash);
+        assert_eq!(boot_kind(Reset::Software, Some(Reason::Unrecorded)), Crash);
+        assert_eq!(boot_kind(Reset::Software, Some(Reason::ApiReboot)), Clean);
+        assert_eq!(boot_kind(Reset::TaskWdt, Some(Reason::Ota)), Crash);
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Brownout)), Power);
+        assert_eq!(boot_kind(Reset::Brownout, None), Power);
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Panic)), Crash);
+        assert_eq!(
+            boot_kind(Reset::Brownout, Some(Reason::StackOverflow)),
+            Crash
+        );
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Diag)), Crash);
+        // Can't be told from a brownout (boot_kind's note).
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Crash)), Power);
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Unrecorded)), Power);
+        // A planned restart the supply dipped during: clean.
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::ApiReboot)), Clean);
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Ota)), Clean);
+        assert_eq!(boot_kind(Reset::Pending, Some(Reason::Ota)), Stale);
+    }
+
+    #[cfg(feature = "connect")]
+    fn streak(boots: &[(BootKind, u32)]) -> Streak {
+        crash_streak(boots.iter().map(|&(k, up)| (k, fig(up))))
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn a_brownout_is_not_a_crash_and_does_not_end_a_streak() {
+        use BootKind::*;
+        const LONG: u32 = POWER_LOOP_UPTIME_MS;
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        // Brownouts hours apart: nothing.
+        assert_eq!(
+            streak(&[(Power, LONG), (Power, LONG), (Power, LONG), (Clean, 0)]),
+            s(0, false)
+        );
+        // Crash, brownout, crash: still two in a row.
+        assert_eq!(
+            streak(&[(Crash, 9), (Power, LONG), (Crash, 9), (Clean, 0)]),
+            s(2, false)
+        );
+        // A brownout boot after a crash keeps the crash's hold.
+        assert_eq!(
+            streak(&[(Power, LONG), (Crash, 9), (Clean, 0), (Crash, 9)]),
+            s(1, false)
+        );
+        // A clean boot ends it, whatever came before.
+        assert_eq!(streak(&[(Clean, 0), (Crash, 9), (Crash, 9)]), s(0, false));
+        assert_eq!(streak(&[(Crash, 9), (Clean, 0), (Crash, 9)]), s(1, false));
+        assert_eq!(streak(&[]), s(0, false));
+        // A stale entry neither counts nor ends it.
+        assert_eq!(streak(&[(Crash, 9), (Stale, 9), (Crash, 9)]), s(2, false));
+        assert_eq!(streak(&[(Stale, 9), (Clean, 0), (Crash, 9)]), s(0, false));
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn brownouts_soon_after_start_up_hold_remote_control_back() {
+        use BootKind::*;
+        const SHORT: u32 = 200_000; // past the 3-minute boot hold
+        const LONG: u32 = POWER_LOOP_UPTIME_MS;
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        assert_eq!(POWER_LOOP_BOOTS, 3);
+        assert_eq!(
+            streak(&[(Power, SHORT), (Power, SHORT), (Clean, 0)]),
+            s(0, false)
+        );
+        assert_eq!(
+            streak(&[(Power, SHORT), (Power, SHORT), (Power, SHORT)]),
+            s(0, true)
+        );
+        // The held boots' own brownouts (at ~15 minutes) keep it.
+        assert_eq!(
+            streak(&[
+                (Power, LONG - 1),
+                (Power, LONG - 1),
+                (Power, SHORT),
+                (Power, SHORT)
+            ]),
+            s(0, true)
+        );
+        // A run that lasted ends it (only the head counts).
+        assert_eq!(
+            streak(&[
+                (Power, SHORT),
+                (Power, SHORT),
+                (Power, LONG),
+                (Power, SHORT)
+            ]),
+            s(0, false)
+        );
+        assert_eq!(
+            streak(&[
+                (Power, LONG),
+                (Power, SHORT),
+                (Power, SHORT),
+                (Power, SHORT)
+            ]),
+            s(0, false)
+        );
+        // A crash ends the head (it holds anyway), not the count.
+        assert_eq!(
+            streak(&[(Power, SHORT), (Crash, 9), (Power, SHORT), (Power, SHORT)]),
+            s(1, false)
+        );
+        assert_eq!(
+            streak(&[(Power, SHORT), (Power, SHORT), (Power, SHORT), (Crash, 9)]),
+            s(1, true)
+        );
+        // Stale entries are skipped; no heartbeat counts as short.
+        assert_eq!(
+            streak(&[
+                (Power, SHORT),
+                (Stale, LONG),
+                (Power, SHORT),
+                (Power, SHORT)
+            ]),
+            s(0, true)
+        );
+        assert_eq!(
+            crash_streak([(Power, None), (Power, None), (Power, None)]),
+            s(0, true)
+        );
+    }
+
+    /// One run in `r`: it ends with `reset` (after `planned`, a restart
+    /// it recorded first), `up_ms` after its start. This boot's seq.
+    #[cfg(feature = "connect")]
+    fn run(r: &mut [Slot; SLOTS], planned: Option<Entry>, reset: Reset, up_ms: u32) -> u32 {
+        if let Some(e) = planned {
+            push(r, e);
+        }
+        boot(r, reset, fig(up_ms), None).seq
+    }
+
+    #[cfg(feature = "connect")]
+    fn panic_entry() -> Entry {
+        let mut e = Entry::new(
+            Reason::Panic,
+            Figures {
+                largest: 0,
+                ..fig(9_000).unwrap()
+            }
+            .into(),
+        );
+        e.set_panic("src/connect/client.rs", 1, "boom");
+        e
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn the_streak_from_the_ring() {
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        let mut r = ring();
+        let on = run(&mut r, None, Reset::PowerOn, 0);
+        assert_eq!(crash_streak_in(&r, on, Reset::PowerOn), s(0, false));
+        // A panic, then a brownout: the panic's hold stays.
+        let p = run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        assert_eq!(crash_streak_in(&r, p, Reset::Panic), s(1, false));
+        let b = run(&mut r, None, Reset::Brownout, 60_000);
+        assert_eq!(newest(&r).unwrap().reason, Reason::Brownout);
+        assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(1, false));
+        // Another panic: two in a row.
+        let p = run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        assert_eq!(crash_streak_in(&r, p, Reset::Panic), s(2, false));
+        // A restart from the web app clears it, even with a dip after it.
+        let c = run(
+            &mut r,
+            Some(Entry::new(Reason::ApiReboot, fig(1_000))),
+            Reset::Brownout,
+            1_000,
+        );
+        assert_eq!(crash_streak_in(&r, c, Reset::Brownout), s(0, false));
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn brownouts_only_in_the_ring() {
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        // The rig: brownouts hours apart are nothing.
+        let mut r = ring();
+        run(&mut r, None, Reset::PowerOn, 0);
+        let mut b = 0;
+        for _ in 0..5 {
+            b = run(&mut r, None, Reset::Brownout, 3 * 3600 * 1000);
+        }
+        assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(0, false));
+        // Brownouts each soon after start-up: held, never off.
+        let mut r = ring();
+        run(&mut r, None, Reset::PowerOn, 0);
+        for n in 1..=12 {
+            b = run(&mut r, None, Reset::Brownout, 190_000);
+            assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(0, n >= 3), "{n}");
+        }
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn the_ring_wraps_past_its_slots() {
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        let mut r = ring();
+        run(&mut r, None, Reset::PowerOn, 0);
+        run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        let mut b = 0;
+        for _ in 0..SLOTS - 2 {
+            b = run(&mut r, None, Reset::Brownout, 3600 * 1000);
+        }
+        // The power-on and the panic are still in the ring.
+        assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(1, false));
+        b = run(&mut r, None, Reset::Brownout, 3600 * 1000);
+        // The power-on gone: the panic still counts.
+        assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(1, false));
+        b = run(&mut r, None, Reset::Brownout, 3600 * 1000);
+        // The panic gone too: eight brownouts.
+        assert_eq!(newest_first(&r).count(), SLOTS);
+        assert_eq!(crash_streak_in(&r, b, Reset::Brownout), s(0, false));
+        let p = run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        assert_eq!(crash_streak_in(&r, p, Reset::Panic), s(1, false));
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn a_stale_pending_entry_is_not_a_second_crash() {
+        let s = |crashes, power_loop| Streak {
+            crashes,
+            power_loop,
+        };
+        let mut r = ring();
+        run(&mut r, None, Reset::PowerOn, 0);
+        // An update recorded, then a panic while it shut down: only the
+        // panic's entry is paired.
+        push(&mut r, Entry::new(Reason::Ota, fig(5_000)));
+        let p = run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        let stale: Vec<_> = newest_first(&r)
+            .filter(|e| e.reset == Reset::Pending)
+            .collect();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].reason, Reason::Ota);
+        assert_eq!(crash_streak_in(&r, p, Reset::Panic), s(1, false));
+        let p = run(&mut r, Some(panic_entry()), Reset::Panic, 9_000);
+        assert_eq!(crash_streak_in(&r, p, Reset::Panic), s(2, false));
     }
 }

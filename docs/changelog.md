@@ -20,6 +20,17 @@ it can be written ahead. Write for a panel's owner: GIFs, Formulas, playlists,
 the web app. No internals.
 -->
 
+## 1.1.0-beta.4 · 2026-11-20
+
+Remote control no longer switches itself off after power dips.
+
+- A dip in the power supply (a weak USB supply can cause one) restarts the
+  panel but no longer counts as a crash, so Remote control stays on. If
+  dips keep restarting the panel soon after it starts, Remote control waits
+  15 minutes after each start before it connects.
+- On the ESP32-S3 board, a restart from its USB port no longer counts as a
+  crash either.
+
 ## 1.1.0-beta.3 · 2026-11-19
 
 Sprites from your own pictures, and Remote control to try.
