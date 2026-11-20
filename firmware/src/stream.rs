@@ -147,7 +147,9 @@ pub fn uploads() -> u32 {
 /// none yet).
 static UPLOAD_AT_S: AtomicU32 = AtomicU32::new(0);
 
-fn note_upload() {
+/// An upload was asked for, taken or finished now (a LAN one here; a
+/// Connect send's start, chunks and end, `connect::xfer`).
+pub fn note_upload() {
     // SAFETY: a read of the system timer.
     let s = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
     UPLOAD_AT_S.store(s.max(1), Ordering::Relaxed);
@@ -399,6 +401,9 @@ where
 /// [`receive`]'s body, once: not monomorphised for every upload route.
 fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
     let mut up = req.take_over()?;
+    // Every upload asked for counts for the transition gate, refused at
+    // the door or not: its client's next try comes in a moment.
+    note_upload();
     // At the door, for the heap (`opendmd_core::admit`: the start
     // threshold, and a block for the chunk buffer): refused like a busy
     // slot (no linger, 503 + Retry-After), and nothing queued. (No
@@ -442,7 +447,6 @@ fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
         // download as much as an upload (the emulator: a listing's ACKs
         // could not come in behind six of them, and it was cut short).
         let idle = jobs.is_empty() && !BUSY.load(Ordering::Acquire);
-        note_upload();
         if !ahead && idle && UPLOADS.load(Ordering::Acquire) < MAX_UPLOADS {
             UPLOADS.fetch_add(1, Ordering::AcqRel);
             jobs.push_back(Job::Upload { up, work });
@@ -491,8 +495,9 @@ fn run_upload(mut up: Upload, work: UploadWork, counted: bool) {
     // (up to a second). Held until the drop, a client sending its uploads
     // one after another met a 503 for every one (the API lane: ~10 s
     // between two small PUTs).
+    // Its end counts too (taken on the task or, with none, on httpd's).
+    note_upload();
     if counted {
-        note_upload();
         UPLOADS.fetch_sub(1, Ordering::AcqRel);
         BUSY.store(false, Ordering::Release);
     }

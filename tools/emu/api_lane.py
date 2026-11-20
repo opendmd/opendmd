@@ -596,6 +596,7 @@ class Lane:
 
     def boot_checks(self, emu, api):
         st = api.wait_up(240)
+        self.apply_dwell_min(api)
         sha = emu.find(re.compile(r"ELF file SHA256:\s+([0-9a-f]+)"))
         self.expect(sha and self.a.want_sha.startswith(sha[0][1][1]), "boot", f"the booted app is not {self.a.image}")
         self.expect(st.get("wifi") == "sta" and st.get("ip") == "10.0.2.15", "boot", f"not a station on the virtual AP: wifi {st.get('wifi')}, ip {st.get('ip')}")
@@ -606,13 +607,26 @@ class Lane:
         self.expect(m[2] == "false", "boot", f"the first index build left it stale: {emu.lines[i][:200]}")
         self.ok("first index build", f"{m[1]} records, stale false")
 
+    def apply_dwell_min(self, api):
+        """--dwell-min: PUT at boot A's first answer (every path goes through boot_checks), so the
+        first index build already plays under it; saved on the card, it is checked again after
+        each later boot (check_dwell_min)."""
+        n = getattr(self.a, "dwell_min", None)
+        if not n:
+            return
+        _, r = api.json("PUT", "/api/config", {"dwell_min": n})
+        self.expect(r.get("ok") is True, "dwell-min", f"PUT dwell_min {n} answered {r}")
+        self.check_dwell_min(api, "boot A")
+        print(f"api: dwell_min {n} for this run (--dwell-min)", flush=True)
+
+    def check_dwell_min(self, api, where):
+        n = getattr(self.a, "dwell_min", None)
+        if not n:
+            return
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("dwell_min") == n, "dwell-min", f"{where}: dwell_min {cfg.get('dwell_min')}, --dwell-min {n}")
+
     def basics(self, api):
-        if getattr(self.a, "dwell_min", None):
-            _, r = api.json("PUT", "/api/config", {"dwell_min": self.a.dwell_min})
-            self.expect(r.get("ok") is True, "config", f"PUT dwell_min {self.a.dwell_min} answered {r}")
-            _, cfg = api.json("GET", "/api/config")
-            self.expect(cfg.get("dwell_min") == self.a.dwell_min, "config", f"dwell_min read back {cfg.get('dwell_min')}")
-            print(f"api: dwell_min {self.a.dwell_min} for this run (--dwell-min)", flush=True)
         st = api.status()
         for key in ("heap", "now_playing", "sd", "www"):
             self.expect(key in st, "status", f"no `{key}` in /api/status")
@@ -1792,6 +1806,7 @@ class Lane:
         try:
             st = api.wait_up(240)
             ran = st.get("version")
+            self.check_dwell_min(api, label)
             _, cfg = api.json("GET", "/api/config")
             self.expect(cfg.get("dwell_max") == self.dwell_set, "boot B", f"dwell_max {cfg.get('dwell_max')} after the power cycle, saved {self.dwell_set}")
             # (The look's Formula was deleted in boot A: cleared for good.)

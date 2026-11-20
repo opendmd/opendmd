@@ -1664,12 +1664,16 @@ impl Job {
         // passes inside the loose one.
         let ignore_quiet = self.ignore_quiet;
         let left = |h: &AtomicU32| h.load(Relaxed).wrapping_sub(uptime_ms()) as i32;
+        // An upload (or a Connect send) coming in: the build steps aside
+        // at its next read or directory (its group and the card are the
+        // upload's), as for the player.
+        let lan = || crate::stream::uploads_within(config::UPLOAD_QUIET_S);
         let time_left = || {
-            (until.wrapping_sub(uptime_ms()) as i32) > 0 && (ignore_quiet || left(&LOOSE_UNTIL) > 0)
+            (until.wrapping_sub(uptime_ms()) as i32) > 0 && (ignore_quiet || (left(&LOOSE_UNTIL) > 0 && !lan()))
         };
         let sure_left = || {
             (until.wrapping_sub(uptime_ms()) as i32) > 0
-                && (ignore_quiet || left(&QUIET_UNTIL) >= config::FATIDX_WALK_MIN_MS as i32)
+                && (ignore_quiet || (left(&QUIET_UNTIL) >= config::FATIDX_WALK_MIN_MS as i32 && !lan()))
         };
         let heap_ok = || crate::state::free_heap() as usize >= config::FATIDX_SLICE_KEEP;
         loop {
@@ -1854,8 +1858,9 @@ fn run_slice() {
     let now = uptime_ms();
     let mut g = JOB.lock().unwrap_or_else(|p| p.into_inner());
     let Some(job) = g.as_mut() else { return };
-    // Short of the heap, or with a transfer or the cache builder in the
-    // way: not the player's doing, whatever its window (a longer turn would
+    // Short of the heap, or with a transfer, an upload (in hand or within
+    // `config::UPLOAD_QUIET_S`) or the cache builder in the way: not the
+    // player's doing, whatever its window (a longer turn would
     // not help: `HUNGER` is fed, never asks).
     let sure = job.needs_sure();
     let heap_need = if sure {
@@ -1865,6 +1870,7 @@ fn run_slice() {
     };
     if crate::cache_builder::task_up()
         || crate::cache_builder::transfer_in_flight()
+        || crate::stream::uploads_within(config::UPLOAD_QUIET_S)
         || (crate::state::free_heap() as usize) < heap_need
         || (!sure && crate::state::largest_free_block() < config::FATIDX_GROUP_MIN + 1024)
     {
@@ -1897,6 +1903,7 @@ fn run_slice() {
         Ok(true) => fatdir::SliceEnd::Done,
         Err(e) if e.kind() == io::ErrorKind::OutOfMemory => fatdir::SliceEnd::HeapShort,
         _ if heap_stopped => fatdir::SliceEnd::HeapShort,
+        _ if crate::stream::uploads_within(config::UPLOAD_QUIET_S) => fatdir::SliceEnd::SteppedAside,
         _ => fatdir::SliceEnd::Ran(since(uptime_ms(), now)),
     };
     HUNGER.slice_ended(now, end, config::FATIDX_SLICE_MIN_MS);

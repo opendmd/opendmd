@@ -3222,14 +3222,15 @@ fn psram_heap_json() -> String {
 fn main_stack_json() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let cut = crate::TRANSITIONS_CUT.load(Relaxed);
+    let up = crate::transitions_cut_upload();
     #[cfg(feature = "probe")]
     return format!(
-        r#","transitions_cut":{cut},"main_stack":{},"pushed":{}"#,
+        r#","transitions_cut":{cut},"transitions_cut_upload":{up},"main_stack":{},"pushed":{}"#,
         crate::state::MAIN_STACK_UNUSED.load(Relaxed),
         crate::state::PIXELS_PUSHED.load(Relaxed)
     );
     #[cfg(not(feature = "probe"))]
-    format!(r#","transitions_cut":{cut}"#)
+    format!(r#","transitions_cut":{cut},"transitions_cut_upload":{up}"#)
 }
 
 /// `formula_look` in the status: `null`, or what is drawn over the picture

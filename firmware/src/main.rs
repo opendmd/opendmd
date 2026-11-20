@@ -170,8 +170,11 @@ pub static CARD_READY: AtomicBool = AtomicBool::new(false);
 pub(crate) const CARD_NOT_READY: &str = "the card is not ready";
 /// How a build that matched nothing ends its error (`finish_build`).
 const NO_ENTRIES: &str = "matched no entries";
-/// Transitions refused by [`transition_gate`] since boot (heartbeat).
+/// Transitions refused by [`transition_gate`] for the heap since boot
+/// (heartbeat, `/api/status` `heap.transitions_cut`).
 static TRANSITIONS_CUT: AtomicU32 = AtomicU32::new(0);
+/// Transitions it cut for an upload instead (`heap.transitions_cut_upload`).
+static TRANSITIONS_CUT_UPLOAD: AtomicU32 = AtomicU32::new(0);
 
 /// Safe start: from boot until [`config::SAFE_START`] has passed — counted
 /// from the later of boot and the network first coming up (`state::NET_UP`)
@@ -250,9 +253,10 @@ impl SafeStart {
 /// what the new file's decoder has still to allocate (a GIF's LZW state);
 /// the heap must keep [`config::TRANSITION_HEAP_RESERVE`] after both, and a
 /// 16 KB block (the LZW's largest piece) must exist. No dissolve while an
-/// upload is in hand or was in the last [`config::TRANSITION_UPLOAD_QUIET_S`]
-/// (or a transfer shares the card). Called on the main task inside the tick;
-/// counts refusals.
+/// upload (a LAN one, a Connect send) is in hand or was in the last
+/// [`config::UPLOAD_QUIET_S`] (or a transfer shares the card). Called on the
+/// main task inside the tick; counts refusals, for the heap and for uploads
+/// apart.
 fn transition_gate(need: usize) -> bool {
     // A formula look held is not given back during a transition: keep more
     // room instead (the dissolve is cut, not the look).
@@ -270,18 +274,33 @@ fn transition_gate(need: usize) -> bool {
     // dissolve is cut instead: a margin would not do, the heap is high
     // at the switch (~60 KB) and the peak comes in the 400 ms after it.
     // (Not a fallback's ask for the `gif` crate's decoder, which the file
-    // cannot play without: its own heap rule stands.)
-    let fallback = need >= opendmd_core::player::GIF_CRATE_BYTES;
-    let upload = !fallback
-        && (crate::stream::uploads_within(config::TRANSITION_UPLOAD_QUIET_S)
-            || crate::cache_builder::transfer_in_flight());
-    let ok = !upload
-        && free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
+    // cannot play without: its own heap rule stands. Told apart by its
+    // size, which no transition asks: see the assertion below.)
+    let fallback = need == opendmd_core::player::GIF_CRATE_BYTES;
+    if !fallback && (crate::stream::uploads_within(config::UPLOAD_QUIET_S) || crate::cache_builder::transfer_in_flight()) {
+        TRANSITIONS_CUT_UPLOAD.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
         && largest_free_block() >= 16 * 1024;
     if !ok {
         TRANSITIONS_CUT.fetch_add(1, Ordering::Relaxed);
     }
     ok
+}
+
+// A transition asks the gate for its buffers, plus a GIF's first frame for
+// a file the `gif` crate opens directly; a fallback for the crate's decoder
+// alone. `transition_gate` tells them apart by size.
+const _: () = {
+    use opendmd_core::compositor::{BUFFER_BYTES, GIF_FIRST_FRAME_BYTES};
+    use opendmd_core::player::GIF_CRATE_BYTES;
+    assert!(BUFFER_BYTES != GIF_CRATE_BYTES && BUFFER_BYTES + GIF_FIRST_FRAME_BYTES != GIF_CRATE_BYTES);
+};
+
+/// Transitions cut for an upload since boot.
+pub(crate) fn transitions_cut_upload() -> u32 {
+    TRANSITIONS_CUT_UPLOAD.load(Ordering::Relaxed)
 }
 
 /// Whether a formula's still cache may take `take` more bytes of the heap
@@ -4185,10 +4204,11 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (largest {largest} B, floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip} ({activity}{}), {schedule}{}{}{}{}{}{}{}; buffers{}",
+         transitions cut {} (for uploads {}), streams aborted {}, main stack {} B unused, wifi {wifi} {ip} ({activity}{}), {schedule}{}{}{}{}{}{}{}; buffers{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
+        TRANSITIONS_CUT_UPLOAD.load(Ordering::Relaxed),
         httpd::streams_aborted(),
         frametime::stack_unused(),
         ShortBeats(short),

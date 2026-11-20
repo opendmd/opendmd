@@ -24,8 +24,8 @@ use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 /// each tick): atomics, no lock. Times are wrapping milliseconds.
 ///
 /// Fed: a slice that worked its window's worth (`min_ms`), finished, or
-/// stopped for the heap; a look that found the window but the heap or a
-/// transfer in the way. Starved: nothing fed for `after_ms` *and* at least
+/// stopped for the heap or stepped aside for an upload; a look that found
+/// the window but the heap, a transfer or an upload in the way. Starved: nothing fed for `after_ms` *and* at least
 /// `after_looks` looks found no window (a cut-short slice is one): a task
 /// that did not look meanwhile (busy elsewhere) is not starved by the
 /// player, and a build short of heap is not helped by longer turns.
@@ -43,6 +43,8 @@ pub enum SliceEnd {
     Done,
     /// It stopped for the heap (or could not take its buffers).
     HeapShort,
+    /// It stepped aside for something other than the player (an upload).
+    SteppedAside,
 }
 
 impl Hunger {
@@ -873,6 +875,12 @@ mod tests {
         // A slice stopped for the heap feeds it, every time: a longer turn
         // would not help (a free heap of ~20-30 KB, every turn asked else).
         h.slice_ended(20_000, SliceEnd::HeapShort, 120);
+        assert!(!h.starved(40_000, true, 8_000, 6));
+        for _ in 0..10 {
+            h.no_window();
+        }
+        // Stepped aside for an upload: fed too.
+        h.slice_ended(20_000, SliceEnd::SteppedAside, 120);
         assert!(!h.starved(40_000, true, 8_000, 6));
         for _ in 0..10 {
             h.no_window();

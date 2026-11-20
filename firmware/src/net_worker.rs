@@ -1232,8 +1232,9 @@ mod lowwatch {
     pub static UPLOADS: AtomicU32 = AtomicU32::new(0);
     pub static PHASE: AtomicU32 = AtomicU32::new(0);
     /// What the player held at the low: bit 0 a transition running, 1 the
-    /// read-ahead ring, 2 a copy open ahead, 3 the glow's copy, 4 a
-    /// formula look's buffers.
+    /// read-ahead ring, 2 a copy opened ahead (the file on screen, if it
+    /// was), 3 the glow's copy, 4 a formula look's buffers; and beside it,
+    /// bit 5 a FAT index slice on the card, 6 a build under way.
     pub static PLAYER: AtomicU32 = AtomicU32::new(0);
 
     fn player() -> u32 {
@@ -1243,6 +1244,8 @@ mod lowwatch {
             | u32::from(crate::state::AHEAD_KEY.load(R) != 0) << 2
             | u32::from(crate::state::GLOW_HELD.load(R)) << 3
             | u32::from(crate::formula_look::HELD.load(R)) << 4
+            | u32::from(crate::fatidx::slice_running()) << 5
+            | u32::from(crate::fatidx::building()) << 6
     }
     static SNAP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static SNAP: [AtomicI32; 6] = [const { AtomicI32::new(0) }; 6];
