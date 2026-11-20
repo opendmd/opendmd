@@ -45,6 +45,9 @@ api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy
        the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
        (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
        (tools/emu/api_lane.py says what each covers); prints EMU_API_OK.
+oom:   (an `emu-oom-test` image, make emu-oom) on the virtual AP in its own namespace, as api: WiFi
+       drops (straight back; a scan), a squeezed heap through a heartbeat and a reconnect, then an
+       out-of-memory abort and the next boot's record of it (tools/emu/oom_lane.py); EMU_OOM_OK.
 --chip s3: the ESP32-S3 preview image (VARIANT=s3) in esp32sim's S3 machine (`--chip s3 --board none`,
        8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF), the card on SPI3 through the GPIO matrix at the S3
        firmware's pins (`--sd-spi 39,40,41,21`, SCLK, MOSI, MISO, CS): smoke and nocard run as on the
@@ -232,7 +235,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -301,6 +304,8 @@ def main():
         return api(a, sim, rom, want_sha)
     if a.mode == "offline":
         return offline(a, sim, rom, want_sha)
+    if a.mode == "oom":
+        return oom(a, sim, rom, want_sha)
     if a.mode == "power-safe":
         if a.chip != "s3":
             sys.exit("run: power-safe is the ESP32-S3's lane (--chip s3)")
@@ -764,6 +769,26 @@ def offline(a, sim, rom, want_sha):
         sys.exit("EMU_OFFLINE_FAIL: cannot bring up the loopback in the lane's network namespace")
     a.emu_dir, a.want_sha = EMU_DIR, want_sha
     sys.exit(offline_lane.run(a, sim, rom, FAIL, ANSI, BOOT_SHA))
+
+
+def oom(a, sim, rom, want_sha):
+    """The low-heap lane (oom_lane.py), in its own network namespace like the API lane's."""
+    import oom_lane
+    if os.environ.get("EMU_API_NETNS") != "1":
+        try:
+            # Seeded before the namespace (its nvs_partition_gen needs nothing from it).
+            api_lane.seeded_image(a.image, EMU_DIR / "oom")
+        except api_lane.LaneFail as e:
+            sys.exit(f"EMU_OOM_FAIL: {e}")
+        if not shutil.which("unshare"):
+            sys.exit("EMU_OOM_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+        env = {**os.environ, "EMU_API_NETNS": "1"}
+        os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
+    ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
+    if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
+        sys.exit("EMU_OOM_FAIL: cannot bring up the loopback in the lane's network namespace")
+    a.emu_dir, a.want_sha = EMU_DIR, want_sha
+    sys.exit(oom_lane.run(a, sim, rom, FAIL))
 
 
 def power_safe(a, sim, rom, want_sha):

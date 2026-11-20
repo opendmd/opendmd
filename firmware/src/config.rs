@@ -417,6 +417,16 @@ pub const CATCHUP_SLEEP: Duration = Duration::from_millis(1);
 /// Nothing playable, or no card: log and retry on this cadence, forever.
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// The heartbeat's whole line wants a block this large and this much free
+/// heap: its parts are a dozen short strings (the largest ~300 B), made on
+/// the display task, where a failed allocation aborts. Below either it
+/// logs a short line made without the heap (the figures, what is going
+/// on) instead. A test panel on 1.1.0-beta.2 had its heartbeat meet a heap
+/// of 9,676 B free in pieces of at most 432 B: its 280 B part (the card
+/// builder's) failed and the board aborted ("crashed without a recorded
+/// cause").
+pub const HEARTBEAT_FULL_BLOCK: u32 = 4 * 1024;
+pub const HEARTBEAT_FULL_FREE: u32 = HEAP_RESERVE + 4 * 1024;
 
 // ---------------------------------------------------------------------------
 // Networking (phase 3a). Everything network-shaped runs on CPU0; the display

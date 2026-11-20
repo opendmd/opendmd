@@ -40,6 +40,7 @@ use crate::improv::Job;
 use crate::nvs_config::Settings;
 use crate::state::{Command, Status};
 use crate::wifi::{Eap, WifiManager, WifiState};
+use opendmd_core::wifi_reconnect::{Reconnect, Step};
 
 /// Everything the worker needs to take ownership of.
 pub struct NetWorker {
@@ -302,6 +303,17 @@ struct Net {
     _dns: Option<DnsServer>,
     /// The last scan, for the installer's rescans (`IMPROV_SCAN_FRESH`).
     last_scan: Option<(Instant, Vec<crate::wifi::ScannedAp>)>,
+    /// The outage under way: what the reconnect tries next, and when
+    /// (`opendmd_core::wifi_reconnect`).
+    again: Reconnect,
+    /// When a reconnect held back for the heap last said so (uptime ms).
+    held_said: Option<u32>,
+}
+
+/// Uptime, ms (wraps after ~49 days; `wifi_reconnect` compares wrapping).
+fn uptime_ms() -> u32 {
+    // SAFETY: an argument-free read of the IDF's microsecond clock.
+    (unsafe { esp_idf_sys::esp_timer_get_time() } / 1000) as u32
 }
 
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
@@ -489,6 +501,8 @@ fn run(worker: NetWorker) {
         }
 
         net.reconnect();
+        #[cfg(feature = "emu-oom-test")]
+        crate::oom_test::tick(&mut net.wifi, &net.save_cmd);
     }
 }
 
@@ -884,6 +898,8 @@ fn start(
         _sntp,
         _dns,
         last_scan,
+        again: Reconnect::new(),
+        held_said: None,
     })
 }
 
@@ -971,11 +987,27 @@ impl Net {
         }
     }
 
-    /// Reconnect if the association dropped, or was never made.
+    /// Reconnect if the association dropped, or was never made: straight
+    /// back to the last good access point first, then a scan and the
+    /// connect ladder, with pauses between failed rounds and never into a
+    /// low heap (`opendmd_core::wifi_reconnect`).
     #[optimize(size)]
     #[inline(never)]
     fn reconnect(&mut self) {
         let lost = self.wifi.state() == WifiState::Connected && !self.wifi.is_associated();
+        if lost {
+            // Once per drop: from here on the state is disconnected, and
+            // each look below is a reconnect step (or a wait).
+            warn!(
+                "[net] WiFi dropped; reconnecting (heap {} B free, largest block {} B)",
+                crate::state::free_heap(),
+                crate::state::largest_free_block()
+            );
+            crate::wifi::note_drop(uptime_ms() / 1000);
+            self.wifi.mark_dropped();
+            self.again = Reconnect::new();
+            publish(&self.status, WifiState::Disconnected, None);
+        }
         let never = self.wifi.state() == WifiState::Disconnected && !self.ssid.is_empty();
         // Not while installer work is queued: that comes first.
         // Nor while the installer's WiFi form is open (it rescans every
@@ -983,13 +1015,40 @@ impl Net {
         let form_open = self.last_scan
             .as_ref()
             .is_some_and(|(t, _)| t.elapsed() < config::IMPROV_SCAN_FRESH);
-        if (lost || never) && !crate::improv::pending() && !form_open {
-            warn!("[net] WiFi dropped; reconnecting");
-            publish(&self.status, WifiState::Disconnected, None);
-            match self.wifi.connect_sta(&self.ssid, &self.password, self.eap.as_ref(), None) {
+        if never && !crate::improv::pending() && !form_open {
+            let heap = crate::wifi::heap_now();
+            let step = self.again.next(uptime_ms(), self.wifi.knows(&self.ssid), heap);
+            if let Step::Wait { heap: held, .. } = step {
+                if held {
+                    crate::wifi::set_act(opendmd_core::restarts::WifiAct::HeapWait);
+                    // Said once a minute while it lasts.
+                    let now = uptime_ms();
+                    if self.held_said.is_none_or(|t| now.wrapping_sub(t) >= 60_000) {
+                        self.held_said = Some(now);
+                        warn!(
+                            "[net] reconnect held back: heap {} B free, largest block {} B (waiting for it to recover)",
+                            heap.free, heap.largest
+                        );
+                    }
+                }
+                return;
+            }
+            self.held_said = None;
+            crate::wifi::note_try();
+            let joined = match step {
+                Step::Direct => self.wifi.connect_direct(&self.ssid, &self.password, self.eap.as_ref()),
+                _ => self.wifi.connect_sta(&self.ssid, &self.password, self.eap.as_ref(), None),
+            };
+            match joined {
                 Ok(true) => {
                     let ip = self.wifi.ip_address();
-                    info!("[net] reconnected, IP {}", ip.clone().unwrap_or_default());
+                    info!(
+                        "[net] reconnected ({}), IP {}",
+                        if step == Step::Direct { "straight back" } else { "after a scan" },
+                        ip.clone().unwrap_or_default()
+                    );
+                    crate::wifi::note_reconnected();
+                    self.again.connected();
                     publish(&self.status, WifiState::Connected, ip);
                     self.boot_failures = None;
                     if self.mdns.is_none() {
@@ -1018,8 +1077,17 @@ impl Net {
                         }
                     }
                 }
-                Ok(false) => warn!("[net] reconnect failed; will retry"),
-                Err(e) => warn!("[net] reconnect error: {e:#}"),
+                Ok(false) => {
+                    self.again.failed(uptime_ms(), step);
+                    warn!(
+                        "[net] reconnect failed ({}); will retry",
+                        if step == Step::Direct { "straight back" } else { "scan" }
+                    );
+                }
+                Err(e) => {
+                    self.again.failed(uptime_ms(), step);
+                    warn!("[net] reconnect error: {e:#}");
+                }
             }
         }
     }

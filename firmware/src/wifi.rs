@@ -28,8 +28,21 @@
 //!   server's certificate is not checked (no CA certificate is kept), and
 //!   there is no EAP-TLS (no client certificate).
 //!
+//! - **Scans keep nothing of ours on the heap.** esp-idf-svc's `scan()`
+//!   copies every answering AP into a `Vec` sized by their count, and its
+//!   record conversion panics on a secondary channel it does not know: the
+//!   scans here read the driver's records one at a time onto the stack
+//!   (`esp_wifi_scan_get_ap_record`) and free its list. The connect's scan
+//!   is directed at the network's name ([`WifiManager::connect_sta`]); the
+//!   setup page's lists at most [`SCAN_LIST_MAX`] names.
+//! - **A reconnect goes straight back first** ([`WifiManager::connect_direct`]):
+//!   pinned to the access point, channel and security of the last good
+//!   connection ([`Learned`]), no scan; `opendmd_core::wifi_reconnect` says
+//!   when to scan instead, when to pause and when the heap is too low.
+//!
 //! Everything in here runs on the network worker thread (CPU0). The display
-//! loop never calls into this module.
+//! loop never calls into this module, but for [`act`] and the counters
+//! (atomics: the restart record's activity word and `/api/status`).
 
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -38,12 +51,169 @@ use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi,
 };
 use log::{info, warn};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::nvs_config::Settings;
+use opendmd_core::restarts::WifiAct;
 use opendmd_core::wifi_login::{self, Phase2};
+use opendmd_core::wifi_reconnect::Heap;
+
+/// What the WiFi is doing now ([`WifiAct`], as `u8`).
+static ACT: AtomicU8 = AtomicU8::new(WifiAct::Down as u8);
+/// Drops seen (the association lost while connected), reconnect attempts
+/// (each a pinned connect or a scan and its ladder), reconnects made.
+static DROPS: AtomicU32 = AtomicU32::new(0);
+static TRIES: AtomicU32 = AtomicU32::new(0);
+static RECONNECTS: AtomicU32 = AtomicU32::new(0);
+/// The last drop's uptime, seconds (`u32::MAX`: none yet).
+static LAST_DROP_S: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// What the WiFi is doing (the restart record's activity word).
+pub fn act() -> WifiAct {
+    WifiAct::from_u8(ACT.load(Relaxed))
+}
+
+pub fn set_act(a: WifiAct) {
+    ACT.store(a as u8, Relaxed);
+}
+
+/// Reconnect attempts this run.
+pub fn reconnect_tries() -> u32 {
+    TRIES.load(Relaxed)
+}
+
+/// A drop seen at `uptime_s`.
+pub fn note_drop(uptime_s: u32) {
+    DROPS.fetch_add(1, Relaxed);
+    LAST_DROP_S.store(uptime_s, Relaxed);
+}
+
+/// A reconnect attempt begun.
+pub fn note_try() {
+    TRIES.fetch_add(1, Relaxed);
+}
+
+/// A reconnect made.
+pub fn note_reconnected() {
+    RECONNECTS.fetch_add(1, Relaxed);
+}
+
+/// `"wifi_drops":N,"wifi_reconnects":N,"wifi_reconnect_tries":N,
+/// "wifi_last_drop_s":N|null,"wifi_activity":"…"` (`/api/status` `net`).
+pub fn status_fields() -> String {
+    let last = LAST_DROP_S.load(Relaxed);
+    format!(
+        r#""wifi_drops":{},"wifi_reconnects":{},"wifi_reconnect_tries":{},"wifi_last_drop_s":{},"wifi_activity":"{}""#,
+        DROPS.load(Relaxed),
+        RECONNECTS.load(Relaxed),
+        TRIES.load(Relaxed),
+        if last == u32::MAX { "null".to_string() } else { last.to_string() },
+        act().name()
+    )
+}
+
+/// The heap now, as a scan or a reconnect weighs it (one heap walk for
+/// the largest block).
+pub fn heap_now() -> Heap {
+    Heap {
+        free: crate::state::free_heap(),
+        largest: crate::state::largest_free_block() as u32,
+    }
+}
+
+/// The most networks the setup page's scan lists (the strongest of each
+/// name; the driver's other records are read and dropped).
+pub const SCAN_LIST_MAX: usize = 24;
+
+/// The last good connection: the network, its access point, channel and
+/// the security that joined it. Fixed-size (no heap): it is written as a
+/// connect succeeds and read by the reconnect.
+#[derive(Clone, Copy)]
+pub struct Learned {
+    ssid: [u8; 32],
+    ssid_len: u8,
+    bssid: [u8; 6],
+    channel: u8,
+    auth: AuthMethod,
+}
+
+impl Learned {
+    fn is_for(&self, ssid: &str) -> bool {
+        &self.ssid[..self.ssid_len as usize] == ssid.as_bytes()
+    }
+}
+
+/// One AP a directed scan found.
+#[derive(Clone, Copy)]
+struct Found {
+    bssid: [u8; 6],
+    channel: u8,
+    rssi: i8,
+    auth: Option<AuthMethod>,
+}
+
+/// The driver's auth mode as esp-idf-svc names it (`None`: a mode it has no
+/// name for, WPA3-Enterprise among them).
+#[allow(non_upper_case_globals)]
+fn auth_of(mode: esp_idf_sys::wifi_auth_mode_t) -> Option<AuthMethod> {
+    use esp_idf_sys::*;
+    Some(match mode {
+        wifi_auth_mode_t_WIFI_AUTH_OPEN => AuthMethod::None,
+        wifi_auth_mode_t_WIFI_AUTH_WEP => AuthMethod::WEP,
+        wifi_auth_mode_t_WIFI_AUTH_WPA_PSK => AuthMethod::WPA,
+        wifi_auth_mode_t_WIFI_AUTH_WPA2_PSK => AuthMethod::WPA2Personal,
+        wifi_auth_mode_t_WIFI_AUTH_WPA_WPA2_PSK => AuthMethod::WPAWPA2Personal,
+        wifi_auth_mode_t_WIFI_AUTH_WPA2_ENTERPRISE => AuthMethod::WPA2Enterprise,
+        wifi_auth_mode_t_WIFI_AUTH_WPA3_PSK => AuthMethod::WPA3Personal,
+        wifi_auth_mode_t_WIFI_AUTH_WPA2_WPA3_PSK => AuthMethod::WPA2WPA3Personal,
+        wifi_auth_mode_t_WIFI_AUTH_WAPI_PSK => AuthMethod::WAPIPersonal,
+        _ => return None,
+    })
+}
+
+/// A record's SSID (up to its NUL).
+fn record_ssid(rec: &esp_idf_sys::wifi_ap_record_t) -> &[u8] {
+    let n = rec.ssid.iter().position(|&b| b == 0).unwrap_or(rec.ssid.len()).min(32);
+    &rec.ssid[..n]
+}
+
+/// One blocking scan (`ssid`: directed at that name only, which also finds
+/// it hidden), then `each` with every record the driver kept, one at a
+/// time on the stack, and the driver's list freed. The number of records.
+fn scan_records(ssid: Option<&str>, each: &mut dyn FnMut(&esp_idf_sys::wifi_ap_record_t)) -> Result<u16, esp_idf_sys::EspError> {
+    let mut name = [0u8; 33];
+    // SAFETY: a zeroed scan config is IDF's defaults (an active scan of
+    // every channel, the default dwell times); `name` is NUL-terminated
+    // and outlives the blocking call. The records are read into a local
+    // and the list is cleared whatever happened.
+    unsafe {
+        let mut cfg: esp_idf_sys::wifi_scan_config_t = core::mem::zeroed();
+        if let Some(s) = ssid {
+            let n = s.len().min(32);
+            name[..n].copy_from_slice(&s.as_bytes()[..n]);
+            cfg.ssid = name.as_mut_ptr();
+            cfg.show_hidden = true;
+        }
+        esp_idf_sys::esp!(esp_idf_sys::esp_wifi_scan_start(&cfg, true))?;
+        let mut n: u16 = 0;
+        let counted = esp_idf_sys::esp_wifi_scan_get_ap_num(&mut n);
+        let mut rec: esp_idf_sys::wifi_ap_record_t = core::mem::zeroed();
+        if counted == esp_idf_sys::ESP_OK {
+            for _ in 0..n {
+                if esp_idf_sys::esp_wifi_scan_get_ap_record(&mut rec) != esp_idf_sys::ESP_OK {
+                    break;
+                }
+                each(&rec);
+            }
+        }
+        esp_idf_sys::esp_wifi_clear_ap_list();
+        esp_idf_sys::esp!(counted)?;
+        Ok(n)
+    }
+}
 
 /// A work or school network's login (802.1X): the password is the WiFi
 /// password. From the saved settings ([`Eap::of`]); never logged.
@@ -141,6 +311,8 @@ pub struct WifiManager {
     state: WifiState,
     /// The EAP client is on (`esp_wifi_sta_enterprise_enable`).
     eap_on: bool,
+    /// The last good connection, for [`WifiManager::connect_direct`].
+    learned: Option<Learned>,
 }
 
 /// The station's DHCP client name (`esp_netif_set_hostname`). Before the
@@ -192,11 +364,56 @@ impl WifiManager {
             wifi,
             state: WifiState::Disconnected,
             eap_on: false,
+            learned: None,
         })
     }
 
     pub fn state(&self) -> WifiState {
         self.state
+    }
+
+    /// The association was lost (the worker saw it): disconnected from
+    /// here on, so the next look is a reconnect, not another drop.
+    pub fn mark_dropped(&mut self) {
+        if self.state == WifiState::Connected {
+            self.state = WifiState::Disconnected;
+        }
+        set_act(WifiAct::Down);
+    }
+
+    /// The emulator's low-heap lane (`oom_test`): the learned access point
+    /// and channel made wrong, so the pinned connect fails.
+    #[cfg(feature = "emu-oom-test")]
+    pub fn spoil_learned(&mut self) {
+        if let Some(l) = self.learned.as_mut() {
+            l.bssid[5] ^= 0x55;
+            l.channel = l.channel % 13 + 1;
+        }
+    }
+
+    /// The last good connection is to `ssid` (a pinned connect can be tried).
+    pub fn knows(&self, ssid: &str) -> bool {
+        self.learned.as_ref().is_some_and(|l| l.is_for(ssid))
+    }
+
+    /// Note the connection just made to `ssid` with `auth`: its access
+    /// point and channel from the driver.
+    fn learn(&mut self, ssid: &str, auth: AuthMethod) {
+        // SAFETY: the driver fills a zeroed record of its own type.
+        let mut rec: esp_idf_sys::wifi_ap_record_t = unsafe { core::mem::zeroed() };
+        if unsafe { esp_idf_sys::esp_wifi_sta_get_ap_info(&mut rec) } != esp_idf_sys::ESP_OK || ssid.len() > 32 {
+            self.learned = None;
+            return;
+        }
+        let mut name = [0u8; 32];
+        name[..ssid.len()].copy_from_slice(ssid.as_bytes());
+        self.learned = Some(Learned {
+            ssid: name,
+            ssid_len: ssid.len() as u8,
+            bssid: rec.bssid,
+            channel: rec.primary,
+            auth,
+        });
     }
 
     /// Ask the driver itself, bypassing our state machine — this is how the
@@ -225,39 +442,58 @@ impl WifiManager {
 
     /// On-demand scan for the setup page and `GET /api/wifi/scan`. It works
     /// in setup mode too: the setup network runs as AP+STA, so the station
-    /// half scans without taking the AP down.
+    /// half scans without taking the AP down. Refused when the heap is low
+    /// (`Heap::scan_ok`): the driver holds every answering AP on it until
+    /// read. At most [`SCAN_LIST_MAX`] names, the list's room taken
+    /// fallibly first.
     pub fn scan_networks(&mut self) -> anyhow::Result<Vec<ScannedAp>> {
-        let aps = self
-            .wifi
-            .wifi_mut()
-            .scan()
-            .map_err(|e| anyhow::anyhow!("scan failed: {e}"))?;
-
+        let heap = heap_now();
+        if !heap.scan_ok() {
+            anyhow::bail!(
+                "not scanning: {} B free, largest block {} B (a scan needs {} B and {} B)",
+                heap.free,
+                heap.largest,
+                opendmd_core::wifi_reconnect::SCAN_MIN_FREE,
+                opendmd_core::wifi_reconnect::SCAN_MIN_BLOCK
+            );
+        }
         let mut best: Vec<ScannedAp> = Vec::new();
-        for ap in aps {
-            if ap.channel > 14 {
-                continue; // the ESP32 has no 5 GHz radio
+        best.try_reserve_exact(SCAN_LIST_MAX)
+            .map_err(|_| anyhow::anyhow!("not scanning: no room for the list"))?;
+        let was = act();
+        set_act(WifiAct::Scanning);
+        let scanned = scan_records(None, &mut |rec| {
+            if rec.primary > 14 {
+                return; // the ESP32 has no 5 GHz radio
             }
-            let ssid = ap.ssid.as_str().to_string();
+            let Ok(ssid) = core::str::from_utf8(record_ssid(rec)) else { return };
             if ssid.is_empty() {
-                continue; // hidden
+                return; // hidden
             }
             // A mode esp-idf-svc 0.51 has no name for (WPA3-Enterprise,
             // WPA2/WPA3-Enterprise, OWE, ...) is not an open network.
-            let (label, secure) = ap.auth_method.map_or(("Other", true), auth_label);
-            let candidate = ScannedAp {
-                ssid,
-                rssi: ap.signal_strength,
-                channel: ap.channel,
-                auth: label,
-                secure,
-            };
-            match best.iter_mut().find(|e| e.ssid == candidate.ssid) {
-                Some(existing) if candidate.rssi > existing.rssi => *existing = candidate,
+            let (label, secure) = auth_of(rec.authmode).map_or(("Other", true), auth_label);
+            let room = best.len() < SCAN_LIST_MAX;
+            match best.iter_mut().find(|e| e.ssid == ssid) {
+                Some(existing) if rec.rssi > existing.rssi => {
+                    existing.rssi = rec.rssi;
+                    existing.channel = rec.primary;
+                    existing.auth = label;
+                    existing.secure = secure;
+                }
                 Some(_) => {}
-                None => best.push(candidate),
+                None if room => best.push(ScannedAp {
+                    ssid: ssid.to_string(),
+                    rssi: rec.rssi,
+                    channel: rec.primary,
+                    auth: label,
+                    secure,
+                }),
+                None => {}
             }
-        }
+        });
+        set_act(was);
+        scanned.map_err(|e| anyhow::anyhow!("scan failed: {e}"))?;
         // Unstable: the stable sort keeps a 4 KB scratch buffer on the
         // stack (the network worker's; ties in RSSI may come in any order).
         best.sort_unstable_by_key(|ap| std::cmp::Reverse(ap.rssi));
@@ -373,6 +609,7 @@ impl WifiManager {
                 return Err(());
             }
             info!("  STA stage {stage}, attempt {attempt}/{attempts}");
+            set_act(WifiAct::Connecting);
             // The driver's non-blocking connect, then our own waits
             // (`BlockingWifi::connect` and `wait_netif_up` block 15 s each
             // and can be neither interrupted nor clipped).
@@ -389,6 +626,7 @@ impl WifiManager {
                 if let Ok(ip) = self.wifi.wifi().sta_netif().get_ip_info() {
                     info!("WiFi connected, IP {}", ip.ip);
                     self.state = WifiState::Connected;
+                    set_act(WifiAct::Up);
                     // No power save: the httpd is latency-sensitive and the
                     // board is mains-powered anyway.
                     // SAFETY: an argument-only driver setting.
@@ -472,32 +710,45 @@ impl WifiManager {
         crate::heapmap::cp("wifi: started (sta)");
 
         info!("scanning for '{ssid}'");
+        set_act(WifiAct::Scanning);
+        // Directed at the name: the driver keeps only its access points.
+        let mut found: Option<Found> = None;
+        let mut pick = |rec: &esp_idf_sys::wifi_ap_record_t| {
+            if rec.primary <= 14
+                && record_ssid(rec) == ssid.as_bytes()
+                && found.is_none_or(|f| rec.rssi > f.rssi)
+            {
+                found = Some(Found {
+                    bssid: rec.bssid,
+                    channel: rec.primary,
+                    rssi: rec.rssi,
+                    auth: auth_of(rec.authmode),
+                });
+            }
+        };
         // A scan right after an association was abandoned can fail while
         // the driver settles: once more, half a second later.
-        let scan = match self.wifi.wifi_mut().scan() {
-            Ok(s) => s,
+        let scanned = match scan_records(Some(ssid), &mut pick) {
+            Ok(n) => n,
             Err(e) => {
                 warn!("scan failed ({e}); retrying");
                 thread::sleep(Duration::from_millis(500));
-                self.wifi.wifi_mut().scan().unwrap_or_default()
+                scan_records(Some(ssid), &mut pick).unwrap_or(0)
             }
         };
-        let found = scan
-            .iter()
-            .filter(|ap| ap.channel <= 14 && ap.ssid.as_str() == ssid)
-            .max_by_key(|ap| ap.signal_strength);
 
         let Some(ap) = found else {
-            warn!("'{ssid}' not found in a scan of {} APs", scan.len());
+            warn!("'{ssid}' not found (a scan for it answered by {scanned} APs)");
             self.state = WifiState::Disconnected;
+            set_act(WifiAct::Down);
             return Ok(false);
         };
         // (A mode esp-idf-svc has no name for, WPA3-Enterprise among them,
         // is `None`: the driver then takes whatever the network offers.)
-        let detected = ap.auth_method.unwrap_or(AuthMethod::None);
+        let detected = ap.auth.unwrap_or(AuthMethod::None);
         info!(
             "'{ssid}' found: rssi={} ch={} auth={detected:?}{}",
-            ap.signal_strength,
+            ap.rssi,
             ap.channel,
             if eap.is_some() { ", joining with a work or school login (802.1X)" } else { "" }
         );
@@ -522,11 +773,15 @@ impl WifiManager {
                 }))?;
             self.fix_pmf();
             match self.try_connect(attempts, stage as u8 + 1, deadline) {
-                Ok(true) => return Ok(true),
+                Ok(true) => {
+                    self.learn(ssid, auth);
+                    return Ok(true);
+                }
                 Ok(false) => {}
                 Err(()) => {
                     info!("connect to '{ssid}' paused: the browser installer is waiting");
                     self.state = WifiState::Disconnected;
+                    set_act(WifiAct::Down);
                     return Ok(false);
                 }
             }
@@ -534,7 +789,51 @@ impl WifiManager {
 
         warn!("every connect stage failed for '{ssid}'");
         self.state = WifiState::Disconnected;
+        set_act(WifiAct::Down);
         Ok(false)
+    }
+
+    /// Back onto `ssid` (a reconnect after a drop) without a scan: one
+    /// attempt pinned to the access point, channel and security of the last
+    /// good connection ([`Learned`]). `Ok(false)` when it does not join (or
+    /// nothing is known for `ssid`): the caller scans next
+    /// (`opendmd_core::wifi_reconnect`). The EAP client keeps the login it
+    /// was given by the connect that learned it.
+    #[optimize(size)]
+    #[inline(never)]
+    pub fn connect_direct(&mut self, ssid: &str, password: &str, eap: Option<&Eap>) -> anyhow::Result<bool> {
+        let Some(l) = self.learned.filter(|l| l.is_for(ssid)) else {
+            return Ok(false);
+        };
+        let password = if eap.is_some() { "" } else { password };
+        info!(
+            "reconnecting to '{ssid}' at {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch {} ({:?}), no scan",
+            l.bssid[0], l.bssid[1], l.bssid[2], l.bssid[3], l.bssid[4], l.bssid[5], l.channel, l.auth
+        );
+        if self.wifi.is_connected().unwrap_or(false) {
+            let _ = self.wifi.disconnect();
+        }
+        self.wifi
+            .set_configuration(&Configuration::Client(ClientConfiguration {
+                ssid: ssid.try_into().unwrap_or_default(),
+                password: password.try_into().unwrap_or_default(),
+                auth_method: l.auth,
+                channel: Some(l.channel),
+                bssid: Some(l.bssid),
+                ..Default::default()
+            }))?;
+        if !self.wifi.is_started().unwrap_or(false) {
+            self.wifi.start()?;
+        }
+        self.fix_pmf();
+        match self.try_connect(1, 0, None) {
+            Ok(true) => Ok(true),
+            Ok(false) | Err(()) => {
+                self.state = WifiState::Disconnected;
+                set_act(WifiAct::Down);
+                Ok(false)
+            }
+        }
     }
 
     /// Leave the network joined, if any (an offline display's join that
@@ -546,6 +845,7 @@ impl WifiManager {
             self.wifi.disconnect()?;
         }
         self.state = WifiState::Disconnected;
+        set_act(WifiAct::Down);
         Ok(())
     }
 
@@ -622,6 +922,7 @@ impl WifiManager {
         }
 
         self.state = WifiState::ApMode;
+        set_act(WifiAct::Setup);
         Ok(())
     }
 }

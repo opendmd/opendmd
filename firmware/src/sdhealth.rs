@@ -755,6 +755,14 @@ pub fn reset_note() -> Option<&'static str> {
     }
 }
 
+/// The card's open, read and serve errors this run (the restart record's
+/// activity word): RTC word loads only.
+pub fn error_count() -> u32 {
+    get(w!(LIVE.opens))
+        .saturating_add(get(w!(LIVE.reads)))
+        .saturating_add(get(w!(LIVE.serves)))
+}
+
 /// The heartbeat's part, only once something has failed.
 pub fn heartbeat() -> String {
     let (o, r, s) = (

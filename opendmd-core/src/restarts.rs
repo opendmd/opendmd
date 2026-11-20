@@ -20,6 +20,12 @@
 //! is the valid one with the highest sequence number; the next goes in the
 //! slot after it (`seq % SLOTS`), overwriting the oldest.
 //!
+//! **What was going on** ([`Activity`]): one word of what the device was
+//! doing (the WiFi's state, the card builder, the FAT index build, a
+//! transition, transfers, the card's errors, the WiFi's reconnect tries)
+//! rides with every entry, with the heartbeat's figures and with the last
+//! failed allocation, so a crash says what it happened during.
+//!
 //! Nothing here allocates: the panic hook writes through [`push`].
 
 use core::fmt;
@@ -27,20 +33,172 @@ use core::fmt;
 /// Entries kept: the last eight restarts.
 pub const SLOTS: usize = 8;
 /// Bytes of [`Entry::text`]: a panic's `file:line` and up to
-/// [`MSG_MAX`] bytes of its message.
-pub const TEXT: usize = 80;
+/// [`MSG_MAX`] bytes of its message, or an out-of-memory crash's last
+/// failed allocation (its size, task, time and free heap).
+pub const TEXT: usize = 104;
 /// The longest panic message kept (the rest is cut, at a character).
 pub const MSG_MAX: usize = 48;
-/// Words in a slot: magic, seq, meta, uptime, heap free, largest, checksum,
-/// then the text.
-pub const WORDS: usize = 7 + TEXT / 4;
+/// Words in a slot: magic, seq, meta, uptime, heap free, largest,
+/// activity, checksum, then the text.
+pub const WORDS: usize = 8 + TEXT / 4;
 /// One encoded entry.
 pub type Slot = [u32; WORDS];
 
-/// The layout's magic (bump it when the layout changes).
-const MAGIC: u32 = 0x5e57_a201;
-const ALIVE_MAGIC: u32 = 0xa11f_e001;
-const ALLOC_MAGIC: u32 = 0xa110_cf01;
+/// The layout's magic (bump it when the layout changes: an older layout's
+/// slots then read as empty).
+const MAGIC: u32 = 0x5e57_a202;
+const ALIVE_MAGIC: u32 = 0xa11f_e002;
+const ALLOC_MAGIC: u32 = 0xa110_cf02;
+
+/// What the WiFi was doing ([`Activity`]'s low three bits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum WifiAct {
+    /// Not connected, and not trying (no network saved, offline, or
+    /// between attempts).
+    #[default]
+    Down = 0,
+    /// On the network.
+    Up = 1,
+    /// Associating (a connect attempt under way).
+    Connecting = 2,
+    /// Scanning for the network.
+    Scanning = 3,
+    /// The setup network (AP mode).
+    Setup = 4,
+    /// A reconnect held back for the heap.
+    HeapWait = 5,
+}
+
+impl WifiAct {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn from_u8(v: u8) -> WifiAct {
+        match v {
+            1 => WifiAct::Up,
+            2 => WifiAct::Connecting,
+            3 => WifiAct::Scanning,
+            4 => WifiAct::Setup,
+            5 => WifiAct::HeapWait,
+            _ => WifiAct::Down,
+        }
+    }
+
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn name(self) -> &'static str {
+        match self {
+            WifiAct::Down => "down",
+            WifiAct::Up => "up",
+            WifiAct::Connecting => "connecting",
+            WifiAct::Scanning => "scanning",
+            WifiAct::Setup => "setup network",
+            WifiAct::HeapWait => "waiting for heap",
+        }
+    }
+}
+
+/// What the device was doing, in one word ([`Activity::pack`]): written
+/// with every heartbeat, every failed allocation and every entry, read
+/// back as [`Activity::parts`] or as text (`Display`: `wifi up, builder,
+/// 1 stream, 3 reconnect tries`). 0 is "not known" (an entry from before
+/// the heartbeat ran).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Activity(pub u32);
+
+/// [`Activity`]'s fields. Counts saturate at their field's width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ActivityParts {
+    pub wifi: WifiAct,
+    /// The card builder holds encoder state (mid-file).
+    pub builder: bool,
+    /// The FAT index's build task is up.
+    pub fat_index: bool,
+    /// A transition between GIFs is running.
+    pub transition: bool,
+    /// The playlist's index is in RAM (the card refused its `.idx`).
+    pub index_in_ram: bool,
+    /// Transfers under way on the stream task (0-3).
+    pub streams: u32,
+    /// Uploads queued or being received (0-3).
+    pub uploads: u32,
+    /// The card's open, read and serve errors this run (0-255).
+    pub card_errors: u32,
+    /// WiFi reconnect attempts this run (0-4095).
+    pub reconnect_tries: u32,
+}
+
+const ACT_KNOWN: u32 = 1 << 31;
+
+impl Activity {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn pack(p: &ActivityParts) -> Activity {
+        Activity(
+            ACT_KNOWN
+                | p.wifi as u32 & 7
+                | (p.builder as u32) << 3
+                | (p.fat_index as u32) << 4
+                | (p.transition as u32) << 5
+                | (p.index_in_ram as u32) << 6
+                | p.streams.min(3) << 7
+                | p.uploads.min(3) << 9
+                | p.card_errors.min(255) << 11
+                | p.reconnect_tries.min(4095) << 19,
+        )
+    }
+
+    /// `None`: not known.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn parts(self) -> Option<ActivityParts> {
+        let w = self.0;
+        (w & ACT_KNOWN != 0).then_some(ActivityParts {
+            wifi: WifiAct::from_u8((w & 7) as u8),
+            builder: w >> 3 & 1 != 0,
+            fat_index: w >> 4 & 1 != 0,
+            transition: w >> 5 & 1 != 0,
+            index_in_ram: w >> 6 & 1 != 0,
+            streams: w >> 7 & 3,
+            uploads: w >> 9 & 3,
+            card_errors: w >> 11 & 255,
+            reconnect_tries: w >> 19 & 4095,
+        })
+    }
+
+    pub fn is_known(self) -> bool {
+        self.0 & ACT_KNOWN != 0
+    }
+}
+
+/// `wifi up, builder, fat index, transition, index in RAM, 1 stream,
+/// 2 uploads, 3 card errors, 12 reconnect tries` (what is not going on is
+/// left out, but for the WiFi); empty when not known. No allocation.
+impl fmt::Display for Activity {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Some(p) = self.parts() else { return Ok(()) };
+        f.write_str("wifi ")?;
+        f.write_str(p.wifi.name())?;
+        for (on, what) in [
+            (p.builder, "builder"),
+            (p.fat_index, "fat index"),
+            (p.transition, "transition"),
+            (p.index_in_ram, "index in RAM"),
+        ] {
+            if on {
+                write!(f, ", {what}")?;
+            }
+        }
+        for (n, one, many) in [
+            (p.streams, "stream", "streams"),
+            (p.uploads, "upload", "uploads"),
+            (p.card_errors, "card error", "card errors"),
+            (p.reconnect_tries, "reconnect try", "reconnect tries"),
+        ] {
+            if n > 0 {
+                write!(f, ", {n} {}", if n == 1 { one } else { many })?;
+            }
+        }
+        Ok(())
+    }
+}
 /// `meta` bit: the uptime and heap figures are known.
 const KNOWN: u32 = 1 << 31;
 
@@ -242,6 +400,8 @@ pub struct Entry {
     /// `None` when nothing was known (a power-on, an unrecorded restart with
     /// no heartbeat).
     pub figures: Option<Figures>,
+    /// What was going on ([`Activity`]; 0: not known).
+    pub activity: Activity,
     text: [u8; TEXT],
     len: u8,
 }
@@ -263,6 +423,7 @@ impl Entry {
             reason,
             reset: Reset::Pending,
             figures,
+            activity: Activity(0),
             text: [0; TEXT],
             len: 0,
         }
@@ -376,19 +537,20 @@ pub fn encode(e: &Entry) -> Slot {
     s[3] = f.uptime_ms;
     s[4] = f.heap_free;
     s[5] = f.largest;
+    s[6] = e.activity.0;
     for (i, c) in e.text.as_chunks::<4>().0.iter().enumerate() {
-        s[7 + i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        s[8 + i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
     }
-    s[6] = checksum_of(&s);
+    s[7] = checksum_of(&s);
     s
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn checksum_of(s: &Slot) -> u32 {
-    combine(checksum(&s[1..6]), checksum(&s[7..]))
+    combine(checksum(&s[1..7]), checksum(&s[8..]))
 }
 
-/// The slot's checksum from its header's (words 1-5) and its text's.
+/// The slot's checksum from its header's (words 1-6) and its text's.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn combine(header: u32, text: u32) -> u32 {
     header ^ text.rotate_left(7)
@@ -397,7 +559,7 @@ fn combine(header: u32, text: u32) -> u32 {
 /// A slot as an entry: `None` if it is empty, garbage or another layout's.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn decode(s: &Slot) -> Option<Entry> {
-    if s[0] != MAGIC || s[6] != checksum_of(s) {
+    if s[0] != MAGIC || s[7] != checksum_of(s) {
         return None;
     }
     let reason = Reason::from_u8(s[2] as u8)?;
@@ -406,7 +568,7 @@ pub fn decode(s: &Slot) -> Option<Entry> {
         return None;
     }
     let mut text = [0u8; TEXT];
-    for (i, w) in s[7..].iter().enumerate() {
+    for (i, w) in s[8..].iter().enumerate() {
         text[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
     }
     core::str::from_utf8(&text[..len as usize]).ok()?;
@@ -419,6 +581,7 @@ pub fn decode(s: &Slot) -> Option<Entry> {
             heap_free: s[4],
             largest: s[5],
         }),
+        activity: Activity(s[6]),
         text,
         len,
     })
@@ -490,7 +653,13 @@ pub fn push(store: &mut dyn Store, mut e: Entry) -> Entry {
 /// the words one at a time — no slot on the stack, no `core::fmt` — from
 /// `parts` concatenated (cut at [`TEXT`]; bytes past ASCII become `?`).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[&[u8]]) {
+pub fn push_minimal(
+    store: &mut dyn Store,
+    reason: Reason,
+    f: Figures,
+    activity: Activity,
+    parts: &[&[u8]],
+) {
     let mut seq = None;
     for i in 0..SLOTS {
         if store.get(i, 0) == MAGIC {
@@ -522,6 +691,7 @@ pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[
         f.uptime_ms,
         f.heap_free,
         f.largest,
+        activity.0,
     ];
     let text = (0..TEXT / 4).fold(FNV_SEED, |h, k| fnv(h, text_word(k)));
     let slot = seq as usize % SLOTS;
@@ -529,9 +699,9 @@ pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[
     for (k, w) in header.iter().enumerate() {
         store.put(slot, 1 + k, *w);
     }
-    store.put(slot, 6, combine(checksum(&header), text));
+    store.put(slot, 7, combine(checksum(&header), text));
     for k in 0..TEXT / 4 {
-        store.put(slot, 7 + k, text_word(k));
+        store.put(slot, 8 + k, text_word(k));
     }
     store.put(slot, 0, MAGIC);
 }
@@ -600,23 +770,36 @@ pub fn clear(store: &mut dyn Store) {
     }
 }
 
-/// The last heartbeat's figures, kept in RTC memory for a restart that
-/// records nothing (a crash, a watchdog).
+/// The last heartbeat's figures and [`Activity`], kept in RTC memory for
+/// a restart that records nothing (a crash, a watchdog).
+pub const ALIVE_WORDS: usize = 6;
+
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn encode_alive(f: &Figures) -> [u32; 5] {
-    let mut s = [ALIVE_MAGIC, f.uptime_ms, f.heap_free, f.largest, 0];
-    s[4] = checksum(&s[..4]);
+pub fn encode_alive(f: &Figures, activity: Activity) -> [u32; ALIVE_WORDS] {
+    let mut s = [ALIVE_MAGIC, f.uptime_ms, f.heap_free, f.largest, activity.0, 0];
+    s[5] = checksum(&s[..5]);
     s
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn decode_alive(s: &[u32; 5]) -> Option<Figures> {
-    (s[0] == ALIVE_MAGIC && s[4] == checksum(&s[..4])).then_some(Figures {
-        uptime_ms: s[1],
-        heap_free: s[2],
-        largest: s[3],
-    })
+pub fn decode_alive(s: &[u32; ALIVE_WORDS]) -> Option<(Figures, Activity)> {
+    (s[0] == ALIVE_MAGIC && s[5] == checksum(&s[..5])).then_some((
+        Figures {
+            uptime_ms: s[1],
+            heap_free: s[2],
+            largest: s[3],
+        },
+        Activity(s[4]),
+    ))
 }
+
+/// Bytes of [`AllocFail::task`] (FreeRTOS's `configMAX_TASK_NAME_LEN`).
+pub const TASK_NAME: usize = 16;
+/// Return addresses kept with a failed allocation.
+pub const ALLOC_PCS: usize = 8;
+/// Words of an encoded [`AllocFail`]: magic, size, caps, uptime, free,
+/// largest, activity, the task's name, the return addresses, checksum.
+pub const ALLOC_WORDS: usize = 7 + TASK_NAME / 4 + ALLOC_PCS + 1;
 
 /// The last failed allocation (the IDF heap's failed-allocation callback):
 /// a crash right after one is most likely the out-of-memory abort, which
@@ -625,32 +808,71 @@ pub fn decode_alive(s: &[u32; 5]) -> Option<Figures> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AllocFail {
     pub size: u32,
+    /// The heap capabilities asked for (`MALLOC_CAP_*`).
+    pub caps: u32,
     pub at: Figures,
+    /// What was going on.
+    pub activity: Activity,
+    /// The calling task's name, NUL-padded (`isr` from an interrupt).
+    pub task: [u8; TASK_NAME],
+    /// Return addresses up the failing call's stack, innermost first, 0
+    /// past the last (the callback's own frames included: `addr2line`
+    /// against the firmware's ELF names them).
+    pub pcs: [u32; ALLOC_PCS],
+}
+
+impl AllocFail {
+    /// The task's name (`?` where it is not ASCII).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn task(&self) -> &str {
+        let n = self.task.iter().position(|&b| b == 0).unwrap_or(TASK_NAME);
+        match core::str::from_utf8(&self.task[..n]) {
+            Ok(t) if !t.is_empty() && t.bytes().all(|b| b.is_ascii_graphic() || b == b' ') => t,
+            _ => "?",
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn encode_alloc(a: &AllocFail) -> [u32; 6] {
-    let mut s = [
-        ALLOC_MAGIC,
-        a.size,
-        a.at.uptime_ms,
-        a.at.heap_free,
-        a.at.largest,
-        0,
-    ];
-    s[5] = checksum(&s[..5]);
+pub fn encode_alloc(a: &AllocFail) -> [u32; ALLOC_WORDS] {
+    let mut s = [0u32; ALLOC_WORDS];
+    s[0] = ALLOC_MAGIC;
+    s[1] = a.size;
+    s[2] = a.caps;
+    s[3] = a.at.uptime_ms;
+    s[4] = a.at.heap_free;
+    s[5] = a.at.largest;
+    s[6] = a.activity.0;
+    for (i, c) in a.task.as_chunks::<4>().0.iter().enumerate() {
+        s[7 + i] = u32::from_le_bytes(*c);
+    }
+    s[7 + TASK_NAME / 4..ALLOC_WORDS - 1].copy_from_slice(&a.pcs);
+    s[ALLOC_WORDS - 1] = checksum(&s[..ALLOC_WORDS - 1]);
     s
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn decode_alloc(s: &[u32; 6]) -> Option<AllocFail> {
-    (s[0] == ALLOC_MAGIC && s[5] == checksum(&s[..5])).then_some(AllocFail {
+pub fn decode_alloc(s: &[u32; ALLOC_WORDS]) -> Option<AllocFail> {
+    if s[0] != ALLOC_MAGIC || s[ALLOC_WORDS - 1] != checksum(&s[..ALLOC_WORDS - 1]) {
+        return None;
+    }
+    let mut task = [0u8; TASK_NAME];
+    for (i, w) in s[7..7 + TASK_NAME / 4].iter().enumerate() {
+        task[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    let mut pcs = [0u32; ALLOC_PCS];
+    pcs.copy_from_slice(&s[7 + TASK_NAME / 4..ALLOC_WORDS - 1]);
+    Some(AllocFail {
         size: s[1],
+        caps: s[2],
         at: Figures {
-            uptime_ms: s[2],
-            heap_free: s[3],
-            largest: s[4],
+            uptime_ms: s[3],
+            heap_free: s[4],
+            largest: s[5],
         },
+        activity: Activity(s[6]),
+        task,
+        pcs,
     })
 }
 
@@ -659,15 +881,25 @@ pub fn decode_alloc(s: &[u32; 6]) -> Option<AllocFail> {
 /// is up to ~65 s before the crash.
 const ALLOC_RECENT_MS: u32 = 35_000;
 
+/// The failed allocation named beside an unrecorded crash: one at most
+/// [`ALLOC_RECENT_MS`] before the last heartbeat, or after it.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn recent_alloc(alive: Option<Figures>, alloc: Option<AllocFail>) -> Option<AllocFail> {
+    alloc.filter(|a| {
+        alive.is_none_or(|f| a.at.uptime_ms.saturating_add(ALLOC_RECENT_MS) >= f.uptime_ms)
+    })
+}
+
 /// The boot's pairing: the pending entry gets `reset`; with none, an entry
-/// from the reset alone (`alive`: the previous run's last heartbeat;
-/// `alloc`: its last failed allocation). A power-on clears the ring first.
-/// Returns this boot's entry (already in the ring).
+/// from the reset alone (`alive`: the previous run's last heartbeat and
+/// what was going on then; `alloc`: its last failed allocation). A
+/// power-on clears the ring first. Returns this boot's entry (already in
+/// the ring).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn boot(
     store: &mut dyn Store,
     reset: Reset,
-    alive: Option<Figures>,
+    alive: Option<(Figures, Activity)>,
     alloc: Option<AllocFail>,
 ) -> Entry {
     if reset == Reset::PowerOn {
@@ -688,15 +920,20 @@ pub fn boot(
         r if r.is_crash() => Reason::Crash,
         _ => Reason::Unrecorded,
     };
-    let mut e = Entry::new(reason, alive);
+    let figures = alive.map(|(f, _)| f);
+    let mut e = Entry::new(reason, figures);
     e.reset = reset;
+    e.activity = alive.map_or(Activity(0), |(_, a)| a);
     if reason == Reason::Crash {
-        if let Some(a) = alloc.filter(|a| {
-            alive.is_none_or(|f| a.at.uptime_ms.saturating_add(ALLOC_RECENT_MS) >= f.uptime_ms)
-        }) {
+        if let Some(a) = recent_alloc(figures, alloc) {
+            // What was going on at the failure, not at the heartbeat.
+            if a.activity.is_known() {
+                e.activity = a.activity;
+            }
             e.set_text(format_args!(
-                "last failed alloc: {} B at {} s, {} B free (maybe a probe)",
+                "last failed alloc: {} B in {} at {} s, {} B free (maybe a probe)",
                 a.size,
+                a.task(),
                 a.at.uptime_ms / 1000,
                 a.at.heap_free
             ));
@@ -775,6 +1012,32 @@ mod tests {
 
     fn ring() -> [Slot; SLOTS] {
         [[0; WORDS]; SLOTS]
+    }
+
+    /// The heartbeat's record at `uptime_ms`, with `act` going on.
+    fn alive(uptime_ms: u32, act: Activity) -> Option<(Figures, Activity)> {
+        fig(uptime_ms).map(|f| (f, act))
+    }
+
+    fn act(wifi: WifiAct, reconnect_tries: u32) -> Activity {
+        Activity::pack(&ActivityParts {
+            wifi,
+            reconnect_tries,
+            ..Default::default()
+        })
+    }
+
+    fn alloc_fail(size: u32, at_ms: u32, task: &[u8], activity: Activity) -> AllocFail {
+        let mut name = [0u8; TASK_NAME];
+        name[..task.len()].copy_from_slice(task);
+        AllocFail {
+            size,
+            caps: 0x1800,
+            at: fig(at_ms).unwrap(),
+            activity,
+            task: name,
+            pcs: [0x400d_1234, 0x400d_5678, 0, 0, 0, 0, 0, 0],
+        }
     }
 
     #[test]
@@ -864,15 +1127,18 @@ mod tests {
         let mut r = ring();
         boot(&mut r, Reset::PowerOn, None, None);
         push(&mut r, Entry::new(Reason::CardClock, fig(60_000)));
-        let e = boot(&mut r, Reset::Software, fig(55_000), None);
+        let e = boot(&mut r, Reset::Software, alive(55_000, Activity(0)), None);
         assert_eq!((e.reason, e.reset), (Reason::CardClock, Reset::Software));
         assert_eq!(e.note(), Some("restarted to apply a card speed change"));
         assert_eq!(e.figures.unwrap().uptime_ms, 60_000);
         // The next boot with nothing written: unrecorded, from the
         // heartbeat.
-        let e = boot(&mut r, Reset::Software, fig(30_000), None);
+        let up = act(WifiAct::Up, 0);
+        let e = boot(&mut r, Reset::Software, alive(30_000, up), None);
         assert_eq!((e.reason, e.reset), (Reason::Unrecorded, Reset::Software));
         assert_eq!(e.figures.unwrap().uptime_ms, 30_000);
+        assert_eq!(e.activity, up, "the heartbeat's activity");
+        assert_eq!(decode(&encode(&e)).unwrap().activity, up);
         let all: Vec<_> = newest_first(&r).map(|e| e.reason).collect();
         assert_eq!(
             all,
@@ -887,27 +1153,31 @@ mod tests {
         let mut p = Entry::new(Reason::Panic, fig(9_000));
         p.set_panic("main.rs", 10, "boom");
         push(&mut r, p);
-        let e = boot(&mut r, Reset::Panic, fig(1), None);
+        let e = boot(&mut r, Reset::Panic, alive(1, Activity(0)), None);
         assert_eq!(
             (e.reason, e.reset, e.text()),
             (Reason::Panic, Reset::Panic, "main.rs:10 boom")
         );
         // A watchdog with no entry: an unrecorded crash; a failed
         // allocation just before it is named.
-        let a = AllocFail {
-            size: 4096,
-            at: fig(100_000).unwrap(),
-        };
-        let e = boot(&mut r, Reset::IntWdt, fig(90_000), Some(a));
+        let scanning = act(WifiAct::Scanning, 41);
+        let a = alloc_fail(4096, 100_000, b"main", scanning);
+        let e = boot(&mut r, Reset::IntWdt, alive(90_000, act(WifiAct::Up, 0)), Some(a));
         assert_eq!(e.reason, Reason::Crash);
-        assert!(
-            e.text().contains("failed alloc: 4096 B at 100 s"),
-            "{}",
-            e.text()
+        assert_eq!(
+            e.text(),
+            "last failed alloc: 4096 B in main at 100 s, 90000 B free (maybe a probe)"
         );
-        // An old one is not.
-        let e = boot(&mut r, Reset::Panic, fig(900_000), Some(a));
+        assert_eq!(e.activity, scanning, "the failure's activity, not the heartbeat's");
+        // An old one is not; the heartbeat's activity stays.
+        let e = boot(&mut r, Reset::Panic, alive(900_000, act(WifiAct::Up, 2)), Some(a));
         assert_eq!((e.reason, e.text()), (Reason::Crash, ""));
+        assert_eq!(e.activity, act(WifiAct::Up, 2));
+        // The longest text there can be still fits whole.
+        let mut big = alloc_fail(u32::MAX, u32::MAX, b"0123456789abcdef", scanning);
+        big.at.heap_free = u32::MAX;
+        let e = boot(&mut r, Reset::Panic, None, Some(big));
+        assert!(e.text().ends_with("(maybe a probe)"), "{}", e.text());
         let e = boot(&mut r, Reset::Brownout, None, None);
         assert_eq!(e.reason, Reason::Brownout);
         let e = boot(&mut r, Reset::External, None, None);
@@ -942,13 +1212,71 @@ mod tests {
     #[test]
     fn side_records() {
         let f = fig(77).unwrap();
-        assert_eq!(decode_alive(&encode_alive(&f)), Some(f));
-        let mut bad = encode_alive(&f);
+        let busy = act(WifiAct::Connecting, 3);
+        assert_eq!(decode_alive(&encode_alive(&f, busy)), Some((f, busy)));
+        let mut bad = encode_alive(&f, busy);
         bad[2] += 1;
         assert_eq!(decode_alive(&bad), None);
-        let a = AllocFail { size: 12, at: f };
-        assert_eq!(decode_alloc(&encode_alloc(&a)), Some(a));
-        assert_eq!(decode_alloc(&[0; 6]), None);
+        let a = alloc_fail(12, 77, b"httpd", busy);
+        let d = decode_alloc(&encode_alloc(&a)).unwrap();
+        assert_eq!(d, a);
+        assert_eq!(d.task(), "httpd");
+        assert_eq!(decode_alloc(&[0; ALLOC_WORDS]), None);
+        for w in 1..ALLOC_WORDS {
+            let mut bad = encode_alloc(&a);
+            bad[w] ^= 1 << (w % 32);
+            assert_eq!(decode_alloc(&bad), None, "word {w} flipped");
+        }
+        // A name that is not one reads as `?`; a 16-byte one has no NUL.
+        assert_eq!(alloc_fail(1, 1, b"\xff\x01", busy).task(), "?");
+        assert_eq!(alloc_fail(1, 1, b"", busy).task(), "?");
+        assert_eq!(alloc_fail(1, 1, b"0123456789abcdef", busy).task(), "0123456789abcdef");
+    }
+
+    #[test]
+    fn activity_round_trips_and_reads() {
+        assert_eq!(Activity(0).parts(), None);
+        assert_eq!(format!("{}", Activity(0)), "");
+        let all = ActivityParts {
+            wifi: WifiAct::HeapWait,
+            builder: true,
+            fat_index: true,
+            transition: true,
+            index_in_ram: true,
+            streams: 1,
+            uploads: 2,
+            card_errors: 3,
+            reconnect_tries: 12,
+        };
+        let a = Activity::pack(&all);
+        assert_eq!(a.parts(), Some(all));
+        assert_eq!(
+            format!("{a}"),
+            "wifi waiting for heap, builder, fat index, transition, index in RAM, \
+             1 stream, 2 uploads, 3 card errors, 12 reconnect tries"
+        );
+        // Nothing going on: the WiFi only. Counts saturate, never spill.
+        let idle = Activity::pack(&ActivityParts::default());
+        assert!(idle.is_known());
+        assert_eq!(format!("{idle}"), "wifi down");
+        let max = Activity::pack(&ActivityParts {
+            wifi: WifiAct::Up,
+            streams: 9,
+            uploads: 9,
+            card_errors: 1000,
+            reconnect_tries: 100_000,
+            ..Default::default()
+        });
+        let p = max.parts().unwrap();
+        assert_eq!(
+            (p.wifi, p.builder, p.streams, p.uploads, p.card_errors, p.reconnect_tries),
+            (WifiAct::Up, false, 3, 3, 255, 4095)
+        );
+        for v in 0..8 {
+            let w = WifiAct::from_u8(v);
+            assert!(v > 5 || w as u8 == v);
+            assert!(!w.name().is_empty());
+        }
     }
 
     #[test]
@@ -956,26 +1284,28 @@ mod tests {
         let mut r = ring();
         boot(&mut r, Reset::PowerOn, None, None);
         let f = fig(4242).unwrap();
-        push_minimal(&mut r, Reason::StackOverflow, f, &[b"task ", b"httpd"]);
+        let busy = act(WifiAct::Scanning, 9);
+        push_minimal(&mut r, Reason::StackOverflow, f, busy, &[b"task ", b"httpd"]);
         let e = newest(&r).unwrap();
         assert_eq!(
             (e.seq, e.reason, e.reset, e.text()),
             (2, Reason::StackOverflow, Reset::Pending, "task httpd")
         );
-        assert_eq!(e.figures, Some(f));
+        assert_eq!((e.figures, e.activity), (Some(f), busy));
         let mut want = Entry::new(Reason::StackOverflow, Some(f));
         want.seq = 2;
+        want.activity = busy;
         want.set_text(format_args!("task httpd"));
         assert_eq!(read(&r, 2), encode(&want));
         // Non-ASCII and overlong text.
-        let long = [b'x'; 100];
-        push_minimal(&mut r, Reason::StackOverflow, f, &[b"\xff", &long]);
+        let long = [b'x'; 200];
+        push_minimal(&mut r, Reason::StackOverflow, f, busy, &[b"\xff", &long]);
         let e = newest(&r).unwrap();
         assert_eq!(e.text().len(), TEXT);
         assert!(e.text().starts_with("?x"));
         // Into an empty (garbage) ring.
         let mut g = [[0x5a5a_5a5au32; WORDS]; SLOTS];
-        push_minimal(&mut g, Reason::StackOverflow, f, &[b"task a"]);
+        push_minimal(&mut g, Reason::StackOverflow, f, busy, &[b"task a"]);
         assert_eq!(newest(&g).unwrap().seq, 1);
     }
 
@@ -990,7 +1320,7 @@ mod tests {
         }
         let seqs: Vec<u32> = newest_first(&r).map(|e| e.seq).collect();
         assert_eq!(seqs, [2, 1, 0, u32::MAX, u32::MAX - 1, u32::MAX - 2]);
-        push_minimal(&mut r, Reason::Panic, fig(3).unwrap(), &[]);
+        push_minimal(&mut r, Reason::Panic, fig(3).unwrap(), Activity(0), &[]);
         assert_eq!(newest(&r).unwrap().seq, 3);
     }
 }

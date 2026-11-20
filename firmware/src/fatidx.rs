@@ -161,6 +161,11 @@ static BUILDS: AtomicU32 = AtomicU32::new(0);
 static RELOAD: AtomicBool = AtomicBool::new(false);
 /// A build's task is up (one at a time).
 static BUILDING: AtomicBool = AtomicBool::new(false);
+
+/// A build's task is up (the restart record's activity word).
+pub fn building() -> bool {
+    BUILDING.load(Relaxed)
+}
 /// The last build failed: the next waits `FATIDX_MIN_GAP_S` even for a
 /// missing index (a failing card must not be walked in a loop).
 static FAILED: AtomicBool = AtomicBool::new(false);

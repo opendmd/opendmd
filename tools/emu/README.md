@@ -13,6 +13,7 @@ make emu-rig       # smoke image + the full-scale card (mkcard.py --rig): the FA
 make emu-rig-tight # the same with a test board's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK
 make emu-leak      # an emu-census image plays 70 GIFs (on to 150 while the halves differ): the heap's blocks and bytes stay flat after 10 -> EMU_LEAK_OK
 make emu-api       # the emu-census image on WiFi, its HTTP API driven from the host over two boots -> EMU_API_OK
+make emu-oom       # an emu-oom-test image on WiFi: drops (straight back; a scan), a squeezed heap (the short heartbeat, a reconnect held back), an out-of-memory abort and the next boot's record of it (tools/emu/oom_lane.py) -> EMU_OOM_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
 make emu-s3-smoke  # the plain s3 image (the release feature set) with the smoke card on SPI3: as emu-smoke -> EMU_SMOKE_OK
