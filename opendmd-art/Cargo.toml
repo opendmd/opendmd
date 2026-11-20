@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-art"
-version = "1.1.0-beta.2"
+version = "1.1.0-beta.3"
 edition = "2021"
 description = "Create Art's pipeline: any picture or GIF in, a 128x32 GIF out (one global palette). No browser types: the web app's wasm module (opendmd-art-web) wraps it, and native callers link it as it is."
 license = "MIT OR Apache-2.0"
