@@ -925,7 +925,9 @@ most 25 s; a failed one is `backoff`, at most 30 s), `registering`, `connecting`
 `upgrading`, `open`, `backoff`, `refused: set Remote control up again`
 (`refused` true: the server does not know this panel; `POST
 /api/connect/forget` makes a new identity), `update needed` (`too_old`),
-`held for an update`, `off after two crashes in a row`. A server that
+`held for an update`, `off after two crashes in a row` (boots out of a
+panic, a stack overflow or a watchdog; a brownout, the supply dipping,
+neither counts nor ends the run). A server that
 no longer knows the panel's id makes it `refused` too when it has
 controllers (nothing is erased: `POST /api/connect/forget` starts again);
 with none yet, the panel registers a new id by itself (at most three

@@ -318,57 +318,21 @@ fn this_boot() -> Option<Entry> {
     ring::newest_first(&Rtc).find(|e| e.seq == seq)
 }
 
-/// This boot did not come from a power-on, the reset button, or a planned
-/// restart this firmware recorded (`crate::restart`): a panic, a stack
-/// overflow, a watchdog, a brownout, a heap check, an unrecorded or
-/// unknown reset.
-#[cfg(feature = "connect")]
-pub fn this_boot_crashed() -> bool {
-    match reset_now() {
-        Reset::PowerOn | Reset::External => false,
-        Reset::Software => !this_boot().is_some_and(|e| {
-            !matches!(
-                e.reason,
-                Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::Unrecorded | Reason::Brownout | Reason::PowerOn
-            )
-        }),
-        _ => true,
-    }
-}
-
-/// Was the boot `e` records one that came out of a crash
-/// ([`this_boot_crashed`]'s rule, with the reset it was paired with)?
-#[cfg(feature = "connect")]
-fn crashed(e: &Entry) -> bool {
-    match e.reset {
-        Reset::PowerOn | Reset::External => false,
-        Reset::Software => matches!(
-            e.reason,
-            Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::Unrecorded | Reason::Brownout | Reason::PowerOn
-        ),
-        _ => true,
-    }
-}
-
 /// How many boots in a row, this one and those just before it, came out of
-/// a crash (0: this boot did not). Remote control holds back 15 minutes
-/// after one, and stays off after two until a clean boot or a switch-on
-/// in Settings (`connect::client`), so a crash it causes cannot loop and
-/// lock out an update over the LAN.
+/// a crash (0: none since the last clean boot). Brownouts are power, not
+/// firmware: they neither count nor end the run
+/// (`opendmd_core::restarts::crash_streak`). Remote control holds back 15
+/// minutes after one, and stays off after two until a clean boot or a
+/// switch-on in Settings (`connect::client`), so a crash it causes cannot
+/// loop and lock out an update over the LAN.
 #[cfg(feature = "connect")]
 pub fn crash_boots_in_a_row() -> u32 {
-    if !this_boot_crashed() {
-        return 0;
-    }
     let seq = BOOT_SEQ.load(Relaxed);
-    let mut n = 1;
-    for e in ring::newest_first(&Rtc).filter(|e| e.seq != seq) {
-        if !crashed(&e) {
-            break;
-        }
-        n += 1;
-    }
-    n
+    let this = ring::boot_kind(reset_now(), this_boot().map(|e| e.reason));
+    let before = ring::newest_first(&Rtc)
+        .filter(|e| e.seq != seq)
+        .map(|e| ring::boot_kind(e.reset, Some(e.reason)));
+    ring::crash_streak(core::iter::once(this).chain(before))
 }
 
 /// Why this boot's restart was made, in plain words (`reset_note`, when

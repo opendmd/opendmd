@@ -720,6 +720,65 @@ pub fn mark_update(store: &mut dyn Store) -> bool {
     }
 }
 
+/// What one boot says about a crash streak ([`crash_streak`]).
+#[cfg(feature = "connect")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootKind {
+    /// A power-on, the reset button, or a restart this firmware planned
+    /// and recorded: ends a streak.
+    Clean,
+    /// A panic, a stack overflow, a watchdog, a heap check, an unrecorded
+    /// or unknown reset.
+    Crash,
+    /// A brownout: the supply dipped. A power fault says nothing about the
+    /// firmware, so it neither counts nor ends a streak (crash, brownout,
+    /// crash is two crashes in a row; a weak USB supply's brownouts are
+    /// none). The S3's brownout-loop guard (`s3board.rs`) counts these on
+    /// its own.
+    Power,
+}
+
+/// How the boot with chip reset `reset` came about, given its entry's
+/// reason (`None`: the boot has no entry). A crash the firmware recorded
+/// (a panic, a stack overflow, a heap check) counts even when the reset
+/// that followed it was a brownout.
+#[cfg(feature = "connect")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn boot_kind(reset: Reset, reason: Option<Reason>) -> BootKind {
+    let recorded_crash = matches!(
+        reason,
+        Some(Reason::Panic | Reason::StackOverflow | Reason::Diag)
+    );
+    match reset {
+        Reset::PowerOn | Reset::External => BootKind::Clean,
+        _ if recorded_crash => BootKind::Crash,
+        Reset::Brownout => BootKind::Power,
+        Reset::Software => match reason {
+            None | Some(Reason::Crash | Reason::Unrecorded | Reason::PowerOn) => BootKind::Crash,
+            Some(Reason::Brownout) => BootKind::Power,
+            Some(_) => BootKind::Clean,
+        },
+        _ => BootKind::Crash,
+    }
+}
+
+/// How many boots in a row came out of a crash, from `boots` (this boot
+/// first, then the ones before it, newest first): brownouts skipped, the
+/// first clean boot ends it (0: none since the last clean boot).
+#[cfg(feature = "connect")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn crash_streak(boots: impl IntoIterator<Item = BootKind>) -> u32 {
+    let mut n = 0;
+    for k in boots {
+        match k {
+            BootKind::Clean => break,
+            BootKind::Crash => n += 1,
+            BootKind::Power => {}
+        }
+    }
+    n
+}
+
 /// Whether crash entry `e` is one the code in `files` (file names, as a
 /// panic's location gives them) can be blamed for: a panic located in one
 /// of them, a stack overflow of `task`, or an out-of-memory abort (a crash
@@ -992,5 +1051,74 @@ mod tests {
         assert_eq!(seqs, [2, 1, 0, u32::MAX, u32::MAX - 1, u32::MAX - 2]);
         push_minimal(&mut r, Reason::Panic, fig(3).unwrap(), &[]);
         assert_eq!(newest(&r).unwrap().seq, 3);
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn a_brownout_is_not_a_crash_and_does_not_end_a_streak() {
+        use BootKind::*;
+        // The rig's ring: brownouts from a weak USB supply, nothing else.
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Brownout)), Power);
+        assert_eq!(boot_kind(Reset::Brownout, None), Power);
+        assert_eq!(crash_streak([Power, Power, Power, Clean]), 0);
+        assert_eq!(crash_streak([Power, Power]), 0);
+        // A planned restart the supply cut short is no crash either.
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Ota)), Power);
+        // Crash, brownout, crash: still two in a row.
+        assert_eq!(crash_streak([Crash, Power, Crash, Clean]), 2);
+        // A brownout boot after a crash keeps the crash's hold.
+        assert_eq!(crash_streak([Power, Crash, Clean, Crash]), 1);
+        // A clean boot ends it, whatever came before.
+        assert_eq!(crash_streak([Clean, Crash, Crash]), 0);
+        assert_eq!(crash_streak([Crash, Clean, Crash]), 1);
+        assert_eq!(crash_streak([]), 0);
+        // A recorded crash counts even when a brownout reset followed it.
+        assert_eq!(boot_kind(Reset::Brownout, Some(Reason::Panic)), Crash);
+        assert_eq!(
+            boot_kind(Reset::Brownout, Some(Reason::StackOverflow)),
+            Crash
+        );
+    }
+
+    #[cfg(feature = "connect")]
+    #[test]
+    fn boot_kinds_otherwise_as_before() {
+        use BootKind::*;
+        assert_eq!(boot_kind(Reset::PowerOn, Some(Reason::PowerOn)), Clean);
+        assert_eq!(boot_kind(Reset::External, None), Clean);
+        for r in [
+            Reset::Panic,
+            Reset::IntWdt,
+            Reset::TaskWdt,
+            Reset::Wdt,
+            Reset::Pending,
+            Reset::DeepSleep,
+            Reset::Sdio,
+            Reset::Unknown,
+        ] {
+            assert_eq!(boot_kind(r, Some(Reason::Crash)), Crash, "{r:?}");
+            assert_eq!(boot_kind(r, None), Crash, "{r:?}");
+        }
+        assert_eq!(boot_kind(Reset::Software, None), Crash);
+        for why in [
+            Reason::Panic,
+            Reason::StackOverflow,
+            Reason::Diag,
+            Reason::Crash,
+            Reason::Unrecorded,
+            Reason::PowerOn,
+        ] {
+            assert_eq!(boot_kind(Reset::Software, Some(why)), Crash, "{why:?}");
+        }
+        for why in [
+            Reason::ApiReboot,
+            Reason::Ota,
+            Reason::ApTimeout,
+            Reason::CardFailure,
+            Reason::NetworkOn,
+        ] {
+            assert_eq!(boot_kind(Reset::Software, Some(why)), Clean, "{why:?}");
+        }
+        assert_eq!(boot_kind(Reset::Software, Some(Reason::Brownout)), Power);
     }
 }

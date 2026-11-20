@@ -15,7 +15,7 @@
 //! | An upgrade answered without `odc1` | a failed attempt: the usual backoff (never "update needed"). A close right after an upgrade that named it is judged by its code, as above |
 //! | Stay away (4429, or 429) | the minutes it says (1 to a day; 15 if it says none) |
 //! | Too much (1009: a frame over the server's size; 4429 "1": over its text budget) | the usual backoff, and the panel keeps under the budgets itself: text ≤ 2,048 B (`Conn::text`), `keys`/`info` at most one a second after `hello`'s two, status one every 2 s, acks no faster than the commands' 4 a second per key, 8 per panel |
-//! | After boot | [`HOLD_S`] (180 s). After a crash boot 15 min; after two crash boots in a row off until a clean boot or a switch-on in Settings |
+//! | After boot | [`HOLD_S`] (180 s). After a crash boot 15 min; after two crash boots in a row off until a clean boot or a switch-on in Settings (a brownout boot is neither a crash nor clean: power, not firmware) |
 //! | Switched on in Settings | at once: no hold, no backoff |
 //! | Clock | SNTP first; after 60 s without it, the build date as the floor |
 //! | An update under way | closed, held until the restart (`super::updating`) |
@@ -276,7 +276,7 @@ impl Client {
             ROOTS.len(),
             match crashes {
                 0 => String::new(),
-                1 => "; this boot came out of a crash: held 15 minutes".into(),
+                1 => "; a crash boot since the last clean boot: held 15 minutes".into(),
                 n => format!("; {n} crash boots in a row: off until switched on in Settings"),
             }
         );
