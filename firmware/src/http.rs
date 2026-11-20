@@ -1159,13 +1159,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     server.route("/api/job", Method::Get, job_poll)?;
 
-    // The last crash's log lines (`logring::keep_crash_tail`): sent from RTC
-    // memory as they are, no copy. 404 when no crash has left any since the
-    // last power-on.
+    // The last crash's log lines (`logring::keep_crash_tail`): the log is
+    // sent from RTC memory as it is, no copy; the headers take a few small
+    // strings, freed with the request. 404 when no crash has left any since
+    // the last power-on.
     server.route("/api/log/last", Method::Get, #[optimize(size)] |req| {
         match crate::logring::crash_tail() {
             Some((seq, bytes)) => {
                 req.header("X-Restart", &seq.to_string())?;
+                // A browser must not take the log's text for anything else.
+                req.header("X-Content-Type-Options", "nosniff")?;
                 req.ok("text/plain; charset=utf-8", bytes)
             }
             None => req.error(404, "404 Not Found", "no crash log kept (none since the last power-on)"),

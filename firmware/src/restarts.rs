@@ -16,9 +16,12 @@
 //!   task's name through `ring::push_minimal`, then aborts as IDF's does.
 //! - The `diag-heap` build's corruption aborts write `diag_abort` first.
 //! - The heap's failed-allocation callback keeps the last failure (size,
-//!   caps, the task, uptime, free heap, what was going on and a few return
-//!   addresses): Rust's out-of-memory abort passes no hook of ours, so a
-//!   crash soon after one names it (perhaps a deliberate probe).
+//!   caps, the task, uptime, free heap, what was going on and 12 return
+//!   addresses), written straight to RTC memory. Rust's out-of-memory
+//!   abort runs our alloc error hook (`oom_hook`), which latches that
+//!   failure as the fatal one (nothing overwrites it after) and flags it,
+//!   so the next boot names it as the abort; a crash soon after an
+//!   unflagged one names it too (perhaps a deliberate probe).
 //! - The heartbeat ([`alive`]) keeps its uptime, heap and [`activity_now`]:
 //!   the figures for a crash that wrote nothing.
 //! - Every entry carries what was going on ([`activity_now`]: the WiFi's
@@ -178,7 +181,7 @@ pub fn boot(reset: Reset) {
     if reset == Reset::PowerOn {
         crate::logring::forget_crash_tail();
     } else if reset.is_crash()
-        || matches!(e.reason, Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash)
+        || matches!(e.reason, Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::WifiHeap)
     {
         keep_crash_log(&e, last, alloc);
     }
@@ -208,6 +211,7 @@ pub fn boot(reset: Reset) {
     install_panic_hook();
     // SAFETY: registers a static function with the callback's signature.
     unsafe { sys::heap_caps_register_failed_alloc_callback(Some(alloc_failed)) };
+    std::alloc::set_alloc_error_hook(oom_hook);
 }
 
 /// The crash log's head (`logring::keep_crash_tail`): the entry, and the
@@ -287,76 +291,116 @@ fn panicked(info: &std::panic::PanicHookInfo) {
     ring::push(&mut Rtc, e);
 }
 
+/// The fatal failure is latched ([`oom_hook`]): later ones (the abort's
+/// own, if any) do not overwrite its record.
+static FATAL: AtomicBool = AtomicBool::new(false);
+
+/// A word of [`ALLOC`].
+fn alloc_word(i: usize) -> &'static AtomicU32 {
+    // SAFETY: `i < ALLOC_WORDS` (the callers' indices), a word of the
+    // static, only accessed through this view.
+    word(unsafe { (&raw mut ALLOC as *mut u32).add(i % ALLOC_WORDS) })
+}
+
 /// The heap's failed-allocation callback: every failure, deliberate
-/// (`try_reserve`) or not, overwrites the last. No heap, no lock: the
-/// task's name (FreeRTOS's copy in its TCB), atomics, a walk up the
-/// stack's frames (IDF's own backtrace steps, which check every pointer
-/// before they follow it) and word stores. A few µs.
+/// (`try_reserve`) or not, overwrites the last, until the fatal one is
+/// latched. No heap, no lock, nothing of the record on its stack: each
+/// word goes straight to RTC memory as it is worked out (the task's name
+/// from its TCB, atomics, the return addresses from IDF's own frame walk,
+/// which checks every pointer before it follows it), the checksum folded
+/// as it goes, the magic last. A few µs.
 unsafe extern "C" fn alloc_failed(size: usize, caps: u32, _function: *const c_char) {
-    let mut task = [0u8; TASK_NAME];
+    if FATAL.load(Relaxed) {
+        return;
+    }
+    let f = figures_light();
+    alloc_word(0).store(0, Relaxed);
+    let mut h = ring::alloc_fold(ring::ALLOC_FOLD_SEED, ring::ALLOC_MAGIC);
+    let put = |i: usize, w: u32, h: &mut u32| {
+        alloc_word(i).store(w, Relaxed);
+        *h = ring::alloc_fold(*h, w);
+    };
+    for (i, w) in [size as u32, caps, f.uptime_ms, f.heap_free, 0, activity_now().0, 0].into_iter().enumerate() {
+        put(1 + i, w, &mut h);
+    }
     // SAFETY: argument-free queries; the name is NUL-terminated within
     // configMAX_TASK_NAME_LEN (16) bytes in the running task's TCB.
-    unsafe {
+    let name: *const u8 = unsafe {
         if sys::xPortInIsrContext() != 0 {
-            task[..3].copy_from_slice(b"isr");
+            c"isr".as_ptr().cast()
         } else {
-            let name = sys::pcTaskGetName(core::ptr::null_mut());
-            for (i, b) in task.iter_mut().enumerate() {
-                let c = if name.is_null() { 0 } else { *name.add(i) as u8 };
-                if c == 0 {
-                    break;
-                }
-                *b = c;
+            sys::pcTaskGetName(core::ptr::null_mut()).cast()
+        }
+    };
+    let mut ended = name.is_null();
+    for k in 0..TASK_NAME / 4 {
+        let mut w = [0u8; 4];
+        for (j, b) in w.iter_mut().enumerate() {
+            if !ended {
+                // SAFETY: within the name, up to and including its NUL.
+                *b = unsafe { *name.add(k * 4 + j) };
+                ended = *b == 0;
             }
         }
+        put(ring::ALLOC_TASK + k, u32::from_le_bytes(w), &mut h);
     }
-    let a = AllocFail {
-        size: size as u32,
-        caps,
-        at: figures_light(),
-        activity: activity_now(),
-        task,
-        pcs: backtrace(),
-    };
-    store(&raw mut ALLOC, &ring::encode_alloc(&a));
+    backtrace(&mut |k, pc| put(ring::ALLOC_PC0 + k, pc, &mut h));
+    alloc_word(ALLOC_WORDS - 1).store(h, Relaxed);
+    alloc_word(0).store(ring::ALLOC_MAGIC, Relaxed);
+}
+
+/// Rust's alloc error hook (`std::alloc::set_alloc_error_hook`): the
+/// failure just recorded by [`alloc_failed`] is the fatal one. Latched
+/// (no later failure overwrites it), flagged in the record (the next
+/// boot's `where` says `the abort`), and the message std's own hook
+/// prints. Then std aborts.
+fn oom_hook(layout: std::alloc::Layout) {
+    FATAL.store(true, Relaxed);
+    if alloc_word(0).load(Relaxed) == ring::ALLOC_MAGIC {
+        alloc_word(ring::ALLOC_FLAGS).store(ring::ALLOC_FATAL, Relaxed);
+        let h = (0..ALLOC_WORDS - 1).fold(ring::ALLOC_FOLD_SEED, |h, i| ring::alloc_fold(h, alloc_word(i).load(Relaxed)));
+        alloc_word(ALLOC_WORDS - 1).store(h, Relaxed);
+    }
+    // SAFETY: a NUL-terminated format and one unsigned argument; the ROM's
+    // printf writes straight to the UART (the log ring may never drain).
+    unsafe { sys::esp_rom_printf(c"memory allocation of %u bytes failed\n".as_ptr(), layout.size() as u32) };
 }
 
 /// Up to [`ALLOC_PCS`] return addresses from the frames above the heap's
-/// failure path, innermost first (0 past the last): `esp_backtrace_print`'s
-/// walk, without the printing. The first two frames, this callback's and
-/// `heap_caps_alloc_failed`'s, are always the same and not kept; the
-/// allocator's own (`heap_caps_malloc*`, `malloc`, `__rust_alloc`) come
-/// next, then the caller.
+/// failure path, innermost first, each to `each(k, pc)`; the rest 0:
+/// `esp_backtrace_print`'s walk, without the printing. The first two
+/// frames, the callback's and `heap_caps_alloc_failed`'s, are always the
+/// same and not kept; the allocator's own (`heap_caps_malloc*`, `malloc`,
+/// `__rust_alloc`) come next, then the caller.
 #[inline(never)]
-fn backtrace() -> [u32; ALLOC_PCS] {
+fn backtrace(each: &mut dyn FnMut(usize, u32)) {
     const SKIP: usize = 2;
-    let mut pcs = [0u32; ALLOC_PCS];
+    let mut k = 0;
     // SAFETY: IDF's frame walk over the calling task's own stack (the
     // window registers spilled by `esp_backtrace_get_start`); each step
     // checks the next frame's SP and PC before it is followed.
     unsafe {
         let mut f: sys::esp_backtrace_frame_t = core::mem::zeroed();
         sys::esp_backtrace_get_start(&mut f.pc, &mut f.sp, &mut f.next_pc);
+        let mut alive = true;
         for _ in 0..SKIP {
-            if f.next_pc == 0 || !sys::esp_backtrace_get_next_frame(&mut f) {
-                return pcs;
-            }
+            alive = alive && f.next_pc != 0 && sys::esp_backtrace_get_next_frame(&mut f);
         }
-        for pc in pcs.iter_mut() {
+        while alive && k < ALLOC_PCS {
             if f.next_pc == 0 || !sys::esp_backtrace_get_next_frame(&mut f) {
                 break;
             }
             // `esp_cpu_process_stack_pc` (an inline, not in the bindings):
             // the windowed call's PC in the top two bits, back 3 to the call.
-            *pc = if f.pc & 0x8000_0000 != 0 {
-                (f.pc & 0x3fff_ffff) | 0x4000_0000
-            } else {
-                f.pc
-            }
-            .wrapping_sub(3);
+            let pc = if f.pc & 0x8000_0000 != 0 { (f.pc & 0x3fff_ffff) | 0x4000_0000 } else { f.pc };
+            each(k, pc.wrapping_sub(3));
+            k += 1;
         }
     }
-    pcs
+    while k < ALLOC_PCS {
+        each(k, 0);
+        k += 1;
+    }
 }
 
 /// FreeRTOS's stack-overflow hook (IDF's is weak): the entry, then IDF's

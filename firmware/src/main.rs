@@ -39,6 +39,7 @@
 // Size, not speed, for code no frame runs (`#[optimize(size)]`: the
 // network worker, the HTTP status, boot, config; console-c).
 #![feature(optimize_attribute)]
+#![feature(alloc_error_hook)]
 mod ahead;
 mod arena;
 mod boot;

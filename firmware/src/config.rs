@@ -425,7 +425,7 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// of 9,676 B free in pieces of at most 432 B: its 280 B part (the card
 /// builder's) failed and the board aborted ("crashed without a recorded
 /// cause").
-pub const HEARTBEAT_FULL_BLOCK: u32 = 4 * 1024;
+pub const HEARTBEAT_FULL_BLOCK: u32 = 8 * 1024;
 pub const HEARTBEAT_FULL_FREE: u32 = HEAP_RESERVE + 4 * 1024;
 
 // ---------------------------------------------------------------------------

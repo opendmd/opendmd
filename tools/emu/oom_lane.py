@@ -42,6 +42,7 @@ FOUND = re.compile(r"'demo' found: rssi=")
 BACK_DIRECT = re.compile(r"\[net\] reconnected \(straight back\)")
 BACK_SCAN = re.compile(r"\[net\] reconnected \(after a scan\)")
 DIRECT_FAILED = re.compile(r"\[net\] reconnect failed \(straight back\)")
+STACKS = re.compile(r"oom-test: stacks: tiT (\d+) B, wifi (\d+) B, sys_evt (\d+) B, Tmr Svc (\d+) B unused")
 HELD = re.compile(r"\[net\] reconnect held back: heap (\d+) B free, largest block (\d+) B")
 SQUEEZED = re.compile(r"heap (\d+) B free, largest block (\d+) B")
 SHORT_BEAT = re.compile(r"heartbeat \(short #(\d+), the heap is low\): heap (\d+) B free, largest block (\d+) B.*during: (wifi \S+.*)$")
@@ -141,6 +142,12 @@ def run(a, sim, rom, fail_rx) -> int:
             said = f"held back ({emu.lines[held[0][0]][emu.lines[held[0][0]].index('heap'):][:60]})"
         else:
             said = f"not held back (the squeeze left {sq3[1]} B free and a {sq3[2]} B block, room for a pinned connect)"
+        st_i, stm = emu.wait_for(STACKS, 60, d3, what="the stacks' high-water marks after the squeeze")
+        stacks = dict(zip(("tiT", "wifi", "sys_evt", "Tmr Svc"), map(int, stm.groups())))
+        low = [k for k, v in stacks.items() if v < 256]
+        if low:
+            raise LaneFail(f"a stack all but used up after the squeeze: {stacks}")
+        ok("stacks", f"unused after the squeeze (bytes): {stacks}")
         b, _ = emu.wait_for(BACK_DIRECT, 120, r, what="reconnected straight back after the release")
         ok("drop 3", f"heap {sq3[1]} B free, largest {sq3[2]} B: {said}; after the release straight back")
         emu.wait_for(STEP["playback resumed"], 60, r, what="oom-test: playback resumed")
@@ -164,16 +171,20 @@ def run(a, sim, rom, fail_rx) -> int:
         o, _ = emu.wait_for(OOM, 60, ab, what="Rust's out-of-memory message")
         r2, rm = emu.wait_for(BOOT2, 240, o, what="boot 2's reset reason")
         where = rm[3]
-        if rm[2] != "unrecorded_crash" or "last failed alloc: 1048576 B in net-worker" not in where or "during: wifi" not in where:
+        if rm[2] != "unrecorded_crash" or "last failed alloc: 1048576 B in net-worker" not in where \
+                or "(the abort)" not in where or "during: wifi" not in where:
             raise LaneFail(f"boot 2: {emu.lines[r2][:240]}")
         ok("abort", f"one reset; {emu.lines[r2][emu.lines[r2].index('reset reason'):][:200]}")
         st = api.wait_up(400)
         last = (st.get("restarts") or [{}])[0]
         if not (last.get("reason") == "unrecorded_crash" and (last.get("where") or "").startswith("last failed alloc: 1048576 B in net-worker")
+                and (last.get("where") or "").endswith("(the abort)")
                 and (last.get("activity") or "").startswith("wifi ")):
             raise LaneFail(f"boot 2: /api/status restarts[0] {last}")
         code, headers, body = api.raw("GET", "/api/log/last", timeout=20)
         text = body.decode(errors="replace")
+        if headers.get("X-Content-Type-Options") != "nosniff":
+            raise LaneFail(f"GET /api/log/last: X-Content-Type-Options {headers.get('X-Content-Type-Options')!r}, not nosniff")
         head = [l for l in text.splitlines() if l.startswith("#")]
         if code != 200 or not text.startswith("# crash log: restart") or "# last failed alloc: 1048576 B, caps" not in text \
                 or "task net-worker" not in text or "oom-test: abort" not in text or not headers.get("X-Restart"):
@@ -187,12 +198,14 @@ def run(a, sim, rom, fail_rx) -> int:
             print(f"  | {l[:300]}")
         elf = Path(a.image).parent.parent / "target" / "xtensa-esp32-espidf" / "release" / "opendmd-firmware"
         named = addr2line(elf, pcs)
-        if named:
-            print("emu: the failed allocation's return addresses:")
-            for n in named:
-                print(f"  {n}")
-            if not any("oom_test" in n for n in named):
-                print("emu: (oom_test::tick not among them: the backtrace stopped short of the caller)")
+        if not named:
+            raise LaneFail(f"the backtrace could not be named (no addr2line, or no ELF at {elf}): {pcs}")
+        print("emu: the failed allocation's return addresses:")
+        for n in named:
+            print(f"  {n}")
+        if not any("oom_test::tick" in n or "net_worker::run" in n for n in named):
+            raise LaneFail("the backtrace stopped short of the caller (oom_test::tick / net_worker::run not among its frames)")
+        ok("backtrace", f"{len(pcs)} return addresses, the caller among them (oom_test::tick / net_worker::run)")
     except LaneFail as e:
         print(f"EMU_OOM_FAIL: {e}")
         if emu:

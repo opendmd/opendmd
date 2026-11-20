@@ -48,7 +48,9 @@ pub type Slot = [u32; WORDS];
 /// slots then read as empty).
 const MAGIC: u32 = 0x5e57_a202;
 const ALIVE_MAGIC: u32 = 0xa11f_e002;
-const ALLOC_MAGIC: u32 = 0xa110_cf02;
+/// The failed-allocation record's magic (word 0; the firmware's callback
+/// writes the record word by word: [`alloc_fold`]).
+pub const ALLOC_MAGIC: u32 = 0xa110_cf03;
 
 /// What the WiFi was doing ([`Activity`]'s low three bits).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -237,6 +239,10 @@ pub enum Reason {
     /// An offline display (`network` off) joined the WiFi network a
     /// browser installer gave it over USB, and restarted onto it.
     NetworkOn = 15,
+    /// The WiFi stayed down for want of heap (every reconnect step held
+    /// back, or only the pinned connect left and failing, for 10 minutes:
+    /// `wifi_reconnect`): a restart to rejoin on a fresh heap.
+    WifiHeap = 16,
     /// Powered on (the ring starts here).
     PowerOn = 20,
     /// The supply dipped (brownout detector).
@@ -249,9 +255,10 @@ pub enum Reason {
 }
 
 impl Reason {
-    const ALL: [Reason; 19] = [
+    const ALL: [Reason; 20] = [
         Reason::Diag,
         Reason::NetworkOn,
+        Reason::WifiHeap,
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -286,6 +293,7 @@ impl Reason {
             Reason::FullSpeed => "card_full_speed",
             Reason::CardClock => "card_speed",
             Reason::FreshHeap => "fresh_heap",
+            Reason::WifiHeap => "wifi_heap",
             Reason::PanelTrial => "panel_trial",
             Reason::CardFailure => "card_failure",
             Reason::NewCard => "new_card",
@@ -312,6 +320,7 @@ impl Reason {
             Reason::FullSpeed => "restarted to try the card at full speed",
             Reason::CardClock => "restarted to apply a card speed change",
             Reason::FreshHeap => "restarted to build the playlist with more free memory",
+            Reason::WifiHeap => "restarted to rejoin WiFi with more free memory",
             Reason::PanelTrial => "restarted to undo a panel timing trial",
             Reason::CardFailure => "card failure",
             Reason::NewCard => "different card",
@@ -796,15 +805,31 @@ pub fn decode_alive(s: &[u32; ALIVE_WORDS]) -> Option<(Figures, Activity)> {
 /// Bytes of [`AllocFail::task`] (FreeRTOS's `configMAX_TASK_NAME_LEN`).
 pub const TASK_NAME: usize = 16;
 /// Return addresses kept with a failed allocation.
-pub const ALLOC_PCS: usize = 8;
-/// Words of an encoded [`AllocFail`]: magic, size, caps, uptime, free,
-/// largest, activity, the task's name, the return addresses, checksum.
-pub const ALLOC_WORDS: usize = 7 + TASK_NAME / 4 + ALLOC_PCS + 1;
+pub const ALLOC_PCS: usize = 12;
+/// The words of an encoded [`AllocFail`]: magic, size, caps, uptime,
+/// free, largest, activity, flags ([`ALLOC_FLAGS`]), the task's name
+/// ([`ALLOC_TASK`]), the return addresses ([`ALLOC_PC0`]), the checksum
+/// (the FNV-1a fold of the words before it, [`alloc_fold`]).
+pub const ALLOC_WORDS: usize = 8 + TASK_NAME / 4 + ALLOC_PCS + 1;
+pub const ALLOC_FLAGS: usize = 7;
+pub const ALLOC_TASK: usize = 8;
+pub const ALLOC_PC0: usize = ALLOC_TASK + TASK_NAME / 4;
+/// [`ALLOC_FLAGS`] bit: the failure was the fatal one (Rust's
+/// out-of-memory abort followed it: the firmware's alloc error hook).
+pub const ALLOC_FATAL: u32 = 1;
+
+/// The record's checksum fold, one word further (start from
+/// [`ALLOC_FOLD_SEED`]): for the firmware's callback, which writes the
+/// record straight to RTC memory with no copy on its stack.
+pub fn alloc_fold(h: u32, w: u32) -> u32 {
+    fnv(h, w)
+}
+pub const ALLOC_FOLD_SEED: u32 = FNV_SEED;
 
 /// The last failed allocation (the IDF heap's failed-allocation callback):
 /// a crash right after one is most likely the out-of-memory abort, which
-/// no Rust panic hook sees. `at.largest` is 0: the callback does not walk
-/// the heap.
+/// no Rust panic hook sees (`fatal` when the firmware's alloc error hook
+/// saw it). `at.largest` is 0: the callback does not walk the heap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AllocFail {
     pub size: u32,
@@ -813,11 +838,12 @@ pub struct AllocFail {
     pub at: Figures,
     /// What was going on.
     pub activity: Activity,
+    /// Rust's out-of-memory abort followed this failure.
+    pub fatal: bool,
     /// The calling task's name, NUL-padded (`isr` from an interrupt).
     pub task: [u8; TASK_NAME],
     /// Return addresses up the failing call's stack, innermost first, 0
-    /// past the last (the callback's own frames included: `addr2line`
-    /// against the firmware's ELF names them).
+    /// past the last (`addr2line` against the firmware's ELF names them).
     pub pcs: [u32; ALLOC_PCS],
 }
 
@@ -843,10 +869,11 @@ pub fn encode_alloc(a: &AllocFail) -> [u32; ALLOC_WORDS] {
     s[4] = a.at.heap_free;
     s[5] = a.at.largest;
     s[6] = a.activity.0;
+    s[ALLOC_FLAGS] = if a.fatal { ALLOC_FATAL } else { 0 };
     for (i, c) in a.task.as_chunks::<4>().0.iter().enumerate() {
-        s[7 + i] = u32::from_le_bytes(*c);
+        s[ALLOC_TASK + i] = u32::from_le_bytes(*c);
     }
-    s[7 + TASK_NAME / 4..ALLOC_WORDS - 1].copy_from_slice(&a.pcs);
+    s[ALLOC_PC0..ALLOC_WORDS - 1].copy_from_slice(&a.pcs);
     s[ALLOC_WORDS - 1] = checksum(&s[..ALLOC_WORDS - 1]);
     s
 }
@@ -857,11 +884,11 @@ pub fn decode_alloc(s: &[u32; ALLOC_WORDS]) -> Option<AllocFail> {
         return None;
     }
     let mut task = [0u8; TASK_NAME];
-    for (i, w) in s[7..7 + TASK_NAME / 4].iter().enumerate() {
+    for (i, w) in s[ALLOC_TASK..ALLOC_PC0].iter().enumerate() {
         task[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
     }
     let mut pcs = [0u32; ALLOC_PCS];
-    pcs.copy_from_slice(&s[7 + TASK_NAME / 4..ALLOC_WORDS - 1]);
+    pcs.copy_from_slice(&s[ALLOC_PC0..ALLOC_WORDS - 1]);
     Some(AllocFail {
         size: s[1],
         caps: s[2],
@@ -871,6 +898,7 @@ pub fn decode_alloc(s: &[u32; ALLOC_WORDS]) -> Option<AllocFail> {
             largest: s[5],
         },
         activity: Activity(s[6]),
+        fatal: s[ALLOC_FLAGS] & ALLOC_FATAL != 0,
         task,
         pcs,
     })
@@ -931,11 +959,12 @@ pub fn boot(
                 e.activity = a.activity;
             }
             e.set_text(format_args!(
-                "last failed alloc: {} B in {} at {} s, {} B free (maybe a probe)",
+                "last failed alloc: {} B in {} at {} s, {} B free ({})",
                 a.size,
                 a.task(),
                 a.at.uptime_ms / 1000,
-                a.at.heap_free
+                a.at.heap_free,
+                if a.fatal { "the abort" } else { "maybe a probe" }
             ));
         }
     }
@@ -1018,7 +1047,11 @@ pub fn boot_kind(reset: Reset, reason: Option<Reason>) -> BootKind {
             | Reason::NewCard
             | Reason::CardLost
             | Reason::CardRetry
-            | Reason::NetworkOn => true,
+            | Reason::NetworkOn
+            // A recovery the firmware chose and recorded, as fresh_heap:
+            // clean (it may come from low memory, but no crash happened,
+            // and Remote control's hold is for crashes).
+            | Reason::WifiHeap => true,
         },
     };
     let recorded_crash = matches!(
@@ -1193,8 +1226,9 @@ mod tests {
             caps: 0x1800,
             at: fig(at_ms).unwrap(),
             activity,
+            fatal: false,
             task: name,
-            pcs: [0x400d_1234, 0x400d_5678, 0, 0, 0, 0, 0, 0],
+            pcs: [0x400d_1234, 0x400d_5678, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x400d_9abc],
         }
     }
 
@@ -1327,6 +1361,15 @@ mod tests {
             "last failed alloc: 4096 B in main at 100 s, 90000 B free (maybe a probe)"
         );
         assert_eq!(e.activity, scanning, "the failure's activity, not the heartbeat's");
+        // The fatal one (the alloc error hook saw it) says so.
+        let mut fatal = a;
+        fatal.fatal = true;
+        let e = boot(&mut r, Reset::Panic, alive(90_000, act(WifiAct::Up, 0)), Some(fatal));
+        assert_eq!(
+            e.text(),
+            "last failed alloc: 4096 B in main at 100 s, 90000 B free (the abort)"
+        );
+        assert!(crash_in(&e, &["x.rs"], "main"), "still an out-of-memory crash");
         // An old one is not; the heartbeat's activity stays.
         let e = boot(&mut r, Reset::Panic, alive(900_000, act(WifiAct::Up, 2)), Some(a));
         assert_eq!((e.reason, e.text()), (Reason::Crash, ""));
@@ -1385,6 +1428,17 @@ mod tests {
             bad[w] ^= 1 << (w % 32);
             assert_eq!(decode_alloc(&bad), None, "word {w} flipped");
         }
+        // The callback's word-by-word write (no copy on its stack) is the
+        // same record.
+        let mut f = a;
+        f.fatal = true;
+        let words = encode_alloc(&f);
+        let h = words[..ALLOC_WORDS - 1].iter().fold(ALLOC_FOLD_SEED, |h, w| alloc_fold(h, *w));
+        assert_eq!(h, words[ALLOC_WORDS - 1]);
+        assert_eq!(words[0], ALLOC_MAGIC);
+        assert_eq!(words[ALLOC_FLAGS], ALLOC_FATAL);
+        assert_eq!(words[ALLOC_PC0 + ALLOC_PCS - 1], 0x400d_9abc);
+        assert!(decode_alloc(&words).unwrap().fatal);
         // A name that is not one reads as `?`; a 16-byte one has no NUL.
         assert_eq!(alloc_fail(1, 1, b"\xff\x01", busy).task(), "?");
         assert_eq!(alloc_fail(1, 1, b"", busy).task(), "?");
@@ -1483,7 +1537,7 @@ mod tests {
     }
     /// The restarts this firmware plans and records (`crate::restart`).
     #[cfg(feature = "connect")]
-    const PLANNED: [Reason; 12] = [
+    const PLANNED: [Reason; 13] = [
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -1496,6 +1550,7 @@ mod tests {
         Reason::CardLost,
         Reason::CardRetry,
         Reason::NetworkOn,
+        Reason::WifiHeap,
     ];
     /// The rest: crashes and the entries a boot writes from its reset alone.
     #[cfg(feature = "connect")]

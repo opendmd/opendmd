@@ -145,6 +145,20 @@ pub fn tick(wifi: &mut WifiManager, cmd: &mpsc::Sender<Command>) {
             squeeze(2 * 1024, 11 * 1024);
         }
         4 => {
+            // The stacks the squeeze's failed allocations ran on (the
+            // callback writes its record without a copy on the stack).
+            let mut said = [0u32; 4];
+            for (k, name) in [c"tiT", c"wifi", c"sys_evt", c"Tmr Svc"].iter().enumerate() {
+                // SAFETY: a NUL-terminated name; a null handle is skipped.
+                said[k] = unsafe {
+                    let t = esp_idf_sys::xTaskGetHandle(name.as_ptr());
+                    if t.is_null() { u32::MAX } else { esp_idf_sys::uxTaskGetStackHighWaterMark(t) }
+                };
+            }
+            log::info!(
+                "oom-test: stacks: tiT {} B, wifi {} B, sys_evt {} B, Tmr Svc {} B unused",
+                said[0], said[1], said[2], said[3]
+            );
             release();
             log::info!(
                 "oom-test: release: heap {} B free, largest block {} B",

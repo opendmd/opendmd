@@ -245,6 +245,10 @@ type ConnectStage = (AuthMethod, Option<u8>, Option<[u8; 6]>, u32);
 /// before the next attempt.
 const ASSOC_WAIT: Duration = Duration::from_secs(15);
 const NETIF_WAIT: Duration = Duration::from_secs(15);
+/// A pinned connect's association wait ([`WifiManager::connect_direct`]):
+/// on its known channel an access point that is there answers in 1-3 s,
+/// so one that has not in 5 s is not, and the scan is next.
+const DIRECT_ASSOC_WAIT: Duration = Duration::from_secs(5);
 const RETRY_PAUSE: Duration = Duration::from_secs(2);
 /// The waits look at the driver this often, and at the installer's queue
 /// (`improv::pending`): a job waits at most this long for a connect to give
@@ -596,6 +600,7 @@ impl WifiManager {
     /// the installer (see [`Waited::GaveWay`]).
     fn try_connect(
         &mut self,
+        assoc_wait: Duration,
         attempts: u32,
         stage: u8,
         deadline: Option<Instant>,
@@ -615,7 +620,7 @@ impl WifiManager {
             // and can be neither interrupted nor clipped).
             let mut waited = Waited::TimedOut;
             if self.wifi.wifi_mut().connect().is_ok() {
-                waited = self.wait(ASSOC_WAIT, deadline, |s| {
+                waited = self.wait(assoc_wait, deadline, |s| {
                     s.wifi.wifi().is_connected().unwrap_or(false)
                 });
                 if waited == Waited::Done {
@@ -772,7 +777,7 @@ impl WifiManager {
                     ..Default::default()
                 }))?;
             self.fix_pmf();
-            match self.try_connect(attempts, stage as u8 + 1, deadline) {
+            match self.try_connect(ASSOC_WAIT, attempts, stage as u8 + 1, deadline) {
                 Ok(true) => {
                     self.learn(ssid, auth);
                     return Ok(true);
@@ -826,7 +831,7 @@ impl WifiManager {
             self.wifi.start()?;
         }
         self.fix_pmf();
-        match self.try_connect(1, 0, None) {
+        match self.try_connect(DIRECT_ASSOC_WAIT, 1, 0, None) {
             Ok(true) => Ok(true),
             Ok(false) | Err(()) => {
                 self.state = WifiState::Disconnected;

@@ -1016,20 +1016,34 @@ impl Net {
             .as_ref()
             .is_some_and(|(t, _)| t.elapsed() < config::IMPROV_SCAN_FRESH);
         if never && !crate::improv::pending() && !form_open {
+            use opendmd_core::restarts::WifiAct;
+            // A pause under way (a backoff, or a held step's recheck every
+            // HEAP_RECHECK_MS): nothing to do, and no heap walk.
+            if let Some(Step::Wait { heap: held, .. }) = self.again.waiting(uptime_ms()) {
+                crate::wifi::set_act(if held { WifiAct::HeapWait } else { WifiAct::Down });
+                return;
+            }
             let heap = crate::wifi::heap_now();
             let step = self.again.next(uptime_ms(), self.wifi.knows(&self.ssid), heap);
+            if step == Step::Restart {
+                error!(
+                    "[net] WiFi held down by the heap for {} min (heap {} B free, largest block {} B): restarting to rejoin",
+                    opendmd_core::wifi_reconnect::HEAP_STUCK_MS / 60_000,
+                    heap.free,
+                    heap.largest
+                );
+                crate::http::reboot_after_response(opendmd_core::restarts::Reason::WifiHeap);
+            }
             if let Step::Wait { heap: held, .. } = step {
-                if held {
-                    crate::wifi::set_act(opendmd_core::restarts::WifiAct::HeapWait);
-                    // Said once a minute while it lasts.
-                    let now = uptime_ms();
-                    if self.held_said.is_none_or(|t| now.wrapping_sub(t) >= 60_000) {
-                        self.held_said = Some(now);
-                        warn!(
-                            "[net] reconnect held back: heap {} B free, largest block {} B (waiting for it to recover)",
-                            heap.free, heap.largest
-                        );
-                    }
+                crate::wifi::set_act(if held { WifiAct::HeapWait } else { WifiAct::Down });
+                // Said once a minute while it lasts.
+                let now = uptime_ms();
+                if held && self.held_said.is_none_or(|t| now.wrapping_sub(t) >= 60_000) {
+                    self.held_said = Some(now);
+                    warn!(
+                        "[net] reconnect held back: heap {} B free, largest block {} B (waiting for it to recover)",
+                        heap.free, heap.largest
+                    );
                 }
                 return;
             }
