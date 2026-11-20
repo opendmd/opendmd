@@ -204,6 +204,8 @@ test:
 	$${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iota/updater/main -o target/updater-panel-timing-test \
 	  ota/updater/test/panel_timing_test.c ota/updater/main/panel_timing.c
 	target/updater-panel-timing-test ota/updater/test/panel_timing_vectors.txt
+	@echo "==> Testing tools/release-test-features-check.sh (no emulator test hooks in a release image)"
+	tools/release-test-features-check.sh --selftest
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
@@ -885,6 +887,12 @@ FW_VERSION := $(FW_CARGO_VERSION)
 FW_BETA := $(findstring -,$(FW_CARGO_VERSION))
 FW_BETA_FEATURES ?= connect
 FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_BETA_FEATURES=$(FW_BETA_FEATURES): a beta release build takes connect or nothing; anything else wants a DIST of its own (not dist/)"; exit 2; }),true)
+# The emulator lanes' and bench builds' features: never in a build into dist/
+# (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
+# emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
+# and tools/release-test-features-check.sh checks the image for their text.
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test connect-test dev-credentials bench
+FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
 # A Connect measurement build's files and app descriptor say so
@@ -999,6 +1007,7 @@ fw-release: web
 fw-release-variant:
 	@$(FW_CONNECT_RELEASE_GUARD)
 	@$(FW_BETA_GUARD)
+	@$(FW_TEST_ONLY_GUARD)
 	@# OPENDMD_CONNECT_* point a build at another server, root or key: the
 	@# emulator lane's image (connect-test) only, never a release.
 	@if env | grep -q '^OPENDMD_CONNECT_' && ! echo ",$(FW_RELEASE_FEATURES)," | grep -q ',connect-test,'; then \
