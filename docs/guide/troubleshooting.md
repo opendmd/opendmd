@@ -25,6 +25,9 @@
   click **Install** and choose **Change Wi-Fi**. Or join the
   **OpenDMD-Setup** network it opens and enter the new details there, as
   in [WiFi without the installer](install.md#wifi-without-the-installer).
+- If the display was on your WiFi and has dropped off it while the network
+  is fine, it rejoins by itself, at the latest about an hour later. To get
+  it back sooner, unplug it for a few seconds and plug it back in.
 
 ## Two displays with the same name
 

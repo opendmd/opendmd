@@ -48,6 +48,10 @@ api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy
 oom:   (an `emu-oom-test` image, make emu-oom) on the virtual AP in its own namespace, as api: WiFi
        drops (straight back; a scan), a squeezed heap through a heartbeat and a reconnect, then an
        out-of-memory abort and the next boot's record of it (tools/emu/oom_lane.py); EMU_OOM_OK.
+wifi-soak: (an `emu-wifi-soak` image, make emu-wifi-soak) on the virtual AP in its own namespace, as
+       oom: the network kept away from the station (failing pinned connects, then a name nobody
+       answers to), the heap per try, the driver restarts and the rejoin (tools/emu/wifi_soak_lane.py);
+       EMU_WIFI_SOAK_OK.
 --chip s3: the ESP32-S3 preview image (VARIANT=s3) in esp32sim's S3 machine (`--chip s3 --board none`,
        8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF), the card on SPI3 through the GPIO matrix at the S3
        firmware's pins (`--sd-spi 39,40,41,21`, SCLK, MOSI, MISO, CS): smoke and nocard run as on the
@@ -235,7 +239,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom", "wifi-soak"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -305,7 +309,7 @@ def main():
         return api(a, sim, rom, want_sha)
     if a.mode == "offline":
         return offline(a, sim, rom, want_sha)
-    if a.mode == "oom":
+    if a.mode in ("oom", "wifi-soak"):
         return oom(a, sim, rom, want_sha)
     if a.mode == "power-safe":
         if a.chip != "s3":
@@ -773,23 +777,29 @@ def offline(a, sim, rom, want_sha):
 
 
 def oom(a, sim, rom, want_sha):
-    """The low-heap lane (oom_lane.py), in its own network namespace like the API lane's."""
-    import oom_lane
+    """The low-heap lane (oom_lane.py) or the WiFi soak lane (wifi_soak_lane.py), in its own
+    network namespace like the API lane's."""
+    if a.mode == "oom":
+        import oom_lane as lane
+        sub, tag = "oom", "EMU_OOM"
+    else:
+        import wifi_soak_lane as lane
+        sub, tag = "wifisoak", "EMU_WIFI_SOAK"
     if os.environ.get("EMU_API_NETNS") != "1":
         try:
             # Seeded before the namespace (its nvs_partition_gen needs nothing from it).
-            api_lane.seeded_image(a.image, EMU_DIR / "oom")
+            api_lane.seeded_image(a.image, EMU_DIR / sub)
         except api_lane.LaneFail as e:
-            sys.exit(f"EMU_OOM_FAIL: {e}")
+            sys.exit(f"{tag}_FAIL: {e}")
         if not shutil.which("unshare"):
-            sys.exit("EMU_OOM_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+            sys.exit(f"{tag}_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
         env = {**os.environ, "EMU_API_NETNS": "1"}
         os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
     ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
     if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
-        sys.exit("EMU_OOM_FAIL: cannot bring up the loopback in the lane's network namespace")
+        sys.exit(f"{tag}_FAIL: cannot bring up the loopback in the lane's network namespace")
     a.emu_dir, a.want_sha = EMU_DIR, want_sha
-    sys.exit(oom_lane.run(a, sim, rom, FAIL))
+    sys.exit(lane.run(a, sim, rom, FAIL))
 
 
 def power_safe(a, sim, rom, want_sha):

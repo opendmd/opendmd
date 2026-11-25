@@ -44,6 +44,11 @@ emu-census = []
 # drops, a squeezed heap through a heartbeat and a reconnect, then an
 # out-of-memory abort and the next boot's record of it. Never in a release.
 emu-oom-test = []
+# The emulator's WiFi soak lane (`make emu-wifi-soak`, src/wifi_soak.rs):
+# the network kept away for long stretches (pinned connects that fail, a
+# name nobody answers to), the heap watched per try, the driver restarts
+# and the way back. Never in a release.
+emu-wifi-soak = ["opendmd-core/soak-test"]
 # The components a build can leave out (opendmd-notes docs/notes/firmware-build.md
 # "Feature flags"): all on by default, releases included; the Makefile's
 # FW_DISABLE=<name>[,<name>] builds without (`/api/status` and

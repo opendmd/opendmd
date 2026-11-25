@@ -33,8 +33,10 @@ panel copes better with WiFi drops and low memory.
   crash either.
 - After a WiFi drop the panel goes straight back to your network, without
   searching for it first, and waits instead of retrying while it is short
-  of memory. A panel low on memory keeps playing where it could stop
-  before.
+  of memory. If it can't get back onto your WiFi, it keeps trying harder,
+  and after an hour restarts itself once. If you've changed your WiFi
+  password, it opens its setup network after that restart. A panel low on memory
+  keeps playing where it could stop before.
 - If the panel ever restarts unexpectedly, it keeps a note of what it was
   doing and its last log lines, to help find the cause.
 - Short GIFs now play once before the next one, instead of repeating until
