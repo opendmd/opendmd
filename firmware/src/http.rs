@@ -1677,7 +1677,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
         };
         let net = c.net.clone();
-        stream::receive(req, #[optimize(size)] move |up| www::receive(up, card, &net))
+        stream::receive_file(req, #[optimize(size)] move |up| www::receive(up, card, &net))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
@@ -1691,7 +1691,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/firmware", Method::Put, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
-        stream::receive(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
+        stream::receive_file(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
     })?;
 
     // Format the card FAT32 — only one that is mounted but cannot be read
@@ -1851,7 +1851,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // `?new=1`: only if there is no such file (409 otherwise): a name
         // picked from a names list that has gone stale never replaces a GIF.
         let create_new = query_param(req.query(), "new").as_deref() == Some("1");
-        stream::receive(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
+        stream::receive_file(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -3902,10 +3902,29 @@ fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         }))
     }
 
+/// The uptime second a Formula was last sent (`POST /api/play/formula`, a
+/// Show on panel or an editor's live edit); 0: never.
+static FORMULA_SENT_S: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A Formula was sent within the last `secs` seconds: an editor may be at
+/// work, each edit compiling beside the one on screen (`cache::run_count`
+/// waits meanwhile).
+pub fn formula_sent_within(secs: u32) -> bool {
+    let at = FORMULA_SENT_S.load(std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: a read of the system timer.
+    let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    at != 0 && now.wrapping_sub(at) <= secs
+}
+
 /// A route's body out of `start`, for size like the routes' closures (CPU0,
 /// not on a frame's path).
 #[optimize(size)]
 fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
+        // SAFETY: a read of the system timer.
+        FORMULA_SENT_S.store(
+            ((unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32).max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if !crate::state::FORMULAS {
             return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
         }

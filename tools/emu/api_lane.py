@@ -559,6 +559,13 @@ class Lane:
                 # (A diagnostic shortcut: the event stream alone, then stop.)
                 self.events(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "load":
+                # (A diagnostic shortcut: the settings basics, then the load rounds and their
+                # heap census alone, then stop.)
+                self.basics(api)
+                self.absent = set()
+                self.load_rounds(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "bursts":
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
@@ -1961,7 +1968,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events", "governor"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events", "governor", "load"):
             lane.card_checks()
             lane.run_b()
             if getattr(a, "old_updater", None):

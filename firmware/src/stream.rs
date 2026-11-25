@@ -398,12 +398,29 @@ where
     receive_boxed(req, Box::new(work))
 }
 
+/// [`receive`] for a route whose body is a file (a GIF or any file under
+/// `/api/files`, a www pack, a firmware bundle): noted for the transition
+/// gate and the FAT index ([`uploads_within`]) at the door, refused or not
+/// (its client's next try comes in a moment), and at its end. A playlist,
+/// a set or a move is not: small, and over in a moment.
+pub fn receive_file<F>(req: &mut Req, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
+{
+    note_upload();
+    receive_boxed(
+        req,
+        Box::new(move |up: &mut Upload| {
+            let r = work(up);
+            note_upload();
+            r
+        }),
+    )
+}
+
 /// [`receive`]'s body, once: not monomorphised for every upload route.
 fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
     let mut up = req.take_over()?;
-    // Every upload asked for counts for the transition gate, refused at
-    // the door or not: its client's next try comes in a moment.
-    note_upload();
     // At the door, for the heap (`opendmd_core::admit`: the start
     // threshold, and a block for the chunk buffer): refused like a busy
     // slot (no linger, 503 + Retry-After), and nothing queued. (No
@@ -495,8 +512,6 @@ fn run_upload(mut up: Upload, work: UploadWork, counted: bool) {
     // (up to a second). Held until the drop, a client sending its uploads
     // one after another met a 503 for every one (the API lane: ~10 s
     // between two small PUTs).
-    // Its end counts too (taken on the task or, with none, on httpd's).
-    note_upload();
     if counted {
         UPLOADS.fetch_sub(1, Ordering::AcqRel);
         BUSY.store(false, Ordering::Release);

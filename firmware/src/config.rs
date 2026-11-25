@@ -762,6 +762,9 @@ pub const CACHE_KEYS_PER_PASS: usize = 3072;
 /// browser uploading prepared copies one after another causes one count at the
 /// end, not one per file.
 pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
+/// A cache count also waits until no Formula has been sent (Show on panel,
+/// an editor's live edits) for this long (s): `cache::run_count`.
+pub const CACHE_FORMULA_QUIET_S: u32 = 5;
 /// The `/api/cache` count's pacing. It runs on the network worker at
 /// priority 5 on CPU0, where the cache builder (priority 1) and the stream
 /// task (2) only get the CPU when it blocks, and a `yield_now` only goes to

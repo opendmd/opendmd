@@ -1348,4 +1348,18 @@ fn census() {
         info.total_free_bytes,
         info.largest_free_block
     );
+    // The Rust allocator's live blocks by size class (count/bytes), to tell
+    // what grew between two quiet spells.
+    #[cfg(feature = "psi")]
+    {
+        use std::fmt::Write as _;
+        let mut by = String::new();
+        for (k, (n, b)) in crate::arena::BY_SIZE.iter().enumerate() {
+            let n = n.load(std::sync::atomic::Ordering::Relaxed);
+            if n != 0 {
+                let _ = write!(by, " {}:{}/{}", 1usize << k, n, b.load(std::sync::atomic::Ordering::Relaxed));
+            }
+        }
+        log::info!("census by size:{by}");
+    }
 }

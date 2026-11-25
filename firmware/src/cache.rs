@@ -229,6 +229,13 @@ pub fn run_count() {
                 wake();
                 return;
             }
+            // Nor while a Formula is being sent or live-edited: each edit
+            // compiles beside the one on screen, and the count's key slice
+            // (a few KB) beside both took the compile's room in the
+            // emulator's API lane (the Formula started again from nothing).
+            if crate::http::formula_sent_within(config::CACHE_FORMULA_QUIET_S) {
+                continue;
+            }
             if GEN.load(Relaxed) == g {
                 break g;
             }
