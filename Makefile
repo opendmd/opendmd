@@ -891,7 +891,7 @@ FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEA
 # (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
 # emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
 # and tools/release-test-features-check.sh checks the image for their text.
-FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test connect-test dev-credentials bench
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test emu-wifi-soak connect-test dev-credentials bench
 FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
@@ -1512,6 +1512,22 @@ emu-image-oom:
 emu-oom: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-oom &&) \
 	uv run --quiet tools/emu/run.py oom --image $(or $(FW_IMAGE),$(EMU_OOM_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
+# The WiFi soak lane (tools/emu/wifi_soak_lane.py): an `emu-wifi-soak` image
+# (src/wifi_soak.rs) on WiFi, the network kept away from the station: 40
+# pinned connects that fail (the heap after each ten), then 20 reconnect
+# tries for a name nobody answers to (the driver restarted at rounds 6, 12
+# and 18, the heap after each try), 3 rounds with a wrong password (the
+# network found, every handshake failing), then the way back. Fails if the tries
+# keep heap (a slope over them), or the driver restarts or the rejoin do
+# not come. A test image, never a release. EMU_WIFI_SOAK_OK.
+EMU_WIFI_SOAK_IMAGE = $(EMU_DIR)/wifisoak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-wifi-soak:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-wifi-soak FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/wifisoak/target DIST=$(EMU_DIR)/wifisoak/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-wifi-soak: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-wifi-soak &&) \
+	uv run --quiet tools/emu/run.py wifi-soak --image $(or $(FW_IMAGE),$(EMU_WIFI_SOAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # The ESP32-S3 preview (VARIANT=s3, S3 port phase 0) in esp32sim's S3 machine
 # (`--chip s3 --board none`, 8 MB flash, 8 MB octal PSRAM): correctness only,

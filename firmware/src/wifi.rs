@@ -38,7 +38,13 @@
 //! - **A reconnect goes straight back first** ([`WifiManager::connect_direct`]):
 //!   pinned to the access point, channel and security of the last good
 //!   connection ([`Learned`]), no scan; `opendmd_core::wifi_reconnect` says
-//!   when to scan instead, when to pause and when the heap is too low.
+//!   when to scan instead, when to pause, when the heap is too low, when
+//!   to restart the driver ([`WifiManager::reset_driver`]) and when the
+//!   firmware.
+//! - **Every disconnect's reason is kept** ([`last_reason`]: the driver's
+//!   `wifi_err_reason_t`, from `WIFI_EVENT_STA_DISCONNECTED`), for the
+//!   reconnect's log lines and `/api/status`: a test panel was offline for
+//!   hours with its network up (2026-11-21) and nothing said why.
 //!
 //! Everything in here runs on the network worker thread (CPU0). The display
 //! loop never calls into this module, but for [`act`] and the counters
@@ -70,6 +76,31 @@ static TRIES: AtomicU32 = AtomicU32::new(0);
 static RECONNECTS: AtomicU32 = AtomicU32::new(0);
 /// The last drop's uptime, seconds (`u32::MAX`: none yet).
 static LAST_DROP_S: AtomicU32 = AtomicU32::new(u32::MAX);
+/// The driver's reason for its last station disconnect (0: none yet), and
+/// the driver restarts this run ([`WifiManager::reset_driver`]).
+static LAST_REASON: AtomicU32 = AtomicU32::new(0);
+static RESETS: AtomicU32 = AtomicU32::new(0);
+
+/// The driver's reason for its last station disconnect (a failed attempt
+/// is one too), `wifi_err_reason_t`; 0 before the first.
+pub fn last_reason() -> u32 {
+    LAST_REASON.load(Relaxed)
+}
+
+/// `WIFI_EVENT_STA_DISCONNECTED`, on the system event task: the reason
+/// kept, nothing else (no heap, no log: that task's stack is small).
+unsafe extern "C" fn on_disconnect(
+    _arg: *mut core::ffi::c_void,
+    _base: esp_idf_sys::esp_event_base_t,
+    _id: i32,
+    data: *mut core::ffi::c_void,
+) {
+    if !data.is_null() {
+        // SAFETY: the event's data is the driver's own disconnect record.
+        let ev = unsafe { &*(data as *const esp_idf_sys::wifi_event_sta_disconnected_t) };
+        LAST_REASON.store(ev.reason as u32, Relaxed);
+    }
+}
 
 /// What the WiFi is doing (the restart record's activity word).
 pub fn act() -> WifiAct {
@@ -102,16 +133,19 @@ pub fn note_reconnected() {
 }
 
 /// `"wifi_drops":N,"wifi_reconnects":N,"wifi_reconnect_tries":N,
-/// "wifi_last_drop_s":N|null,"wifi_activity":"…"` (`/api/status` `net`).
+/// "wifi_last_drop_s":N|null,"wifi_activity":"…","wifi_last_reason":N,
+/// "wifi_driver_resets":N` (`/api/status` `net`).
 pub fn status_fields() -> String {
     let last = LAST_DROP_S.load(Relaxed);
     format!(
-        r#""wifi_drops":{},"wifi_reconnects":{},"wifi_reconnect_tries":{},"wifi_last_drop_s":{},"wifi_activity":"{}""#,
+        r#""wifi_drops":{},"wifi_reconnects":{},"wifi_reconnect_tries":{},"wifi_last_drop_s":{},"wifi_activity":"{}","wifi_last_reason":{},"wifi_driver_resets":{}"#,
         DROPS.load(Relaxed),
         RECONNECTS.load(Relaxed),
         TRIES.load(Relaxed),
         if last == u32::MAX { "null".to_string() } else { last.to_string() },
-        act().name()
+        act().name(),
+        last_reason(),
+        RESETS.load(Relaxed)
     )
 }
 
@@ -364,6 +398,20 @@ impl WifiManager {
         // set before start() it goes out with the first DHCP request.
         set_sta_hostname(hostname);
 
+        // SAFETY: a plain function on the default loop (created by
+        // EspSystemEventLoop::take), registered once for the run.
+        let err = unsafe {
+            esp_idf_sys::esp_event_handler_register(
+                esp_idf_sys::WIFI_EVENT,
+                esp_idf_sys::wifi_event_t_WIFI_EVENT_STA_DISCONNECTED as i32,
+                Some(on_disconnect),
+                core::ptr::null_mut(),
+            )
+        };
+        if err != esp_idf_sys::ESP_OK {
+            warn!("[wifi] disconnect reasons not kept: error {err}");
+        }
+
         Ok(WifiManager {
             wifi,
             state: WifiState::Disconnected,
@@ -385,9 +433,10 @@ impl WifiManager {
         set_act(WifiAct::Down);
     }
 
-    /// The emulator's low-heap lane (`oom_test`): the learned access point
-    /// and channel made wrong, so the pinned connect fails.
-    #[cfg(feature = "emu-oom-test")]
+    /// The emulator's low-heap and WiFi soak lanes (`oom_test`,
+    /// `wifi_soak`): the learned access point and channel made wrong, so the
+    /// pinned connect fails.
+    #[cfg(any(feature = "emu-oom-test", feature = "emu-wifi-soak"))]
     pub fn spoil_learned(&mut self) {
         if let Some(l) = self.learned.as_mut() {
             l.bssid[5] ^= 0x55;
@@ -839,6 +888,23 @@ impl WifiManager {
                 Ok(false)
             }
         }
+    }
+
+    /// The radio's driver stopped and started again (`esp_wifi_stop`,
+    /// `esp_wifi_start`), the configuration kept: a reconnect's way out of a
+    /// driver that no longer hears the network (`Step::Reset`). The stop
+    /// lets go of its scan list and buffers, the start takes them again.
+    #[optimize(size)]
+    #[inline(never)]
+    pub fn reset_driver(&mut self) -> anyhow::Result<()> {
+        RESETS.fetch_add(1, Relaxed);
+        set_act(WifiAct::Connecting);
+        if self.wifi.is_started().unwrap_or(false) {
+            self.wifi.stop()?;
+        }
+        self.wifi.start()?;
+        self.state = WifiState::Disconnected;
+        Ok(())
     }
 
     /// Leave the network joined, if any (an offline display's join that

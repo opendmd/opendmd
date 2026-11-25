@@ -503,6 +503,8 @@ fn run(worker: NetWorker) {
         net.reconnect();
         #[cfg(feature = "emu-oom-test")]
         crate::oom_test::tick(&mut net.wifi, &net.save_cmd);
+        #[cfg(feature = "emu-wifi-soak")]
+        crate::wifi_soak::tick(&mut net.wifi, &mut net.ssid, &mut net.password, &net.save_cmd);
     }
 }
 
@@ -816,7 +818,22 @@ fn start(
         }
     }
 
-    if wifi.state() != WifiState::Connected && boot_failures.is_none() {
+    // A restart to rejoin (`wifi_heap`, `wifi_stuck`) that still finds no
+    // way back: the reconnect carries on (`Net::reconnect`), no setup
+    // network. The panel was on this network; it was not set up wrong.
+    let rejoining = matches!(
+        crate::restarts::this_boot_reason(),
+        Some(opendmd_core::restarts::Reason::WifiHeap | opendmd_core::restarts::Reason::WifiStuck)
+    );
+    let mut again = Reconnect::new();
+    if rejoining && wifi.state() != WifiState::Connected {
+        warn!("[net] not joined after a restart to rejoin; reconnecting, no setup network");
+        if crate::restarts::this_boot_reason() == Some(opendmd_core::restarts::Reason::WifiStuck) {
+            // Once an outage: a network really away does not restart the
+            // panel every hour.
+            again.no_stuck_restart();
+        }
+    } else if wifi.state() != WifiState::Connected && boot_failures.is_none() {
         match wifi.start_ap() {
             Ok(()) => ap_started_at = Some(Instant::now()),
             // Do not return: dropping `wifi` here would deinit the radio for
@@ -898,7 +915,7 @@ fn start(
         _sntp,
         _dns,
         last_scan,
-        again: Reconnect::new(),
+        again,
         held_said: None,
     })
 }
@@ -1025,14 +1042,21 @@ impl Net {
             }
             let heap = crate::wifi::heap_now();
             let step = self.again.next(uptime_ms(), self.wifi.knows(&self.ssid), heap);
-            if step == Step::Restart {
+            if let Step::Restart { heap: for_heap } = step {
                 error!(
-                    "[net] WiFi held down by the heap for {} min (heap {} B free, largest block {} B): restarting to rejoin",
-                    opendmd_core::wifi_reconnect::HEAP_STUCK_MS / 60_000,
+                    "[net] WiFi {} (heap {} B free, largest block {} B, {} tries, {} driver restarts, last disconnect reason {}): restarting to rejoin",
+                    if for_heap { "held down by the heap for 10 min" } else { "down for an hour" },
                     heap.free,
-                    heap.largest
+                    heap.largest,
+                    crate::wifi::reconnect_tries(),
+                    self.again.resets(),
+                    crate::wifi::last_reason()
                 );
-                crate::http::reboot_after_response(opendmd_core::restarts::Reason::WifiHeap);
+                crate::http::reboot_after_response(if for_heap {
+                    opendmd_core::restarts::Reason::WifiHeap
+                } else {
+                    opendmd_core::restarts::Reason::WifiStuck
+                });
             }
             if let Step::Wait { heap: held, .. } = step {
                 crate::wifi::set_act(if held { WifiAct::HeapWait } else { WifiAct::Down });
@@ -1049,6 +1073,17 @@ impl Net {
             }
             self.held_said = None;
             crate::wifi::note_try();
+            if step == Step::Reset {
+                warn!(
+                    "[net] {} reconnect rounds failed (last disconnect reason {}): restarting the WiFi driver",
+                    self.again.rounds(),
+                    crate::wifi::last_reason()
+                );
+                if let Err(e) = self.wifi.reset_driver() {
+                    // The scan's connect starts it if the start failed.
+                    warn!("[net] WiFi driver restart: {e:#}");
+                }
+            }
             let joined = match step {
                 Step::Direct => self.wifi.connect_direct(&self.ssid, &self.password, self.eap.as_ref()),
                 _ => self.wifi.connect_sta(&self.ssid, &self.password, self.eap.as_ref(), None),
@@ -1093,9 +1128,14 @@ impl Net {
                 }
                 Ok(false) => {
                     self.again.failed(uptime_ms(), step);
+                    // The heap after it: a try that keeps some shows here.
+                    let after = crate::wifi::heap_now();
                     warn!(
-                        "[net] reconnect failed ({}); will retry",
-                        if step == Step::Direct { "straight back" } else { "scan" }
+                        "[net] reconnect failed ({}, reason {}, heap {} B free, largest block {} B); will retry",
+                        if step == Step::Direct { "straight back" } else { "scan" },
+                        crate::wifi::last_reason(),
+                        after.free,
+                        after.largest
                     );
                 }
                 Err(e) => {

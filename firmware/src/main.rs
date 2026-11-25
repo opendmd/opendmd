@@ -95,6 +95,8 @@ mod sd;
 mod nocard_test;
 #[cfg(feature = "emu-oom-test")]
 mod oom_test;
+#[cfg(feature = "emu-wifi-soak")]
+mod wifi_soak;
 mod settings_card;
 mod sdhealth;
 mod show;

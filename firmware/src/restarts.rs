@@ -181,7 +181,10 @@ pub fn boot(reset: Reset) {
     if reset == Reset::PowerOn {
         crate::logring::forget_crash_tail();
     } else if reset.is_crash()
-        || matches!(e.reason, Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::WifiHeap)
+        || matches!(
+            e.reason,
+            Reason::Panic | Reason::StackOverflow | Reason::Diag | Reason::Crash | Reason::WifiHeap | Reason::WifiStuck
+        )
     {
         keep_crash_log(&e, last, alloc);
     }
@@ -508,6 +511,11 @@ pub fn booted_after_update() {
 /// be blamed for (`opendmd_core::restarts::crash_in`).
 pub fn this_boot_crash_in(files: &[&str], task: &str) -> bool {
     this_boot().is_some_and(|e| ring::crash_in(&e, files, task))
+}
+
+/// Why this boot's restart was made (`None`: unknown, or a power-on).
+pub fn this_boot_reason() -> Option<Reason> {
+    this_boot().map(|e| e.reason)
 }
 
 /// This boot's entry.

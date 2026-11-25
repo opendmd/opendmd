@@ -23,10 +23,25 @@
 //!   [`HEAP_RECHECK_MS`] and looks again. The setup page's scan of every
 //!   network asks more ([`Heap::scan_ok`]). The display's own allocations
 //!   come first: the heap is what it plays from.
-//! - **A heap that never recovers**: after [`HEAP_STUCK_MS`] with no room
-//!   for the scan (held back, or only the pinned connect tried, and the
-//!   WiFi still down), [`Step::Restart`]: the firmware restarts, recorded
-//!   (`wifi_heap`), and rejoins on a fresh heap.
+//! - **A heap that never recovers**: after [`HEAP_STUCK_MS`] in all,
+//!   this outage, with no room for the scan (held back, or only the pinned
+//!   connect tried), [`Step::Restart`] `{ heap: true }`: the firmware
+//!   restarts, recorded (`wifi_heap`), and rejoins on a fresh heap. In all,
+//!   not in a row: a heap that has room for the scan now and then, for a
+//!   look or two, does not start the count again (a test panel's heap
+//!   hovered at the scan's limit for hours, 2026-11-21, offline all along).
+//! - **A driver that stops hearing the network**: after [`RESET_ROUNDS`]
+//!   failed rounds in a row, and every [`RESET_ROUNDS`] more,
+//!   [`Step::Reset`]: the radio's driver stopped and started again, then
+//!   the scan. Only with room for the setup page's scan ([`Heap::scan_ok`]):
+//!   the start takes the driver's buffers again.
+//! - **Down for good**: [`DOWN_STUCK_MS`] since the outage began (the
+//!   driver restarted several times by then, if the heap had room),
+//!   [`Step::Restart`] `{ heap: false }`: the firmware restarts, recorded
+//!   (`wifi_stuck`): what brought the same test panel back at once. Once
+//!   per outage: the firmware tells the boot after it
+//!   ([`Reconnect::no_stuck_restart`]), so a network that is really away
+//!   does not restart the panel every hour.
 //!
 //! Times are milliseconds of uptime, compared wrapping. Pure: the firmware
 //! passes the clock and the heap in.
@@ -50,6 +65,13 @@ pub const BACKOFF_MAX_MS: u32 = 15_000;
 /// No room for the reconnect's scan this long, the WiFi down all the
 /// while: restart ([`Step::Restart`]).
 pub const HEAP_STUCK_MS: u32 = 10 * 60 * 1000;
+/// Failed rounds in a row before the driver is restarted ([`Step::Reset`]),
+/// and between one restart and the next: at the longest pause, about every
+/// two minutes.
+pub const RESET_ROUNDS: u32 = 6;
+/// The WiFi down this long, whatever the heap: restart ([`Step::Restart`]
+/// `{ heap: false }`), once an outage.
+pub const DOWN_STUCK_MS: u32 = 60 * 60 * 1000;
 
 /// The heap as the step sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,10 +104,14 @@ pub enum Step {
     Direct,
     /// Scan for the network, then the connect ladder (as at boot).
     Scan,
+    /// Restart the radio's driver (stop, start), then [`Step::Scan`]'s scan
+    /// and ladder; a failure is a failed round, as the scan's.
+    Reset,
     /// Not yet: `ms` more (`heap`: held back for the heap, not a pause).
     Wait { ms: u32, heap: bool },
-    /// The heap has not let the WiFi back for [`HEAP_STUCK_MS`]: restart.
-    Restart,
+    /// Restart the firmware. `heap`: the heap has not let the WiFi back for
+    /// [`HEAP_STUCK_MS`]; otherwise down [`DOWN_STUCK_MS`].
+    Restart { heap: bool },
 }
 
 /// The pause after `rounds` failed rounds in a row.
@@ -110,8 +136,17 @@ pub struct Reconnect {
     pause: bool,
     /// The pause is a heap recheck's, not a backoff's.
     pause_heap: bool,
-    /// Since when (uptime ms) there has been no room for the scan.
-    low_since: Option<u32>,
+    /// How long (ms) this outage has had no room for the scan, in all.
+    low_ms: u32,
+    /// The last look (uptime ms), and whether it had no room for the scan.
+    last_look: Option<(u32, bool)>,
+    /// When the outage's first look came (uptime ms).
+    down_since: Option<u32>,
+    /// Driver restarts this outage, and the round of the last one.
+    resets: u32,
+    reset_round: u32,
+    /// The once-an-outage firmware restart is spent (the boot after one).
+    stuck_spent: bool,
 }
 
 impl Reconnect {
@@ -122,6 +157,17 @@ impl Reconnect {
     /// Rounds failed in a row.
     pub fn rounds(&self) -> u32 {
         self.rounds
+    }
+
+    /// Driver restarts this outage.
+    pub fn resets(&self) -> u32 {
+        self.resets
+    }
+
+    /// The boot after a [`Step::Restart`] `{ heap: false }` (`wifi_stuck`),
+    /// still down: no second one this outage (the heap's still holds).
+    pub fn no_stuck_restart(&mut self) {
+        self.stuck_spent = true;
     }
 
     /// A pause under way at `now` (a backoff, or a held step's recheck),
@@ -142,10 +188,26 @@ impl Reconnect {
             return w;
         }
         self.pause = false;
+        let low = !heap.rescan_ok();
+        // Since the last look, counted as low if that look was.
+        if let Some((at, true)) = self.last_look {
+            self.low_ms = self.low_ms.saturating_add(now.wrapping_sub(at));
+        }
+        self.last_look = Some((now, low));
+        let since = *self.down_since.get_or_insert(now);
+        if low && self.low_ms >= HEAP_STUCK_MS {
+            return Step::Restart { heap: true };
+        }
+        if !self.stuck_spent && now.wrapping_sub(since) >= DOWN_STUCK_MS {
+            return Step::Restart { heap: false };
+        }
         let direct_ok = learned && heap.direct_ok();
+        let reset_due = self.rounds >= RESET_ROUNDS && self.rounds - self.reset_round >= RESET_ROUNDS;
         let step = if direct_ok && self.rounds == 0 && !self.direct_failed {
             Step::Direct
-        } else if heap.rescan_ok() {
+        } else if reset_due && heap.scan_ok() {
+            Step::Reset
+        } else if !low {
             Step::Scan
         } else if direct_ok {
             // No room to scan: the pinned connect again, which costs less.
@@ -153,14 +215,6 @@ impl Reconnect {
         } else {
             Step::Wait { ms: HEAP_RECHECK_MS, heap: true }
         };
-        if heap.rescan_ok() {
-            self.low_since = None;
-        } else {
-            let since = *self.low_since.get_or_insert(now);
-            if now.wrapping_sub(since) >= HEAP_STUCK_MS {
-                return Step::Restart;
-            }
-        }
         if let Step::Wait { ms, .. } = step {
             self.pause = true;
             self.pause_heap = true;
@@ -173,7 +227,11 @@ impl Reconnect {
     pub fn failed(&mut self, now: u32, step: Step) {
         match step {
             Step::Direct if !self.direct_failed && self.rounds == 0 => self.direct_failed = true,
-            Step::Direct | Step::Scan => {
+            Step::Direct | Step::Scan | Step::Reset => {
+                if step == Step::Reset {
+                    self.resets = self.resets.saturating_add(1);
+                    self.reset_round = self.rounds;
+                }
                 self.direct_failed = false;
                 self.rounds = self.rounds.saturating_add(1);
                 let pause = backoff_ms(self.rounds);
@@ -181,7 +239,7 @@ impl Reconnect {
                 self.pause_heap = false;
                 self.not_before = now.wrapping_add(pause);
             }
-            Step::Wait { .. } | Step::Restart => {}
+            Step::Wait { .. } | Step::Restart { .. } => {}
         }
     }
 
@@ -234,8 +292,9 @@ mod tests {
                     now += ms;
                 }
                 s => {
-                    assert_ne!(s, Step::Restart);
-                    if s == Step::Scan {
+                    assert!(!matches!(s, Step::Restart { .. }));
+                    // (A driver restart's round starts with the scan too.)
+                    if matches!(s, Step::Scan | Step::Reset) {
                         scans.push(now);
                     }
                     // A pinned connect waits out its 5 s; a scan ~3 s.
@@ -277,7 +336,7 @@ mod tests {
         // A wait or a restart is not a failure.
         let before = t;
         t.failed(0, HELD);
-        t.failed(0, Step::Restart);
+        t.failed(0, Step::Restart { heap: true });
         assert_eq!(t, before);
         assert!(!CRUMBS.scan_ok() && ROOMY.scan_ok());
     }
@@ -289,7 +348,7 @@ mod tests {
         let mut now = 0u32;
         let restart_at = loop {
             match r.next(now, true, CRUMBS) {
-                Step::Restart => break now,
+                Step::Restart { heap: true } => break now,
                 Step::Wait { heap: true, ms } => now += ms,
                 s => panic!("{s:?} in a heap in crumbs"),
             }
@@ -301,23 +360,121 @@ mod tests {
         let mut tries = 0;
         let restart_at = loop {
             match t.next(now, true, TIGHT) {
-                Step::Restart => break now,
+                Step::Restart { heap: true } => break now,
                 Step::Wait { ms, .. } => now += ms,
                 Step::Direct => {
                     tries += 1;
                     now += 5_000;
                     t.failed(now, Step::Direct);
                 }
-                Step::Scan => panic!("a scan without the room for one"),
+                s => panic!("{s:?} without the room for a scan"),
             }
         };
         assert!(restart_at >= HEAP_STUCK_MS && tries > 10, "{restart_at} {tries}");
-        // Room to scan once in the ten minutes: the count starts again.
+        // Room to scan once in the ten minutes: the time it had room is not
+        // counted, the time before and after is.
         let mut u = Reconnect::new();
         assert_eq!(u.next(0, false, CRUMBS), HELD);
         assert_eq!(u.next(HEAP_STUCK_MS - 10_000, false, ROOMY), Step::Scan);
         u.failed(HEAP_STUCK_MS - 7_000, Step::Scan);
         assert_eq!(u.next(HEAP_STUCK_MS + 1_000, false, CRUMBS), HELD);
+        assert_eq!(u.next(HEAP_STUCK_MS + 1_000 + HEAP_RECHECK_MS, false, CRUMBS), HELD);
+        assert_eq!(u.next(HEAP_STUCK_MS + 10_000 + HEAP_RECHECK_MS, false, CRUMBS), Step::Restart { heap: true });
+    }
+
+    /// The heap at a test panel's `wifi_heap` restart (2026-11-21), after
+    /// hours offline: room for a pinned connect, a block short of a scan.
+    const RECORDED: Heap = Heap { free: 11_684, largest: 2_304 };
+    /// Just enough for the reconnect's scan.
+    const EDGE: Heap = Heap { free: 11_800, largest: 2_600 };
+
+    #[test]
+    fn a_heap_at_the_scans_limit_restarts_within_the_half_hour() {
+        // The heap now with room for the scan, now without, at every other
+        // look: the old rule (ten minutes in a row) never fired.
+        let mut r = Reconnect::new();
+        let (mut now, mut looks) = (0u32, 0u32);
+        let restart_at = loop {
+            if let Some(Step::Wait { ms, .. }) = r.waiting(now) {
+                now += ms;
+                continue;
+            }
+            let heap = if looks % 2 == 0 { RECORDED } else { EDGE };
+            looks += 1;
+            match r.next(now, true, heap) {
+                Step::Restart { heap: true } => break now,
+                Step::Restart { heap: false } => panic!("the hour's restart first, at {now}"),
+                Step::Wait { ms, .. } => now += ms,
+                // A pinned connect's 5 s; a scan that does not find it, ~2 s.
+                s => {
+                    now += if s == Step::Direct { 5_000 } else { 2_000 };
+                    r.failed(now, s);
+                }
+            }
+        };
+        assert!((HEAP_STUCK_MS..3 * HEAP_STUCK_MS).contains(&restart_at), "{restart_at}");
+        assert!(looks > 50, "{looks} looks");
+    }
+
+    #[test]
+    fn a_driver_that_hears_nothing_is_restarted() {
+        let mut r = Reconnect::new();
+        let mut now = 0u32;
+        let mut at = Vec::new();
+        while now < 20 * 60 * 1000 {
+            match r.next(now, true, ROOMY) {
+                Step::Wait { ms, .. } => now += ms,
+                s => {
+                    if s == Step::Reset {
+                        at.push(r.rounds());
+                    }
+                    now += if s == Step::Direct { 5_000 } else { 2_000 };
+                    r.failed(now, s);
+                }
+            }
+        }
+        assert_eq!(&at[..3], &[RESET_ROUNDS, 2 * RESET_ROUNDS, 3 * RESET_ROUNDS]);
+        assert_eq!(r.resets() as usize, at.len());
+        // Not without room for a full scan: the scan alone.
+        let mid = Heap { free: 12_000, largest: 3_000 };
+        let mut m = Reconnect::new();
+        for _ in 0..3 * RESET_ROUNDS {
+            let s = m.next(now, false, mid);
+            assert_eq!(s, Step::Scan);
+            m.failed(now, s);
+            now += BACKOFF_MAX_MS;
+        }
+        assert_eq!(m.next(now, false, ROOMY), Step::Reset);
+    }
+
+    #[test]
+    fn down_for_an_hour_restarts_once() {
+        let run = |r: &mut Reconnect, until: u32| -> Option<u32> {
+            let mut now = 0u32;
+            while now < until {
+                match r.next(now, true, ROOMY) {
+                    Step::Restart { heap: false } => return Some(now),
+                    Step::Restart { heap: true } => panic!("a heap restart in a roomy heap"),
+                    Step::Wait { ms, .. } => now += ms,
+                    s => {
+                        now += if s == Step::Direct { 5_000 } else { 2_000 };
+                        r.failed(now, s);
+                    }
+                }
+            }
+            None
+        };
+        let mut r = Reconnect::new();
+        let at = run(&mut r, 2 * DOWN_STUCK_MS).expect("a restart");
+        assert!((DOWN_STUCK_MS..DOWN_STUCK_MS + BACKOFF_MAX_MS + 2_000).contains(&at), "{at}");
+        assert!(r.resets() >= 10, "{} driver restarts first", r.resets());
+        // The boot after it: no second one, however long.
+        let mut b = Reconnect::new();
+        b.no_stuck_restart();
+        assert_eq!(run(&mut b, 3 * DOWN_STUCK_MS), None);
+        // Joined meanwhile: the next outage may restart again.
+        b.connected();
+        assert_eq!(b, Reconnect::new());
     }
 
     #[test]

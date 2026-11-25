@@ -35,6 +35,9 @@ panel copes better with WiFi drops and low memory.
   searching for it first, and waits instead of retrying while it is short
   of memory. A panel low on memory keeps playing where it could stop
   before.
+- If the panel can't get back onto your WiFi for a while, it restarts its
+  WiFi radio every couple of minutes, and after an hour restarts itself,
+  once, without opening the setup network.
 - If the panel ever restarts unexpectedly, it keeps a note of what it was
   doing and its last log lines, to help find the cause.
 

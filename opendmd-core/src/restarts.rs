@@ -243,6 +243,10 @@ pub enum Reason {
     /// back, or only the pinned connect left and failing, for 10 minutes:
     /// `wifi_reconnect`): a restart to rejoin on a fresh heap.
     WifiHeap = 16,
+    /// The WiFi stayed down for an hour with room on the heap, the radio's
+    /// driver restarted in between to no avail (`wifi_reconnect`): a
+    /// restart to rejoin with a fresh driver.
+    WifiStuck = 17,
     /// Powered on (the ring starts here).
     PowerOn = 20,
     /// The supply dipped (brownout detector).
@@ -255,10 +259,11 @@ pub enum Reason {
 }
 
 impl Reason {
-    const ALL: [Reason; 20] = [
+    const ALL: [Reason; 21] = [
         Reason::Diag,
         Reason::NetworkOn,
         Reason::WifiHeap,
+        Reason::WifiStuck,
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -294,6 +299,7 @@ impl Reason {
             Reason::CardClock => "card_speed",
             Reason::FreshHeap => "fresh_heap",
             Reason::WifiHeap => "wifi_heap",
+            Reason::WifiStuck => "wifi_stuck",
             Reason::PanelTrial => "panel_trial",
             Reason::CardFailure => "card_failure",
             Reason::NewCard => "new_card",
@@ -321,6 +327,7 @@ impl Reason {
             Reason::CardClock => "restarted to apply a card speed change",
             Reason::FreshHeap => "restarted to build the playlist with more free memory",
             Reason::WifiHeap => "restarted to rejoin WiFi with more free memory",
+            Reason::WifiStuck => "restarted to rejoin WiFi after an hour of failed reconnects",
             Reason::PanelTrial => "restarted to undo a panel timing trial",
             Reason::CardFailure => "card failure",
             Reason::NewCard => "different card",
@@ -1051,7 +1058,8 @@ pub fn boot_kind(reset: Reset, reason: Option<Reason>) -> BootKind {
             // A recovery the firmware chose and recorded, as fresh_heap:
             // clean (it may come from low memory, but no crash happened,
             // and Remote control's hold is for crashes).
-            | Reason::WifiHeap => true,
+            | Reason::WifiHeap
+            | Reason::WifiStuck => true,
         },
     };
     let recorded_crash = matches!(
@@ -1537,7 +1545,7 @@ mod tests {
     }
     /// The restarts this firmware plans and records (`crate::restart`).
     #[cfg(feature = "connect")]
-    const PLANNED: [Reason; 13] = [
+    const PLANNED: [Reason; 14] = [
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -1551,6 +1559,7 @@ mod tests {
         Reason::CardRetry,
         Reason::NetworkOn,
         Reason::WifiHeap,
+        Reason::WifiStuck,
     ];
     /// The rest: crashes and the entries a boot writes from its reset alone.
     #[cfg(feature = "connect")]
