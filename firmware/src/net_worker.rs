@@ -1238,7 +1238,7 @@ mod lowwatch {
     /// bit 5 a FAT index slice on the card, 6 a build under way.
     pub static PLAYER: AtomicU32 = AtomicU32::new(0);
 
-    fn player() -> u32 {
+    pub(super) fn player() -> u32 {
         use std::sync::atomic::Ordering::Relaxed as R;
         u32::from(crate::state::TRANSITIONING.load(R))
             | u32::from(crate::readahead::ring_held()) << 1
@@ -1336,18 +1336,31 @@ fn census() {
     }
     static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
-    if now.wrapping_sub(last) < 20_000 {
+    let since = now.wrapping_sub(last);
+    if since < 20_000 {
+        return;
+    }
+    // The player's steady point: the next file's copy opened ahead held, no
+    // transition, no index build. Between a switch and the next step ahead
+    // (most of a turn at dwell_min 1) its ~4 KB are not held, and the API
+    // lane's census, the least of a quiet spell against the earlier ones',
+    // once took such a moment as its reference and no later spell met it
+    // again. Waited for up to 10 s past due (it may never come: a Formula on
+    // screen, the network off); the line says what the player held.
+    let player = lowwatch::player();
+    if player & 0x65 != 0x04 && since < 30_000 {
         return;
     }
     LAST.store(now, std::sync::atomic::Ordering::Relaxed);
     let mut info: esp_idf_sys::multi_heap_info_t = unsafe { std::mem::zeroed() };
     unsafe { esp_idf_sys::heap_caps_get_info(&mut info, crate::state::internal(esp_idf_sys::MALLOC_CAP_8BIT)) };
     log::info!(
-        "census: {} blocks in use, {} B allocated, {} B free, largest {} B",
+        "census: {} blocks in use, {} B allocated, {} B free, largest {} B, player {:#x}",
         info.allocated_blocks,
         info.total_allocated_bytes,
         info.total_free_bytes,
-        info.largest_free_block
+        info.largest_free_block,
+        player
     );
     // The Rust allocator's live blocks by size class (count/bytes), to tell
     // what grew between two quiet spells.
