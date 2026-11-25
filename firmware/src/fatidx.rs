@@ -1395,6 +1395,7 @@ pub fn tick() {
                 crate::state::largest_free_block()
             );
             *JOB.lock().unwrap_or_else(|p| p.into_inner()) = Some(job);
+            HUNGER.fed(now);
             BUILDING.store(true, Relaxed);
             run_slice();
         }
@@ -1522,14 +1523,51 @@ const TMP: &str = "/sdcard/cache/.fatidx.tmp";
 static BUILD_FLOOR: AtomicU32 = AtomicU32::new(0);
 static BUILD_GROUP: AtomicU32 = AtomicU32::new(0);
 
-/// Uptime (ms) until which the player needs nothing of the card or the heap
-/// beyond what it holds (`Engine::quiet_for`, from the main loop): the
-/// build works only before it.
+/// Uptime (ms) until which the player surely needs nothing of the card or
+/// the heap beyond what it holds (`Engine::quiet_for`, from the main loop:
+/// no switch can come before it): the walk and the trailer, which stop
+/// only between directories, work only before it.
 static QUIET_UNTIL: AtomicU32 = AtomicU32::new(0);
+/// The same up to where the player may need the card again: a file's
+/// first loop may end (and its turn with it) before
+/// (`Engine::quiet_loose_for`). The passes, which stop at their next read
+/// once it is moved in (each tick), work before it.
+static LOOSE_UNTIL: AtomicU32 = AtomicU32::new(0);
+/// A slice is under way ([`slice_running`]).
+static SLICE_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// The main loop's word on the player (each tick): quiet for `d` from now.
-pub fn set_quiet(d: Duration) {
-    QUIET_UNTIL.store(uptime_ms().wrapping_add(d.as_millis().min(60_000) as u32), Relaxed);
+/// The main loop's word on the player (each tick): surely quiet for `sure`
+/// from now, and maybe for `loose`.
+pub fn set_quiet(sure: Duration, loose: Duration) {
+    let now = uptime_ms();
+    let at = |d: Duration| now.wrapping_add(d.as_millis().min(60_000) as u32);
+    QUIET_UNTIL.store(at(sure), Relaxed);
+    LOOSE_UNTIL.store(at(sure.max(loose)), Relaxed);
+}
+
+/// A slice of the build is on the card: the player's switch waits for it
+/// to stop (`ahead::between_frames`, while a turn lingers), which it does
+/// at its next read or directory once the window is closed.
+pub fn slice_running() -> bool {
+    SLICE_RUNNING.load(Relaxed)
+}
+
+/// Whether the build is kept out by the player's turns
+/// (`opendmd_core::fatdir::Hunger`: fed by a slice of at least
+/// [`config::FATIDX_SLICE_MIN_MS`], one stopped for the heap, a look that
+/// found the window but the heap or a transfer in the way).
+static HUNGER: fatdir::Hunger = fatdir::Hunger::new();
+
+/// The quiet the main loop asks the player's turns for
+/// (`Engine::set_quiet_wanted`): [`config::FATIDX_QUIET_WANT`] while a build
+/// is under way and has had no slice for [`config::FATIDX_STARVED_MS`] and
+/// [`config::FATIDX_STARVED_LOOKS`] looks that found no window, else none.
+pub fn quiet_wanted() -> Duration {
+    if HUNGER.starved(uptime_ms(), BUILDING.load(Relaxed), config::FATIDX_STARVED_MS, config::FATIDX_STARVED_LOOKS) {
+        config::FATIDX_QUIET_WANT
+    } else {
+        Duration::ZERO
+    }
 }
 
 enum Stage {
@@ -1565,6 +1603,8 @@ struct Job {
     gen: u32,
     /// The whole build at once (psi-probe): the player's quiet not asked.
     ignore_quiet: bool,
+    /// The last slice stopped for the heap (`HUNGER`: not the player's doing).
+    heap_stopped: bool,
 }
 
 static JOB: Mutex<Option<Box<Job>>> = Mutex::new(None);
@@ -1600,20 +1640,40 @@ impl Job {
             cut0: crate::TRANSITIONS_CUT.load(Relaxed),
             gen: DIR_GEN.load(Relaxed),
             ignore_quiet: false,
+            heap_stopped: false,
         })
     }
 
+    /// Whether the job's next work stops only between directories (the
+    /// walk, the trailer): it needs the player's sure window.
+    fn needs_sure(&self) -> bool {
+        matches!(self.stage, Stage::Walk | Stage::Trailer | Stage::Passes(256..))
+    }
+
     /// Work until `until` (uptime ms) or the heap is short: `Ok(true)` when
-    /// the job is done. Stops only between directories and between passes.
+    /// the job is done. Stops between directories (the walk), at a read
+    /// (a pass, made again from its start) and between passes.
     fn slice(&mut self, until: u32) -> io::Result<bool> {
         let (fs, geo) = volume()?;
         self.slices += 1;
+        self.heap_stopped = false;
         // The slice's end, and the player's quiet (read again each time: a
         // skip, a play or a resume ends it at the next directory or read).
+        // The walk and the trailer go on only inside the sure window, with
+        // room left for a big directory (it cannot stop half way); the
+        // passes inside the loose one.
         let ignore_quiet = self.ignore_quiet;
+        let left = |h: &AtomicU32| h.load(Relaxed).wrapping_sub(uptime_ms()) as i32;
+        // An upload (or a Connect send) coming in: the build steps aside
+        // at its next read or directory (its group and the card are the
+        // upload's), as for the player.
+        let lan = || crate::stream::uploads_within(config::UPLOAD_QUIET_S);
         let time_left = || {
-            let now = uptime_ms();
-            (until.wrapping_sub(now) as i32) > 0 && (ignore_quiet || (QUIET_UNTIL.load(Relaxed).wrapping_sub(now) as i32) > 0)
+            (until.wrapping_sub(uptime_ms()) as i32) > 0 && (ignore_quiet || (left(&LOOSE_UNTIL) > 0 && !lan()))
+        };
+        let sure_left = || {
+            (until.wrapping_sub(uptime_ms()) as i32) > 0
+                && (ignore_quiet || (left(&QUIET_UNTIL) >= config::FATIDX_WALK_MIN_MS as i32 && !lan()))
         };
         let heap_ok = || crate::state::free_heap() as usize >= config::FATIDX_SLICE_KEEP;
         loop {
@@ -1624,10 +1684,11 @@ impl Job {
                     self.cursor.refresh();
                     let mut w = self.tmp.as_ref().map(|f| BufWriter::with_capacity(512, f));
                     loop {
-                        if !time_left() || !heap_ok() {
+                        if !sure_left() || !heap_ok() {
                             if let Some(w) = w.as_mut() {
                                 w.flush()?;
                             }
+                            self.heap_stopped = !heap_ok();
                             return Ok(false);
                         }
                         let Some(d) = self.cursor.next(&geo, &mut read)? else { break };
@@ -1708,6 +1769,7 @@ impl Job {
                         continue;
                     }
                     if !time_left() || !heap_ok() {
+                        self.heap_stopped = !heap_ok();
                         return Ok(false);
                     }
                     let mut group = take_group()?;
@@ -1741,6 +1803,9 @@ impl Job {
                     self.stage = Stage::Passes(b1);
                 }
                 Stage::Trailer => {
+                    if !sure_left() {
+                        return Ok(false);
+                    }
                     let mut chunk = try_buf(config::FATIDX_SCRATCH)?;
                     let mut f = File::open(TMP)?;
                     let out = self.out.as_mut().ok_or_else(|| errno(sys::EIO))?;
@@ -1791,21 +1856,57 @@ fn take_group() -> io::Result<Vec<u8>> {
 /// dropped as it ends.
 fn run_slice() {
     let now = uptime_ms();
-    let quiet = QUIET_UNTIL.load(Relaxed);
-    let left = quiet.wrapping_sub(now) as i32;
-    let until = now.wrapping_add(if left > 0 { (left as u32).min(config::FATIDX_SLICE_MS) } else { 0 });
-    if until.wrapping_sub(now) < config::FATIDX_SLICE_MIN_MS
-        || crate::cache_builder::task_up()
-        || crate::cache_builder::transfer_in_flight()
-        || (crate::state::free_heap() as usize) < config::FATIDX_SLICE_KEEP
-    {
-        return;
-    }
     let mut g = JOB.lock().unwrap_or_else(|p| p.into_inner());
     let Some(job) = g.as_mut() else { return };
+    // Short of the heap, or with a transfer, an upload (in hand or within
+    // `config::UPLOAD_QUIET_S`) or the cache builder in the way: not the
+    // player's doing, whatever its window (a longer turn would
+    // not help: `HUNGER` is fed, never asks).
+    let sure = job.needs_sure();
+    let heap_need = if sure {
+        config::FATIDX_SLICE_KEEP + config::FATIDX_SCRATCH
+    } else {
+        config::FATIDX_PASS_KEEP + config::FATIDX_SCRATCH + config::FATIDX_GROUP_MIN
+    };
+    if crate::cache_builder::task_up()
+        || crate::cache_builder::transfer_in_flight()
+        || crate::stream::uploads_within(config::UPLOAD_QUIET_S)
+        || (crate::state::free_heap() as usize) < heap_need
+        || (!sure && crate::state::largest_free_block() < config::FATIDX_GROUP_MIN + 1024)
+    {
+        HUNGER.fed(now);
+        return;
+    }
+    // The window this work may use: the walk's (which cannot stop half a
+    // directory) only the sure one, with room for a big directory.
+    let (horizon, need) = if sure {
+        (QUIET_UNTIL.load(Relaxed), config::FATIDX_WALK_MIN_MS)
+    } else {
+        (LOOSE_UNTIL.load(Relaxed), config::FATIDX_SLICE_MIN_MS)
+    };
+    let left = horizon.wrapping_sub(now) as i32;
+    if left < need as i32 {
+        HUNGER.no_window();
+        return;
+    }
+    let until = now.wrapping_add((left as u32).min(config::FATIDX_SLICE_MS));
+    SLICE_RUNNING.store(true, Relaxed);
     guard(0).store(GUARD_MAGIC, Relaxed);
     let r = job.slice(until);
     guard(0).store(0, Relaxed);
+    SLICE_RUNNING.store(false, Relaxed);
+    let heap_stopped = job.heap_stopped;
+    // Fed when the slice had its window's worth, or stopped for the heap
+    // (not the player's doing). One cut short by the player (a first
+    // loop's end the loose window ran to) leaves the build asking.
+    let end = match &r {
+        Ok(true) => fatdir::SliceEnd::Done,
+        Err(e) if e.kind() == io::ErrorKind::OutOfMemory => fatdir::SliceEnd::HeapShort,
+        _ if heap_stopped => fatdir::SliceEnd::HeapShort,
+        _ if crate::stream::uploads_within(config::UPLOAD_QUIET_S) => fatdir::SliceEnd::SteppedAside,
+        _ => fatdir::SliceEnd::Ran(since(uptime_ms(), now)),
+    };
+    HUNGER.slice_ended(now, end, config::FATIDX_SLICE_MIN_MS);
     match r {
         Ok(false) => {}
         Err(e) if e.kind() == io::ErrorKind::OutOfMemory => {}

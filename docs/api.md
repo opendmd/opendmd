@@ -273,7 +273,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
-| `heap` | `{free, floor, idf_min, transitions_cut}`: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds `main_stack`, the main task's stack bytes never used, and `pushed`, pixels pushed to the panel) |
+| `heap` | `{free, floor, idf_min, transitions_cut, transitions_cut_upload}`: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot; `transitions_cut_upload` the transitions cut because an upload (a LAN one or a Connect send) was in hand or in the last 10 s (a probe build adds `main_stack`, the main task's stack bytes never used, and `pushed`, pixels pushed to the panel) |
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
 | `refresh_hz`, `refresh_us` | the panel's refresh rate as its driver works it out (Hz), and the refresh measured off its scan at start-up (µs a refresh; 0 when it could not be measured): the one raced Formulas follow, so 8,547 is about 117 a second |
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the worst since boot, ms |
@@ -422,7 +422,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `wifi_eap_ttls` | `mschapv2` | TTLS's inner method: `mschapv2`, `pap`, `mschap` or `chap` (PEAP's is always MSCHAPv2) |
 | `brightness` | 0..=`max_brightness`, 96 | panel brightness |
 | `max_brightness` | 16..=255, 144 | the ceiling `brightness` may not pass |
-| `dwell_min`, `dwell_max` | seconds, 3 and 30 | how long a file stays up (below 1 reads as 1; `dwell_max` ≥ `dwell_min`, else `400`) |
+| `dwell_min`, `dwell_max` | seconds, 1 and 30 | how long a file stays up (below 1 reads as 1; `dwell_max` ≥ `dwell_min`, else `400`) |
 | `shuffle` | bool, true | shuffle the playlist |
 | `platforms` | string, `""` | comma-separated platform prefixes to play, e.g. `"MD,SNES"`; empty = all |
 | `set` | string, `""` | the playlist (see "Fields that recur") |

@@ -562,7 +562,7 @@ function mountLocal(el) {
 
   el.append(
     h('div.card', canvas,
-      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')), ed,
+      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 1–30 s dwell')), ed,
       h('div.row', { style: 'margin-top:12px' },
         h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
         h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), prevBtn, pauseBtn, nextBtn)),
@@ -574,7 +574,7 @@ function mountLocal(el) {
     onDwellEnd: () => next(),
     onError: (m) => { toast(m, 'bad'); next(); },
   });
-  preview.setDwell(3, 30);
+  preview.setDwell(1, 30);
 
   const src = app.src;
   const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p) && !/\/filelist\.odm\.|\.(idx|part|tmp|bak|meta)$/.test(p));

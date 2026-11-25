@@ -51,6 +51,23 @@ mod on {
     #[inline(always)]
     fn note(_d: isize) {}
 
+    /// `emu-census` builds: the Rust allocator's live blocks by size class
+    /// (`2^k` to `2^(k+1)` - 1 bytes; the last class all from 32 KB up),
+    /// counts and bytes, for the census (`net_worker`).
+    #[cfg(feature = "emu-census")]
+    pub static BY_SIZE: [(std::sync::atomic::AtomicI32, std::sync::atomic::AtomicIsize); 16] =
+        [const { (std::sync::atomic::AtomicI32::new(0), std::sync::atomic::AtomicIsize::new(0)) }; 16];
+    #[cfg(feature = "emu-census")]
+    #[inline(always)]
+    fn track(size: usize, n: i32) {
+        let k = (usize::BITS - size.max(1).leading_zeros()).saturating_sub(1).min(15) as usize;
+        BY_SIZE[k].0.fetch_add(n, Relaxed);
+        BY_SIZE[k].1.fetch_add(n as isize * size as isize, Relaxed);
+    }
+    #[cfg(not(feature = "emu-census"))]
+    #[inline(always)]
+    fn track(_size: usize, _n: i32) {}
+
     // The heap map's allocator (`heapmap`, a diagnostic build) is the
     // global one there, and serves the arena's slots through `claim`.
     #[cfg_attr(not(feature = "heapmap"), global_allocator)]
@@ -97,6 +114,7 @@ mod on {
         #[inline(never)]
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
             note(l.size() as isize);
+            track(l.size(), 1);
             if let Some(p) = claim(l) {
                 return p;
             }
@@ -111,6 +129,7 @@ mod on {
         #[inline(never)]
         unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
             note(l.size() as isize);
+            track(l.size(), 1);
             if let Some(p) = claim(l) {
                 // SAFETY: the slot is `l.size()` bytes of the arena, ours now.
                 unsafe { p.write_bytes(0, l.size()) };
@@ -127,6 +146,7 @@ mod on {
         #[inline(never)]
         unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
             note(-(l.size() as isize));
+            track(l.size(), -1);
             #[cfg(all(esp32s3, feature = "psram-cold"))]
             if super::cold::free(p, l) {
                 return;
@@ -140,6 +160,8 @@ mod on {
         #[inline(never)]
         unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
             note(new as isize - l.size() as isize);
+            track(l.size(), -1);
+            track(new, 1);
             #[cfg(all(esp32s3, feature = "psram-cold"))]
             if super::cold::holds(p) {
                 // A cold block moves as a new one of its own (so the
@@ -316,6 +338,6 @@ compile_error!("psram-cold works through the arena's allocator: not with heapmap
 #[cfg(feature = "psi")]
 pub use on::{reserve, span, BUSY, HITS};
 #[cfg(all(feature = "psi", feature = "emu-census"))]
-pub use on::RUST_LIVE;
+pub use on::{BY_SIZE, RUST_LIVE};
 #[cfg(all(feature = "psi", feature = "heapmap"))]
 pub use on::{claim, release, release_check as holds};

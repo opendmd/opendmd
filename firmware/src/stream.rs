@@ -142,6 +142,32 @@ pub fn phase() -> u32 {
 pub fn uploads() -> u32 {
     UPLOADS.load(Ordering::Relaxed)
 }
+
+/// The uptime second an upload was last asked for, taken or finished (0:
+/// none yet).
+static UPLOAD_AT_S: AtomicU32 = AtomicU32::new(0);
+
+/// An upload was asked for, taken or finished now (a LAN one here; a
+/// Connect send's start, chunks and end, `connect::xfer`).
+pub fn note_upload() {
+    // SAFETY: a read of the system timer.
+    let s = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    UPLOAD_AT_S.store(s.max(1), Ordering::Relaxed);
+}
+
+/// An upload is in hand, or one was asked for, taken or finished within
+/// the last `secs` seconds: uploads come in runs (a folder, a client's
+/// retries), and the next one's peak may come at any moment
+/// (`transition_gate`).
+pub fn uploads_within(secs: u32) -> bool {
+    if uploads() > 0 {
+        return true;
+    }
+    let at = UPLOAD_AT_S.load(Ordering::Relaxed);
+    // SAFETY: a read of the system timer.
+    let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    at != 0 && now.wrapping_sub(at) <= secs
+}
 /// Transfers under way on the task (0 or 1): a heavy request elsewhere
 /// counts its swing against the heap (`opendmd_core::admit`).
 pub fn transfers() -> u32 {
@@ -370,6 +396,26 @@ where
     F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
 {
     receive_boxed(req, Box::new(work))
+}
+
+/// [`receive`] for a route whose body is a file (a GIF or any file under
+/// `/api/files`, a www pack, a firmware bundle): noted for the transition
+/// gate and the FAT index ([`uploads_within`]) at the door, refused or not
+/// (its client's next try comes in a moment), and at its end. A playlist,
+/// a set or a move is not: small, and over in a moment.
+pub fn receive_file<F>(req: &mut Req, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
+{
+    note_upload();
+    receive_boxed(
+        req,
+        Box::new(move |up: &mut Upload| {
+            let r = work(up);
+            note_upload();
+            r
+        }),
+    )
 }
 
 /// [`receive`]'s body, once: not monomorphised for every upload route.

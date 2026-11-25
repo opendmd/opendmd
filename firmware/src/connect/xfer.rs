@@ -167,7 +167,12 @@ impl Client {
         let id = c.id;
         let Some(h) = self.xfer.slot.held.as_mut() else { return };
         match h.t.accept(&c, core_now()) {
-            Ok(()) => self.xfer.inbox.push(XferIn::Chunk(f)),
+            Ok(()) => {
+                // A send is an upload for the player's transition gate
+                // (`stream::uploads_within`), chunk by chunk.
+                stream::note_upload();
+                self.xfer.inbox.push(XferIn::Chunk(f))
+            }
             Err(XferError::OutsideCredit) => {
                 if !matches!(self.xfer.inbox.last(), Some(XferIn::Outside(_))) {
                     self.xfer.inbox.push(XferIn::Outside(id));
@@ -334,6 +339,7 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn send_start(&mut self, k: KeyId, s: SendArgs) -> Result<Option<String>, Refusal> {
+        stream::note_upload();
         if !super::sends_on() {
             return Err(Refusal::NotAllowed);
         }
@@ -501,6 +507,7 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn finish(&mut self) {
+        stream::note_upload();
         self.xfer.out = None;
         let Some(h) = self.xfer.slot.held.take() else { return };
         if h.t.finish().is_err() {

@@ -37,6 +37,18 @@ panel copes better with WiFi drops and low memory.
   before.
 - If the panel ever restarts unexpectedly, it keeps a note of what it was
   doing and its last log lines, to help find the cause.
+- Short GIFs now play once before the next one, instead of repeating until
+  3 seconds have passed. The shortest time a GIF stays is now 1 second by
+  default. A panel that has already saved its settings keeps the time it
+  has; change it under **Settings › Playback** ("Each GIF stays").
+  While the panel is indexing its card's GIFs (a new card, or after GIFs
+  were added or removed), now and then one playlist GIF stays at least about 4
+  seconds, repeating if it is shorter, to give the indexing time. GIFs
+  with their own playing time in a playlist, and GIFs you send to the
+  panel, are not affected.
+- While files are being uploaded to the panel (and for 10 seconds after),
+  the next GIF cuts in instead of dissolving: the panel keeps more memory
+  free for the upload.
 
 ## 1.1.0-beta.3 · 2026-11-19
 

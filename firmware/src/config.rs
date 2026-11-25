@@ -316,8 +316,9 @@ pub const SHUFFLE: bool = true;
 
 /// Dwell policy defaults, in seconds. `opendmd_core::engine::DwellPolicy`
 /// ends a GIF's turn once it has looped at least once *and* `min` has
-/// elapsed, or unconditionally at `max`.
-pub const DWELL_MIN_SECS: u64 = 3;
+/// elapsed, or unconditionally at `max`. A 1 s `min`: a GIF plays once,
+/// and only one shorter than a second loops until a second is up.
+pub const DWELL_MIN_SECS: u64 = 1;
 pub const DWELL_MAX_SECS: u64 = 30;
 
 /// How a new file comes in, unless NVS says otherwise (`transition`, as
@@ -342,6 +343,17 @@ pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
 /// cosmetic), so the dissolve is cut sooner instead and the network side's
 /// transients still find room. Measured on the device later.
 pub const LOOK_TRANSITION_MARGIN: usize = 8 * 1024;
+
+/// While an upload (a LAN one, a Connect send; never a download) is in
+/// hand, and for this long (s) after an upload was last asked
+/// for, taken or finished (uploads come in runs), a new file cuts in and a
+/// dissolve already running ends at once (`transitions_cut_upload`), and
+/// the FAT index's build stands down: the
+/// upload's peak
+/// (six WiFi receive buffers ~10 KB, a refused one's frames, a status
+/// reply's segments ~4.4 KB beside it) under a dissolve's 24 KB took the
+/// heap under 20 KB in the emulator's simultaneous-upload bursts.
+pub const UPLOAD_QUIET_S: u32 = 10;
 
 /// The next file is opened ahead (`Engine::ahead_step`, "The next file,
 /// ahead" in CLAUDE.md) only while a step leaves this much free after the
@@ -377,6 +389,12 @@ pub const AHEAD_YIELD_HEAP: usize = 20 * 1024;
 pub const AHEAD_PICK_SLACK: Duration = Duration::from_millis(9);
 pub const AHEAD_OPEN_SLACK: Duration = Duration::from_millis(16);
 pub const AHEAD_PARSE_SLACK: Duration = Duration::from_millis(7);
+/// A turn that ends before its next file was opened ahead (a GIF that plays
+/// once: its loop's end is known only as it comes) waits on its last frame
+/// for the steps, at most this long (`Engine::set_ahead_linger`); it moves
+/// on as soon as they are done (a few ms) or refused. Room for the three
+/// steps' slacks (32 ms) and their work, with a margin.
+pub const AHEAD_LINGER: Duration = Duration::from_millis(80);
 
 /// Phosphor glow (`glow` short/long) keeps a 12 KB copy of the panel while
 /// it is lit (`Panel::blit`). It takes the copy only with at least this much
@@ -745,6 +763,9 @@ pub const CACHE_KEYS_PER_PASS: usize = 3072;
 /// browser uploading prepared copies one after another causes one count at the
 /// end, not one per file.
 pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
+/// A cache count also waits until no Formula has been sent (Show on panel,
+/// an editor's live edits) for this long (s): `cache::run_count`.
+pub const CACHE_FORMULA_QUIET_S: u32 = 5;
 /// The `/api/cache` count's pacing. It runs on the network worker at
 /// priority 5 on CPU0, where the cache builder (priority 1) and the stream
 /// task (2) only get the CPU when it blocks, and a `yield_now` only goes to
@@ -891,6 +912,9 @@ pub const FOLLOW_CTX_MAX: usize = 64;
 /// not arrived; then the playlist plays on (and the context swaps in when it
 /// comes).
 pub const FOLLOW_CONTEXT_WAIT: Duration = Duration::from_secs(30);
+/// Follow RePlayOS: how long a console's logo stays up (at least; it loops
+/// until then), before the game's title card.
+pub const FOLLOW_LOGO_SECS: u32 = 3;
 /// How often the poller logs its request count and heap figures.
 pub const FOLLOW_REPORT: Duration = Duration::from_secs(300);
 
@@ -906,12 +930,39 @@ pub const FATIDX_MIN_GAP_S: u32 = 600;
 /// No build in the first seconds after boot: the start-up show, the first GIF.
 pub const FATIDX_BOOT_DELAY_S: u32 = 20;
 /// The FAT index build runs in slices on the network worker (its stack,
-/// no task of its own), each inside the player's quiet window
-/// (`Engine::quiet_for`: no transition, no file opened ahead or switched to
-/// while it runs), at most this long (ms), and only with at least
-/// [`FATIDX_SLICE_MIN_MS`] of the window left.
+/// no task of its own), each inside one of the player's quiet windows, at
+/// most this long (ms), and only with at least [`FATIDX_SLICE_MIN_MS`] of
+/// the window left. The walk of the directories (and the trailer), which
+/// stop only between directories, use the sure window (`Engine::quiet_for`:
+/// from the end of a file's transition until its next file is opened
+/// ahead, and never past the soonest its turn can end), and start a
+/// directory only with [`FATIDX_WALK_MIN_MS`] of it left. The passes, which
+/// stop at their next read once the window is moved in (every tick), use
+/// the loose one (`Engine::quiet_loose_for`: in a file's first loop, up to
+/// its `max`; the tick that sees the loop's end, which under a 1 s `min`
+/// ends most turns, closes it). The steps ahead, and so a lingering turn's
+/// switch, wait for a running slice to stop (`ahead.rs`).
 pub const FATIDX_SLICE_MS: u32 = 250;
 pub const FATIDX_SLICE_MIN_MS: u32 = 120;
+/// A directory's walk cannot stop half way: one starts only with this much
+/// of the sure window left (a test panel's `gifs/Consoles`, ~3,800 files in
+/// ~860 sectors, takes ~0.5 s at 20 MHz).
+pub const FATIDX_WALK_MIN_MS: u32 = 600;
+/// A build that has had no slice of [`FATIDX_SLICE_MIN_MS`] for this long
+/// (ms) and [`FATIDX_STARVED_LOOKS`] looks that found no window (the walk
+/// has no sure window in a first loop; 0.5 s GIFs give no window at all)
+/// asks the player for one: the next playlist turn under the configured
+/// dwell (not one with a `dwell`/`loops` of its own, nor a file played
+/// directly) lasts long enough for [`FATIDX_QUIET_WANT`] of sure quiet
+/// after its transition (`Engine::set_quiet_wanted`; a shorter file loops
+/// meanwhile, a longer one plays as it would), then the turns are their
+/// own length again until the build has gone this long again. A slice
+/// stopped for the heap, or one the heap or a transfer kept from starting,
+/// counts as fed: a longer turn would not help it.
+pub const FATIDX_STARVED_MS: u32 = 8_000;
+pub const FATIDX_STARVED_LOOKS: u32 = 6;
+/// Two or three slices at the network worker's poll (up to 1 s apart).
+pub const FATIDX_QUIET_WANT: Duration = Duration::from_secs(3);
 /// The free heap a slice leaves after its buffers (the network side's
 /// transients): a slice does not start below it, and stops between
 /// directories when the heap falls under it.

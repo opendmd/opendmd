@@ -487,6 +487,7 @@ fn run(worker: NetWorker) {
         crate::fatidx::tick();
         crate::heapmap::cp_if_moved("fat index tick first took heap", before);
         crate::netstat::tick();
+        crate::http::status_cache_tick();
         #[cfg(feature = "emu-census")]
         census();
 
@@ -1231,6 +1232,22 @@ mod lowwatch {
     pub static SOCKS: AtomicI32 = AtomicI32::new(0);
     pub static UPLOADS: AtomicU32 = AtomicU32::new(0);
     pub static PHASE: AtomicU32 = AtomicU32::new(0);
+    /// What the player held at the low: bit 0 a transition running, 1 the
+    /// read-ahead ring, 2 a copy opened ahead (the file on screen, if it
+    /// was), 3 the glow's copy, 4 a formula look's buffers; and beside it,
+    /// bit 5 a FAT index slice on the card, 6 a build under way.
+    pub static PLAYER: AtomicU32 = AtomicU32::new(0);
+
+    pub(super) fn player() -> u32 {
+        use std::sync::atomic::Ordering::Relaxed as R;
+        u32::from(crate::state::TRANSITIONING.load(R))
+            | u32::from(crate::readahead::ring_held()) << 1
+            | u32::from(crate::state::AHEAD_KEY.load(R) != 0) << 2
+            | u32::from(crate::state::GLOW_HELD.load(R)) << 3
+            | u32::from(crate::formula_look::HELD.load(R)) << 4
+            | u32::from(crate::fatidx::slice_running()) << 5
+            | u32::from(crate::fatidx::building()) << 6
+    }
     static SNAP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static SNAP: [AtomicI32; 6] = [const { AtomicI32::new(0) }; 6];
 
@@ -1259,6 +1276,7 @@ mod lowwatch {
                 SOCKS.store(unsafe { super::opendmd_netdiag_socks() }, Relaxed);
                 UPLOADS.store(crate::stream::uploads(), Relaxed);
                 PHASE.store(crate::stream::phase(), Relaxed);
+                PLAYER.store(player(), Relaxed);
                 // SAFETY: posts a count to lwIP's thread.
                 unsafe { super::opendmd_netdiag_snap() };
                 SNAP_DUE.store(true, Relaxed);
@@ -1279,7 +1297,7 @@ mod lowwatch {
     pub fn take() -> String {
         let low = LOW.swap(u32::MAX, Relaxed);
         format!(
-            "lowwatch: window low {low} B free (rust {} B, sockets {}, uploads {}); now {} B free, rust {} B; at it: phase {:#x}, lwip rx {} pbufs {} B, tx {} B, pcbs {} tw {} socks {}",
+            "lowwatch: window low {low} B free (rust {} B, sockets {}, uploads {}); now {} B free, rust {} B; at it: phase {:#x}, lwip rx {} pbufs {} B, tx {} B, pcbs {} tw {} socks {}, player {:#x}",
             RUST.load(Relaxed),
             SOCKS.load(Relaxed),
             UPLOADS.load(Relaxed),
@@ -1292,6 +1310,7 @@ mod lowwatch {
             SNAP[3].load(Relaxed),
             SNAP[4].load(Relaxed),
             SNAP[5].load(Relaxed),
+            PLAYER.load(Relaxed),
         )
     }
 }
@@ -1317,17 +1336,51 @@ fn census() {
     }
     static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
-    if now.wrapping_sub(last) < 20_000 {
+    let since = now.wrapping_sub(last);
+    if since < 20_000 {
+        return;
+    }
+    // The player's steady point: the next file's decoder ready ahead, the
+    // read-ahead ring held, no transition, no index build. Each comes and
+    // goes within a turn (the copy made ready ahead ~4-5 KB, the heartbeat's
+    // `held avg`; the ring 8 KB), and the API lane's census, the least of a
+    // quiet spell against the earlier ones', took a moment without one as
+    // its reference in 3 full runs (2 at dwell_min 1 without the copy ready,
+    // 1 at 3 without the ring), which no later spell met again. Waited for
+    // up to 10 s past due (it may never come: a Formula on screen, the
+    // network off); the line says what the player held, and whether it was
+    // the steady point (the lane compares those alone when it has them).
+    let player = lowwatch::player();
+    let ready = crate::ahead::READY.load(std::sync::atomic::Ordering::Relaxed);
+    let steady = ready && player & 0x63 == 0x02;
+    if !steady && since < 30_000 {
         return;
     }
     LAST.store(now, std::sync::atomic::Ordering::Relaxed);
     let mut info: esp_idf_sys::multi_heap_info_t = unsafe { std::mem::zeroed() };
     unsafe { esp_idf_sys::heap_caps_get_info(&mut info, crate::state::internal(esp_idf_sys::MALLOC_CAP_8BIT)) };
     log::info!(
-        "census: {} blocks in use, {} B allocated, {} B free, largest {} B",
+        "census: {} blocks in use, {} B allocated, {} B free, largest {} B, player {:#x}, ready ahead {}, steady {}",
         info.allocated_blocks,
         info.total_allocated_bytes,
         info.total_free_bytes,
-        info.largest_free_block
+        info.largest_free_block,
+        player,
+        ready,
+        steady
     );
+    // The Rust allocator's live blocks by size class (count/bytes), to tell
+    // what grew between two quiet spells.
+    #[cfg(feature = "psi")]
+    {
+        use std::fmt::Write as _;
+        let mut by = String::new();
+        for (k, (n, b)) in crate::arena::BY_SIZE.iter().enumerate() {
+            let n = n.load(std::sync::atomic::Ordering::Relaxed);
+            if n != 0 {
+                let _ = write!(by, " {}:{}/{}", 1usize << k, n, b.load(std::sync::atomic::Ordering::Relaxed));
+            }
+        }
+        log::info!("census by size:{by}");
+    }
 }

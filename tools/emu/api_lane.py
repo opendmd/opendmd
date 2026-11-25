@@ -155,6 +155,17 @@ class LaneFail(Exception):
     pass
 
 
+def steady_split(samples):
+    """A quiet spell's census samples (blocks, bytes, line): (the steady ones, all), each as
+    (blocks, bytes). Steady: taken at the player's steady point (`steady true`: the next file
+    ready ahead, the read-ahead ring held, no transition or index build; emu-census builds wait up
+    to 10 s for it, then sample anyway with `steady false`). A sample without the copy made ready
+    ahead (~4-5 KB) or the ring (8 KB) once set a spell's least that no later spell met again (a
+    flat heap failed): spells are compared by their steady samples alone, never steady against
+    not (`load_rounds` fails such a mix)."""
+    return [(b, y) for b, y, line in samples if "steady true" in line], [(b, y) for b, y, _ in samples]
+
+
 # --- the seeded image ----------------------------------------------------------
 
 # The card's SPI pins, SCLK,MOSI,MISO,CS (firmware/src/config.rs SD_*): the classic's VSPI
@@ -559,6 +570,13 @@ class Lane:
                 # (A diagnostic shortcut: the event stream alone, then stop.)
                 self.events(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "load":
+                # (A diagnostic shortcut: the settings basics, then the load rounds and their
+                # heap census alone, then stop.)
+                self.basics(api)
+                self.absent = set()
+                self.load_rounds(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "bursts":
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
@@ -596,6 +614,7 @@ class Lane:
 
     def boot_checks(self, emu, api):
         st = api.wait_up(240)
+        self.apply_dwell_min(api)
         sha = emu.find(re.compile(r"ELF file SHA256:\s+([0-9a-f]+)"))
         self.expect(sha and self.a.want_sha.startswith(sha[0][1][1]), "boot", f"the booted app is not {self.a.image}")
         self.expect(st.get("wifi") == "sta" and st.get("ip") == "10.0.2.15", "boot", f"not a station on the virtual AP: wifi {st.get('wifi')}, ip {st.get('ip')}")
@@ -605,6 +624,25 @@ class Lane:
         i, m = emu.wait_for(BUILT, 240, what="the first `fat index: built`")
         self.expect(m[2] == "false", "boot", f"the first index build left it stale: {emu.lines[i][:200]}")
         self.ok("first index build", f"{m[1]} records, stale false")
+
+    def apply_dwell_min(self, api):
+        """--dwell-min: PUT at boot A's first answer (every path goes through boot_checks), so the
+        first index build already plays under it; saved on the card, it is checked again after
+        each later boot (check_dwell_min)."""
+        n = getattr(self.a, "dwell_min", None)
+        if not n:
+            return
+        _, r = api.json("PUT", "/api/config", {"dwell_min": n})
+        self.expect(r.get("ok") is True, "dwell-min", f"PUT dwell_min {n} answered {r}")
+        self.check_dwell_min(api, "boot A")
+        print(f"api: dwell_min {n} for this run (--dwell-min)", flush=True)
+
+    def check_dwell_min(self, api, where):
+        n = getattr(self.a, "dwell_min", None)
+        if not n:
+            return
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("dwell_min") == n, "dwell-min", f"{where}: dwell_min {cfg.get('dwell_min')}, --dwell-min {n}")
 
     def basics(self, api):
         st = api.status()
@@ -981,8 +1019,11 @@ class Lane:
             return "edited" if m.group(1) else "played", int(m.group(2)), int(m.group(3))
         # (Kept until changed: its turn must not end between the steps.)
         api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (Its start on the console, not in /api/status: at dwell_min 1 it plays once, ~1 s
+        # of device time, ~0.4 s wall, and a status poll every 0.5 s missed it twice.)
+        mark = emu.mark()
         api.json("POST", "/api/play", {"path": gif})
-        self.wait_status(api, lambda s: on(s) == gif, 30, "the GIF before")
+        emu.wait_for(re.compile(re.escape(f"] {gif} <- ")), 30, mark, "the GIF before")
         api.json("POST", "/api/play", {"path": heavy})
         self.wait_status(api, lambda s: on(s).startswith("@formula")
                          and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the heavy Formula playing")
@@ -1290,6 +1331,11 @@ class Lane:
         mark = emu.mark()
         api.json("POST", "/api/play", {"path": self.card_gif})
         emu.wait_for(re.compile(re.escape(f"] {self.card_gif} <- ")), 60, mark, f"`{self.card_gif} <- `")
+        # And its dissolve over (400 ms of device time; 2 s wall is ~5 s of it here): begun before
+        # any upload, it ran beside round 1's first one (the firmware ends one an upload finds
+        # running, at its next tick, but the upload's first frames pile up in lwIP before its
+        # handler runs): round 1's low 14.7-19.8 KB with a transition at it in 3 runs of 15.
+        time.sleep(2)
         work = self.logs / f"burst-{self.stamp}"
         work.mkdir(parents=True, exist_ok=True)
         src = work / "blob.bin"
@@ -1396,34 +1442,53 @@ class Lane:
     # -- the load -------------------------------------------------------------
 
     def load_rounds(self, emu, api):
-        quiet = []
+        raws = []
+        # Whether the image marks its samples (`steady true/false`, emu-census builds since the
+        # steady point): then spells are compared by their steady samples alone.
+        marked = lambda: any(" steady " in line for r in raws for _, _, line in r)  # noqa: E731
+        pick = lambda r: steady_split(r)[0] if marked() else steady_split(r)[1]  # noqa: E731
         for k in range(ROUNDS):
             counts = self.load(api, k)
             self.ok(f"load {k + 1}/{ROUNDS}", ", ".join(f"{n} {v}" for n, v in counts.items()))
             start = emu.mark()
-            spell = lambda: [(int(m[1]), int(m[2])) for _, m in emu.find(CENSUS, start)]  # noqa: E731
+            raw = lambda: [(int(m[1]), int(m[2]), m.string) for _, m in emu.find(CENSUS, start)]  # noqa: E731
             end = time.time() + QUIET_S
             while time.time() < end:
                 emu.check()
                 time.sleep(1)
-            if k == ROUNDS - 1 and all(quiet):
+            if k == ROUNDS - 1 and raws and all(pick(r) for r in raws):
                 # The last: on until it meets its lowest phase again (see QUIET_MORE_S).
-                b0, y0 = min(c[0] for s in quiet for c in s), min(c[1] for s in quiet for c in s)
+                earlier = [pick(r) for r in raws]
+                b0, y0 = min(c[0] for s in earlier for c in s), min(c[1] for s in earlier for c in s)
                 flat = lambda c: c and min(x[0] for x in c) - b0 <= LEAK_BLOCKS and min(x[1] for x in c) - y0 <= LEAK_BYTES  # noqa: E731
                 end = time.time() + QUIET_MORE_S
-                while not flat(spell()) and time.time() < end:
+                while not flat(pick(raw())) and time.time() < end:
                     emu.check()
                     if emu.done:  # (no more census lines will come: say so, not "the heap grew")
                         raise LaneFail(f"boot {emu.label}: the emulator stopped (exit {emu.p.returncode}) in the last quiet spell")
                     time.sleep(1)
-            quiet.append(spell())
-        self.expect(all(quiet), "census", f"census lines per quiet spell {[len(c) for c in quiet]}: is this an emu-census image?")
+            raws.append(raw())
+        self.expect(all(raws), "census", f"census lines per quiet spell {[len(r) for r in raws]}: is this an emu-census image?")
+        counts = [(len(steady_split(r)[0]), len(r)) for r in raws]
+        mids = lambda quiet: ", ".join(  # noqa: E731
+            f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B ({n} steady of {t} samples)" if s else f"none steady of {t} samples"
+            for s, (n, t) in zip(quiet, counts))
+        if marked():
+            quiet = [steady_split(r)[0] for r in raws]
+            # Steady against not is not like with like (the copy ready ahead and the ring are
+            # ~12 KB between them): a spell with no steady sample fails the census, not falls back.
+            self.expect(all(quiet), "census", f"a quiet spell with no steady sample (each quiet spell: {mids(quiet)}): "
+                        "its samples are not comparable with the others' steady ones")
+            how = "steady samples"
+        else:
+            quiet = [steady_split(r)[1] for r in raws]
+            how = "every sample (this image marks none steady)"
+            print("api: census: NOTE: the image's census lines carry no `steady`: every sample compared", flush=True)
         b0, y0 = min(c[0] for s in quiet[:-1] for c in s), min(c[1] for s in quiet[:-1] for c in s)
         b1, y1 = min(c[0] for c in quiet[-1]), min(c[1] for c in quiet[-1])
-        mids = ", ".join(f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B ({len(s)} samples)" for s in quiet)
         self.expect(b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES, "census",
-                    f"the heap grew across the load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")
-        self.ok("census", f"flat across {ROUNDS} load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")
+                    f"the heap grew across the load rounds ({how}): least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids(quiet)})")
+        self.ok("census", f"flat across {ROUNDS} load rounds ({how}): least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids(quiet)})")
 
     def load(self, api, k):
         """display-stress's loads at once for LOAD_S: status polls, settings saves, uploads
@@ -1786,6 +1851,7 @@ class Lane:
         try:
             st = api.wait_up(240)
             ran = st.get("version")
+            self.check_dwell_min(api, label)
             _, cfg = api.json("GET", "/api/config")
             self.expect(cfg.get("dwell_max") == self.dwell_set, "boot B", f"dwell_max {cfg.get('dwell_max')} after the power cycle, saved {self.dwell_set}")
             # (The look's Formula was deleted in boot A: cleared for good.)
@@ -1940,7 +2006,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events", "governor"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events", "governor", "load"):
             lane.card_checks()
             lane.run_b()
             if getattr(a, "old_updater", None):

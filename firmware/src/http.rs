@@ -1123,15 +1123,27 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if fast {
             // One block for the answer, the size of the last one and some:
             // no regrowth while it is written, and no abort when the heap
-            // has no such block.
-            let mut json = String::new();
+            // has no such block. An answer longer than that (the last one
+            // shorter: a read without `recent`, a Formula's name) grows
+            // only by `try_reserve`, and is a 503 when the heap has no
+            // room: it grew infallibly before, and an emulator run aborted
+            // there (11 KB asked, the largest block 9.7 KB, a Formula's
+            // live edits on screen).
+            let mut json = Bounded { s: String::new(), short: false };
             let want = STATUS_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize + STATUS_SLACK;
-            if json.try_reserve_exact(want).is_err() {
+            if json.s.try_reserve_exact(want).is_err() {
                 req.header("Retry-After", "1")?;
                 return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
             }
             status_json(&snap, &looks, recent, &mut json);
             drop(snap);
+            if json.short {
+                drop(json);
+                STATUS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                req.header("Retry-After", "1")?;
+                return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
+            }
+            let json = json.s;
             STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
             STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
             let sent = req.json(&json);
@@ -1677,7 +1689,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
         };
         let net = c.net.clone();
-        stream::receive(req, #[optimize(size)] move |up| www::receive(up, card, &net))
+        stream::receive_file(req, #[optimize(size)] move |up| www::receive(up, card, &net))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
@@ -1691,7 +1703,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/firmware", Method::Put, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
-        stream::receive(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
+        stream::receive_file(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
     })?;
 
     // Format the card FAT32 — only one that is mounted but cannot be read
@@ -1851,7 +1863,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // `?new=1`: only if there is no such file (409 otherwise): a name
         // picked from a names list that has gone stale never replaces a GIF.
         let create_new = query_param(req.query(), "new").as_deref() == Some("1");
-        stream::receive(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
+        stream::receive_file(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -3222,14 +3234,15 @@ fn psram_heap_json() -> String {
 fn main_stack_json() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let cut = crate::TRANSITIONS_CUT.load(Relaxed);
+    let up = crate::transitions_cut_upload();
     #[cfg(feature = "probe")]
     return format!(
-        r#","transitions_cut":{cut},"main_stack":{},"pushed":{}"#,
+        r#","transitions_cut":{cut},"transitions_cut_upload":{up},"main_stack":{},"pushed":{}"#,
         crate::state::MAIN_STACK_UNUSED.load(Relaxed),
         crate::state::PIXELS_PUSHED.load(Relaxed)
     );
     #[cfg(not(feature = "probe"))]
-    format!(r#","transitions_cut":{cut}"#)
+    format!(r#","transitions_cut":{cut},"transitions_cut_upload":{up}"#)
 }
 
 /// `formula_look` in the status: `null`, or what is drawn over the picture
@@ -3407,6 +3420,24 @@ fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
     copy
 }
 
+/// A fast poller's answer as it is written: grows only when the heap has
+/// room (`try_reserve`); the first growth refused ends it (`short`).
+struct Bounded {
+    s: String,
+    short: bool,
+}
+
+impl std::fmt::Write for Bounded {
+    fn write_str(&mut self, x: &str) -> std::fmt::Result {
+        if self.short || self.s.try_reserve(x.len()).is_err() {
+            self.short = true;
+            return Err(std::fmt::Error);
+        }
+        self.s.push_str(x);
+        Ok(())
+    }
+}
+
 /// A status answer kept for a fast poller: when it was made, with or
 /// without `recent`, the JSON.
 struct KeptStatus {
@@ -3416,8 +3447,23 @@ struct KeptStatus {
 }
 
 /// The last status answer, kept only while reads come faster than
-/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale).
+/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale, or
+/// by [`status_cache_tick`] when no read comes).
 static STATUS_LAST: std::sync::Mutex<Option<KeptStatus>> = std::sync::Mutex::new(None);
+
+/// A kept status answer (~5 KB) once stale, freed: the next read freed it
+/// before, so a client that stopped polling (the web app closed, the
+/// emulator's load rounds over) left it held until another came, and the
+/// API lane's heap census saw ~5.3 KB more after a load round whose last
+/// read was a fast one. From the network worker's loop (about once a
+/// second); never waits for a read in hand.
+pub fn status_cache_tick() {
+    if let Ok(mut last) = STATUS_LAST.try_lock() {
+        if last.as_ref().is_some_and(|k| k.at.elapsed() >= STATUS_CACHE) {
+            *last = None;
+        }
+    }
+}
 
 /// When the last status read came (no heap: an `Instant`).
 static STATUS_READ: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
@@ -3901,10 +3947,29 @@ fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         }))
     }
 
+/// The uptime second a Formula was last sent (`POST /api/play/formula`, a
+/// Show on panel or an editor's live edit); 0: never.
+static FORMULA_SENT_S: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A Formula was sent within the last `secs` seconds: an editor may be at
+/// work, each edit compiling beside the one on screen (`cache::run_count`
+/// waits meanwhile).
+pub fn formula_sent_within(secs: u32) -> bool {
+    let at = FORMULA_SENT_S.load(std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: a read of the system timer.
+    let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+    at != 0 && now.wrapping_sub(at) <= secs
+}
+
 /// A route's body out of `start`, for size like the routes' closures (CPU0,
 /// not on a frame's path).
 #[optimize(size)]
 fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
+        // SAFETY: a read of the system timer.
+        FORMULA_SENT_S.store(
+            ((unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32).max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if !crate::state::FORMULAS {
             return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
         }

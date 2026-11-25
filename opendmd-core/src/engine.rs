@@ -40,6 +40,17 @@
 //! state —; anything else keeps just the pick and opens when it plays.
 //! Whatever changes what should come next lets it go
 //! ([`Engine::drop_ahead`], [`Engine::release_ahead_file`]).
+//!
+//! **When.** The steps are due a little before the file on screen is
+//! expected to end its turn ([`Engine::turn_end`]: once its first loop has
+//! ended, the loop's length says which loop's end that is). A file whose
+//! first loop ends its turn (a short `min`: most files play once) gives no
+//! warning; a caller that takes the steps sets a linger
+//! ([`Engine::set_ahead_linger`]) and the turn waits on its last frame for
+//! them, a few ms. Until the steps are due the engine needs nothing of the
+//! card ([`Engine::quiet_for`]): the firmware's FAT index build works then,
+//! and asks for a window ([`Engine::set_quiet_wanted`]) when the turns have
+//! given it none for a while.
 
 use crate::canvas::Canvas;
 use crate::compositor::{Compositor, Step, Transition, STEP};
@@ -335,7 +346,7 @@ impl FormulaKeep {
 impl Default for DwellPolicy {
     fn default() -> Self {
         DwellPolicy {
-            min: Duration::from_secs(3),
+            min: Duration::from_secs(1),
             max: Duration::from_secs(30),
             min_loops: 1,
         }
@@ -517,10 +528,18 @@ pub const WAKE_SLACK: Duration = Duration::from_millis(1);
 pub static FX_RETIMED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The next file is chosen and opened ahead ([`Engine::ahead_due`]) from
-/// this long before the file on screen could end its turn (its dwell's
-/// `min`): long enough for the few steps to find room between frames, short
-/// enough that a copy is not held for a whole long dwell.
-pub const AHEAD_LEAD: Duration = Duration::from_secs(2);
+/// this long before the file on screen is expected to end its turn
+/// ([`Engine::turn_end`]: its loop's length times the loops its dwell
+/// still wants, or the dwell's `max`): long enough for the few steps to
+/// find room between frames, short enough that a copy is not held for long.
+/// Where the end cannot be told in time (a file's first loop, which ends
+/// its turn under a short `min`), the caller's linger
+/// ([`Engine::set_ahead_linger`]) takes the steps at the switch instead.
+pub const AHEAD_LEAD: Duration = Duration::from_secs(1);
+/// A file whose loop is shorter than [`AHEAD_LEAD`] has its next file
+/// opened one loop before its turn ends, but never less than this before:
+/// what is left of a short turn stays quiet for the FAT index's build.
+pub const AHEAD_LEAD_MIN: Duration = Duration::from_millis(250);
 
 /// The widest LZW cap a file held ahead may have: a prepared copy's
 /// ([`PREPARED`](crate::gifslim::PREPARED)), whose tables are 1.5 KB. An
@@ -677,6 +696,23 @@ struct Playing {
     /// Content position of the last decoded frame, and its delay.
     frame_at: Duration,
     frame_delay: Duration,
+    /// The last whole loop's length (content time; zero until the first
+    /// loop has ended), and when it ended (the engine's clock) and where
+    /// (content time): what [`Engine::turn_end`] predicts from.
+    loop_len: Duration,
+    loop_at: Duration,
+    loop_pos: Duration,
+    /// The last two loops were the same length, and the file is not a
+    /// virtual one (whose passes may vary): the next loop is taken to be
+    /// as long ([`sure_end`](Self::sure_end)).
+    loop_steady: bool,
+    /// The least this turn lasts on top of its dwell's `min`, latched from
+    /// [`Engine::set_quiet_wanted`] (zero: none).
+    floor: Duration,
+    /// Its turn is over and it stays on its last frame (until
+    /// `next_frame_at`) while the next file is opened ahead
+    /// ([`Engine::set_ahead_linger`]).
+    linger: bool,
 }
 
 impl Playing {
@@ -726,8 +762,102 @@ impl Playing {
             frames: 0,
             frame_at: Duration::ZERO,
             frame_delay: Duration::ZERO,
+            loop_len: Duration::ZERO,
+            loop_at: Duration::ZERO,
+            loop_pos: Duration::ZERO,
+            loop_steady: false,
+            floor: Duration::ZERO,
+            linger: false,
         }
     }
+
+    /// A loop just ended at `now`: note its length.
+    fn looped(&mut self, now: Duration) {
+        let pos = self.frame_at + self.frame_delay;
+        let len = pos.saturating_sub(self.loop_pos);
+        self.loop_steady = !self.loop_len.is_zero() && len == self.loop_len && self.gif.kind() != "synth";
+        self.loop_len = len;
+        self.loop_pos = pos;
+        self.loop_at = now;
+    }
+
+    /// How long before its turn's end the next file is opened ahead:
+    /// [`AHEAD_LEAD`], or one loop of a shorter one ([`AHEAD_LEAD_MIN`] at
+    /// least).
+    fn ahead_lead(&self) -> Duration {
+        if self.loop_len.is_zero() {
+            AHEAD_LEAD
+        } else {
+            self.loop_len.clamp(AHEAD_LEAD_MIN, AHEAD_LEAD)
+        }
+    }
+
+    /// When this turn is expected to end under `dwell` (its `min` raised
+    /// to the floor): at the end of the first loop that leaves `min` behind
+    /// with `min_loops` done, as the last loop's content length predicts,
+    /// or at `max`. In the first loop only `max` is sure. Wall time runs
+    /// behind content (late frames), so a loop may take longer than
+    /// predicted, and a turn whose `min` a loop's end crosses then ends a
+    /// loop sooner than predicted: early by up to one loop. Nothing that
+    /// must not overlap the switch is timed off this: the steps ahead
+    /// linger at an end that comes first, and the quiet window is timed
+    /// off [`sure_end`](Self::sure_end).
+    fn turn_end(&self, dwell: DwellPolicy) -> Duration {
+        let cap = self.started_at.saturating_add(dwell.max);
+        if self.loop_len.is_zero() {
+            return cap;
+        }
+        let min = dwell.min.max(self.floor);
+        // As the loop's end judges it (a frame up to `WAKE_SLACK` early).
+        let need = self.started_at.saturating_add(min).saturating_sub(self.loop_at + WAKE_SLACK);
+        let by_time = need.as_nanos().div_ceil(self.loop_len.as_nanos());
+        let by_count = u128::from(dwell.min_loops.saturating_sub(self.loops));
+        let n = u32::try_from(by_time.max(by_count).max(1)).unwrap_or(u32::MAX);
+        self.loop_len
+            .checked_mul(n)
+            .and_then(|d| self.loop_at.checked_add(d))
+            .map_or(cap, |end| end.min(cap))
+    }
+
+    /// The soonest this turn can end under `dwell`: not before `min` (the
+    /// floor's) is up, nor before its next loop's end, which comes no
+    /// sooner than the frame on screen's (the next frame due, the tick that
+    /// sees the end), nor, once the last two loops were the same length
+    /// (a GIF; not a virtual file, whose passes vary), before a loop's
+    /// length on from the last loop's end (`min_loops` of them: wall time
+    /// reaches content time no sooner); each less `WAKE_SLACK`; at `max`
+    /// at the latest. (A first loop, a loop of another length than the one
+    /// before — a fallback's restart —, a live retune: the frame on screen
+    /// only.)
+    fn sure_end(&self, dwell: DwellPolicy) -> Duration {
+        let cap = self.started_at.saturating_add(dwell.max);
+        let by_time = self.started_at.saturating_add(dwell.min.max(self.floor));
+        let by_loop = if !self.loop_steady {
+            self.next_frame_at
+        } else {
+            let n = dwell.min_loops.saturating_sub(self.loops).max(1);
+            self.loop_len
+                .checked_mul(n)
+                .and_then(|d| self.loop_at.checked_add(d))
+                .unwrap_or(Duration::MAX)
+        };
+        by_time.max(by_loop).saturating_sub(WAKE_SLACK).min(cap)
+    }
+}
+
+/// Whether a turn that is over waits on its last frame for the next file
+/// to be opened ahead: a linger is set, nothing holds the sequence, no
+/// transition runs (the steps wait for its end), and the next file is not
+/// as ready as it will get, nor stopped.
+fn may_linger(linger: Duration, hold: bool, ahead: &Ahead, compositor: &Compositor) -> bool {
+    !linger.is_zero()
+        && !hold
+        && !ahead.blocked
+        && !compositor.is_active()
+        && !matches!(
+            ahead.next.as_ref().map(|n| &n.file),
+            Some(AheadFile::Ready(_) | AheadFile::Cold)
+        )
 }
 
 /// Drives a scheduled [`Catalog`] over a [`Source`].
@@ -765,6 +895,9 @@ pub struct Engine {
     ahead: Ahead,
     /// The file that started last came ready ahead.
     started_ahead: bool,
+    /// How long a turn that is over may wait on its last frame for the
+    /// next file's steps ahead ([`Engine::set_ahead_linger`]; zero: never).
+    ahead_linger: Duration,
 }
 
 /// A µs clock the engine times its ticks by (the firmware's esp_timer;
@@ -857,6 +990,7 @@ impl Engine {
             hold: false,
             ahead: Ahead::default(),
             started_ahead: false,
+            ahead_linger: Duration::ZERO,
         }
     }
 
@@ -1196,6 +1330,11 @@ impl Engine {
             p.path = path.into();
             p.started_at = at;
             p.loops = 0;
+            p.loop_len = Duration::ZERO;
+            p.loop_steady = false;
+            p.loop_pos = p.frame_at + p.frame_delay;
+            p.loop_at = at;
+            p.linger = false;
             p.timed = ov.filter(Override::affects_dwell);
             p.done = false;
             self.skip_requested = false;
@@ -1246,6 +1385,7 @@ impl Engine {
             if let Some(p) = &mut self.current {
                 p.started_at += paused_for;
                 p.next_frame_at += paused_for;
+                p.loop_at += paused_for;
             }
             self.compositor.shift(paused_for);
         }
@@ -1317,15 +1457,52 @@ impl Engine {
         })
     }
 
-    /// How long from `now` the engine needs nothing of the card or the heap
-    /// beyond what it holds: until [`AHEAD_LEAD`] before the file on screen
-    /// could end its turn (the next file is opened ahead from then, then the
-    /// switch and its transition). Zero while a transition runs, before the
-    /// file's first frame is up, once it is done, while a skip is asked for
-    /// or a caller's sequence holds it. Paused: a minute (nothing switches).
-    /// The FAT index's build works only inside this window
-    /// (`fatidx::set_quiet`).
+    /// When the file on screen is expected to end its turn: once its loop's
+    /// length is known (its first loop has ended), at the end of the loop
+    /// that leaves its dwell's `min` (raised by
+    /// [`set_quiet_wanted`](Self::set_quiet_wanted)) and `min_loops`
+    /// behind; else, or sooner, at its dwell's `max`. Under a short `min`
+    /// a file plays once, so in its first loop this is only the cap: the
+    /// end comes with the loop's, which nothing tells in advance.
+    pub fn turn_end(&self) -> Option<Duration> {
+        self.current.as_ref().map(|p| p.turn_end(self.current_dwell()))
+    }
+
+    /// When the steps ahead start for the file on screen: [`AHEAD_LEAD`]
+    /// (or one shorter loop, [`AHEAD_LEAD_MIN`] at least) before its
+    /// [`turn_end`](Self::turn_end), or at once while it lingers.
+    fn ahead_from(&self, p: &Playing) -> Duration {
+        if p.linger {
+            return Duration::ZERO;
+        }
+        p.turn_end(self.current_dwell()).saturating_sub(p.ahead_lead())
+    }
+
+    /// How long from `now` the engine surely needs nothing of the card or
+    /// the heap beyond what it holds: until the steps ahead are due
+    /// ([`ahead_due`](Self::ahead_due), [`AHEAD_LEAD`] or a shorter loop
+    /// before the [`turn_end`](Self::turn_end)), and no later than the
+    /// soonest the turn can end (its `min`, its next loop's end at content
+    /// speed): a switch never comes inside it, unless asked for (a skip, a
+    /// play). For work that cannot stop at once (the FAT index's directory
+    /// walk). Zero while a transition runs, before the file's first frame
+    /// is up, once it is done or lingering, while a skip is asked for or a
+    /// caller's sequence holds it. Paused: a minute (nothing switches).
     pub fn quiet_for(&self, now: Duration) -> Duration {
+        self.quiet(now, true)
+    }
+
+    /// [`quiet_for`](Self::quiet_for), but up to the steps ahead even where
+    /// the turn may end sooner: in a file's first loop, whose end under a
+    /// short `min` ends the turn unannounced, that is up to its `max`. The
+    /// tick that sees the loop's end closes it (the caller asks each tick;
+    /// with a linger, the switch's card work waits a tick or more). For
+    /// work that stops at its next read once told (the index's passes).
+    pub fn quiet_loose_for(&self, now: Duration) -> Duration {
+        self.quiet(now, false)
+    }
+
+    fn quiet(&self, now: Duration, sure: bool) -> Duration {
         if self.compositor.is_active() || self.skip_requested || self.hold {
             return Duration::ZERO;
         }
@@ -1333,11 +1510,14 @@ impl Engine {
             return Duration::from_secs(60);
         }
         let Some(p) = self.current.as_ref() else { return Duration::ZERO };
-        if p.done || p.first_frame {
+        if p.done || p.first_frame || p.linger {
             return Duration::ZERO;
         }
-        let dwell = self.current_dwell();
-        (p.started_at + dwell.min.min(dwell.max)).saturating_sub(AHEAD_LEAD).saturating_sub(now)
+        let mut until = self.ahead_from(p);
+        if sure {
+            until = until.min(p.sure_end(self.current_dwell()));
+        }
+        until.saturating_sub(now)
     }
 
     /// When the file on screen's next frame is due (its own timing, which a
@@ -1347,12 +1527,14 @@ impl Engine {
     }
 
     /// The step [`ahead_step`](Self::ahead_step) would take now, if one is
-    /// due: from [`AHEAD_LEAD`] before the file on screen could end its turn,
-    /// once its first frame is up and no transition runs, unless the engine
-    /// is paused, holding (a caller's sequence: what comes next is the
-    /// caller's), about to skip, or done for this turn. `None` once the next
-    /// file is as ready as it will get. The caller decides whether it has
-    /// the time (and the heap) for that step before the next frame.
+    /// due: from [`AHEAD_LEAD`] (or a shorter loop) before the file on
+    /// screen is expected to end its turn ([`turn_end`](Self::turn_end)),
+    /// or while it lingers at its end; once its first frame is up and no
+    /// transition runs, unless the engine is paused, holding (a caller's
+    /// sequence: what comes next is the caller's), about to skip, or done
+    /// for this turn. `None` once the next file is as ready as it will
+    /// get. The caller decides whether it has the time (and the heap) for
+    /// that step before the next frame.
     pub fn ahead_due(&self, now: Duration) -> Option<AheadStage> {
         if self.ahead.blocked
             || self.hold
@@ -1363,11 +1545,7 @@ impl Engine {
             return None;
         }
         let p = self.current.as_ref()?;
-        if p.done || p.first_frame {
-            return None;
-        }
-        let dwell = self.current_dwell();
-        if now.saturating_sub(p.started_at) + AHEAD_LEAD < dwell.min.min(dwell.max) {
+        if p.done || p.first_frame || now < self.ahead_from(p) {
             return None;
         }
         match self.ahead.next.as_ref().map(|n| &n.file) {
@@ -1375,6 +1553,65 @@ impl Engine {
             Some(AheadFile::Picked) => Some(AheadStage::Open),
             Some(AheadFile::Opened(_)) => Some(AheadStage::Parse),
             Some(AheadFile::Ready(_) | AheadFile::Cold) => None,
+        }
+    }
+
+    /// Let a turn that is over wait on its last frame, up to `linger`, for
+    /// the next file's steps ahead when they were not done in time (a
+    /// file's first loop ends its turn without warning under a short
+    /// `min`): the engine moves on as soon as the next file is as ready as
+    /// it will get, or the steps stop ([`stop_ahead`](Self::stop_ahead),
+    /// a refused or failed step), or `linger` is up. Meanwhile
+    /// [`ahead_due`](Self::ahead_due) says what is due and
+    /// [`frame_due`](Self::frame_due) is the linger's end. Zero (the
+    /// default): a turn moves on at once and opens what is left then. For a
+    /// caller that takes the steps (the firmware).
+    pub fn set_ahead_linger(&mut self, linger: Duration) {
+        self.ahead_linger = linger;
+    }
+
+    /// The file on screen's turn is over and it waits for the next file's
+    /// steps ahead ([`set_ahead_linger`](Self::set_ahead_linger)).
+    pub fn is_lingering(&self) -> bool {
+        self.current.as_ref().is_some_and(|p| p.linger)
+    }
+
+    /// No more steps ahead this turn, but what was opened is kept (the
+    /// caller cannot take them now: a transfer on the card); a linger ends
+    /// at the next tick.
+    pub fn stop_ahead(&mut self) {
+        self.ahead.blocked = true;
+    }
+
+    /// Ask for a quiet window ([`quiet_for`](Self::quiet_for)) of at least
+    /// `want` in each turn (zero: nothing asked). The file on screen, if it
+    /// is a playlist entry with no dwell of its own (no `dwell`/`loops`
+    /// override, not played directly) and has not been given a floor yet,
+    /// keeps the panel for at least its
+    /// transition, `want` and [`AHEAD_LEAD`] (looping as it would under a
+    /// longer `min`); latched for the turn, so the window is not cut short
+    /// when the caller stops asking half way, and only before the next
+    /// file is chosen ahead (else its copy would wait through it). The
+    /// firmware asks while the FAT index's build has had no slice for a
+    /// while (short GIFs that play once give none).
+    pub fn set_quiet_wanted(&mut self, want: Duration) {
+        if want.is_zero() || self.hold {
+            return;
+        }
+        let floor = self.compositor.transition().duration + want + AHEAD_LEAD;
+        // Not once the next file is chosen: its copy would be held through
+        // the longer turn (the next turn takes the floor from its start).
+        if self.ahead.next.is_some() {
+            return;
+        }
+        if let Some(p) = self.current.as_mut() {
+            // Only a playlist turn under the configured dwell: never an
+            // entry's own `dwell`/`loops`, nor a file played directly (a
+            // send, a Formula kept, a caller's sequence).
+            let plain = p.timed.is_none() && p.index != OFF_PLAYLIST;
+            if plain && p.floor.is_zero() && !p.done && !p.linger {
+                p.floor = floor;
+            }
         }
     }
 
@@ -1502,6 +1739,12 @@ impl Engine {
         })
     }
 
+    /// The next file's decoder is ready (its header read, its tables
+    /// allocated: the most a step ahead holds).
+    pub fn ahead_ready(&self) -> bool {
+        self.ahead.next.as_ref().is_some_and(|n| matches!(n.file, AheadFile::Ready(_)))
+    }
+
     /// Counts of the files made ready ahead, used and dropped.
     pub fn ahead_stats(&self) -> AheadStats {
         self.ahead.stats
@@ -1541,6 +1784,26 @@ impl Engine {
                 }
                 continue;
             }
+            if playing.linger {
+                // A caller's sequence took over meanwhile: hold, as at the
+                // turn's end.
+                if self.hold {
+                    playing.linger = false;
+                    playing.done = true;
+                    return Ok(TickOutcome::Idle);
+                }
+                // The turn is over: move on once the next file is as ready
+                // as it gets, the steps stopped, or the linger is up.
+                let waiting = may_linger(self.ahead_linger, self.hold, &self.ahead, &self.compositor);
+                if waiting && now + WAKE_SLACK < playing.next_frame_at {
+                    return Ok(TickOutcome::Idle);
+                }
+                self.current = None;
+                if !self.open_next(now) {
+                    return Ok(TickOutcome::Exhausted);
+                }
+                continue;
+            }
             if now + WAKE_SLACK < playing.next_frame_at {
                 return Ok(TickOutcome::Idle);
             }
@@ -1553,6 +1816,11 @@ impl Engine {
             if now.saturating_sub(playing.started_at) >= dwell.max {
                 if self.hold {
                     playing.done = true;
+                    return Ok(TickOutcome::Idle);
+                }
+                if may_linger(self.ahead_linger, self.hold, &self.ahead, &self.compositor) {
+                    playing.linger = true;
+                    playing.next_frame_at = now + self.ahead_linger;
                     return Ok(TickOutcome::Idle);
                 }
                 self.current = None;
@@ -1624,12 +1892,24 @@ impl Engine {
                     }
                     // End of stream: loop the same file or move on.
                     playing.loops += 1;
+                    playing.looped(now);
                     let elapsed = now.saturating_sub(playing.started_at);
-                    let done = playing.loops >= dwell.min_loops && elapsed >= dwell.min;
+                    // (A loop's last frame may be decoded up to
+                    // `WAKE_SLACK` early: a loop of exactly `min` is enough.)
+                    let done = playing.loops >= dwell.min_loops
+                        && elapsed + WAKE_SLACK >= dwell.min.max(playing.floor);
                     if done && self.hold {
                         // Hold the last frame; the reader stays open (it
                         // would be rewound if the file were played again).
                         playing.done = true;
+                        return Ok(TickOutcome::Idle);
+                    }
+                    if done && may_linger(self.ahead_linger, self.hold, &self.ahead, &self.compositor) {
+                        // The next file was not opened ahead in time (this
+                        // loop's end could not be told): its steps now,
+                        // between this frame and the switch.
+                        playing.linger = true;
+                        playing.next_frame_at = now + self.ahead_linger;
                         return Ok(TickOutcome::Idle);
                     }
                     if done || !self.restart_current() {
@@ -1747,6 +2027,12 @@ impl Engine {
             frames,
             frame_at,
             frame_delay,
+            loop_len,
+            loop_at,
+            loop_pos,
+            loop_steady,
+            floor,
+            linger,
         } = playing;
         // A file that fell back to the `gif` crate loops with it directly.
         let full = gif.kind() == "gif";
@@ -1777,6 +2063,12 @@ impl Engine {
                     frames,
                     frame_at,
                     frame_delay,
+                    loop_len,
+                    loop_at,
+                    loop_pos,
+                    loop_steady,
+                    floor,
+                    linger,
                 });
                 true
             }
@@ -3985,8 +4277,11 @@ mod tests {
     const B: &str = "/gifs/Consoles/NES_B_01.gif";
     const C: &str = "/gifs/Consoles/NES_C_01.gif";
 
-    /// A, B, C in order (3 s minimum dwell, one-frame 50 ms GIFs), each
+    /// A, B, C in order (1.25 s minimum dwell, one-frame 50 ms GIFs), each
     /// with a prepared copy unless named in `originals`, none in `missing`.
+    /// [`start_a`] plays A's first loop, after which its turn's end
+    /// (1.25 s) is known and the steps ahead are due from 1 s (a loop
+    /// before, at least [`AHEAD_LEAD_MIN`]).
     fn ahead_rig(originals: &[&str], missing: &[&str]) -> AheadRig {
         let (gifs, copies) = ahead_files(originals, missing);
         ahead_rig_with(gifs, copies)
@@ -4027,7 +4322,7 @@ mod tests {
             Box::new(cat),
             sched,
             DwellPolicy {
-                min: Duration::from_secs(3),
+                min: Duration::from_millis(1250),
                 max: Duration::from_secs(30),
                 min_loops: 1,
             },
@@ -4048,6 +4343,17 @@ mod tests {
         done
     }
 
+    /// A's first frame at 0 and its first loop's end at 50 ms (its turn's
+    /// end known from then).
+    fn start_a(e: &mut Engine, canvas: &mut Canvas) -> NowPlaying {
+        let a = started(e, Duration::ZERO, canvas);
+        assert!(matches!(
+            e.tick(Duration::from_millis(50), canvas).unwrap(),
+            TickOutcome::Frame { started: false, .. }
+        ));
+        a
+    }
+
     fn started(e: &mut Engine, t: Duration, canvas: &mut Canvas) -> NowPlaying {
         match e.tick(t, canvas).unwrap() {
             TickOutcome::Frame {
@@ -4066,9 +4372,10 @@ mod tests {
         let mut canvas = Canvas::new();
         // Nothing playing yet: not quiet.
         assert_eq!(r.e.quiet_for(ms(0)), Duration::ZERO);
-        assert_eq!(started(&mut r.e, ms(0), &mut canvas).path, A);
+        assert_eq!(start_a(&mut r.e, &mut canvas).path, A);
         r.e.tick(ms(100), &mut canvas).unwrap();
-        // A's minimum is 3 s, the lead 2 s: quiet until 1 s, as ahead_due.
+        // A's turn ends at 1.25 s (its loop is 50 ms), the lead is
+        // AHEAD_LEAD_MIN: quiet until 1 s, as ahead_due.
         assert_eq!(r.e.quiet_for(ms(200)), ms(800));
         assert_eq!(r.e.ahead_due(ms(999)), None);
         assert_eq!(r.e.quiet_for(ms(1000)), Duration::ZERO);
@@ -4082,9 +4389,9 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        assert_eq!(started(&mut r.e, ms(0), &mut canvas).path, A);
+        assert_eq!(start_a(&mut r.e, &mut canvas).path, A);
         assert_eq!(r.opens.get(), 1);
-        // Too early: more than AHEAD_LEAD before A's 3 s minimum.
+        // Too early: more than the lead before A's turn ends (1.25 s).
         assert_eq!(r.e.ahead_due(ms(500)), None);
         assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Pick));
         assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Picked));
@@ -4109,8 +4416,11 @@ mod tests {
         assert!(r.e.started_ahead());
         let st = r.e.ahead_stats();
         assert_eq!((st.ready, st.used, st.dropped, st.picks_used), (1, 1, 0, 1));
-        // And the order carries on: C is next.
-        assert_eq!(run_ahead(&mut r.e, ms(4000)).len(), 3);
+        // And the order carries on: C is next, once B's first loop has
+        // told when its turn ends.
+        assert_eq!(run_ahead(&mut r.e, ms(4000)).len(), 0);
+        r.e.tick(ms(3050), &mut canvas).unwrap();
+        assert_eq!(run_ahead(&mut r.e, ms(4050)).len(), 3);
         assert_eq!(r.e.ahead_path(), Some((C, true)));
     }
 
@@ -4119,7 +4429,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[B], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![AheadOutcome::Picked, AheadOutcome::Cold]
@@ -4160,7 +4470,7 @@ mod tests {
                 adopted: r.adopted.clone(),
             }),
         );
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![
@@ -4201,7 +4511,7 @@ mod tests {
             }),
         );
         r.e.set_ahead_wide(true);
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![AheadOutcome::Picked, AheadOutcome::Opened, AheadOutcome::Ready]
@@ -4216,7 +4526,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         r.e.skip();
         // Nothing more ahead while a skip is pending.
@@ -4232,7 +4542,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         // Given back: the same entry is drawn again (a sequential order
         // loses nothing).
@@ -4264,12 +4574,13 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         r.e.play_now(C, ms(1100)).unwrap();
         assert_eq!(r.e.ahead_path(), Some((B, false)));
         assert_eq!(r.e.ahead_stats().dropped, 1);
         assert_eq!(started(&mut r.e, ms(1100), &mut canvas).path, C);
+        r.e.tick(ms(1150), &mut canvas).unwrap();
         // C's turn may open B again; after C, B (the pick) plays.
         assert_eq!(
             run_ahead(&mut r.e, ms(2200)),
@@ -4290,7 +4601,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Picked));
         assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Opened));
         r.e.release_ahead_file();
@@ -4298,8 +4609,9 @@ mod tests {
         assert_eq!(r.e.ahead_due(ms(1500)), None);
         assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, B);
         assert_eq!(r.opens.get(), 2);
-        // A new turn may open ahead again.
-        assert_eq!(r.e.ahead_due(ms(4000)), Some(AheadStage::Pick));
+        // A new turn may open ahead again (once its first loop is over).
+        r.e.tick(ms(3050), &mut canvas).unwrap();
+        assert_eq!(r.e.ahead_due(ms(4050)), Some(AheadStage::Pick));
     }
 
     #[test]
@@ -4307,7 +4619,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         assert_eq!(r.e.ahead_path(), Some((B, true)));
         // Paused with the file still on screen (night mode, nothing
@@ -4336,7 +4648,7 @@ mod tests {
         copies.insert(B.to_string(), b"GIF8zz not a header".to_vec());
         let mut r = ahead_rig_with(gifs, copies);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![
@@ -4361,7 +4673,7 @@ mod tests {
         gifs.insert(B.to_string(), b"GIF8zz not a header".to_vec());
         let mut r = ahead_rig_with(gifs, copies);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![AheadOutcome::Picked, AheadOutcome::Cold]
@@ -4375,7 +4687,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         // Everything weighted 0 while A plays on: no draw to make.
         let mut ov = Overrides::default();
         for i in 0..3 {
@@ -4399,7 +4711,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         assert_eq!(r.e.ahead_path(), Some((B, true)));
         r.e.reset(7);
@@ -4410,7 +4722,8 @@ mod tests {
         assert_eq!(first.path, A);
         assert!(!r.e.started_ahead());
         assert_eq!(r.opens.get(), 2);
-        assert_eq!(r.e.ahead_due(ms(2100)), Some(AheadStage::Pick));
+        r.e.tick(ms(1150), &mut canvas).unwrap();
+        assert_eq!(r.e.ahead_due(ms(2150)), Some(AheadStage::Pick));
     }
 
     #[test]
@@ -4419,7 +4732,7 @@ mod tests {
         // B is in the playlist but not on the card.
         let mut r = ahead_rig(&[], &[B]);
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         assert_eq!(
             run_ahead(&mut r.e, ms(1000)),
             vec![AheadOutcome::Picked, AheadOutcome::Failed]
@@ -4438,7 +4751,7 @@ mod tests {
         let mut canvas = Canvas::new();
         // The first frame has to be up.
         assert_eq!(r.e.ahead_due(ms(5000)), None);
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         r.e.set_hold(true);
         assert_eq!(r.e.ahead_due(ms(1000)), None);
         r.e.set_hold(false);
@@ -4470,10 +4783,797 @@ mod tests {
             true
         }));
         let mut canvas = Canvas::new();
-        started(&mut r.e, ms(0), &mut canvas);
+        start_a(&mut r.e, &mut canvas);
         run_ahead(&mut r.e, ms(1000));
         started(&mut r.e, ms(3000), &mut canvas);
         assert!(r.e.started_ahead() && r.e.is_transitioning());
         assert_eq!(GATE_NEED.load(Relaxed), BUFFER_BYTES);
+    }
+
+    // ---- the turn's end, the quiet window and the steps ahead, timed ----
+
+    /// A 128x32 GIF of `n` frames of `cs` hundredths each (each frame a
+    /// different colour, so each is decoded and drawn).
+    fn frames_gif(n: u8, cs: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            for i in 0..n {
+                let mut f = Frame {
+                    width: 128,
+                    height: 32,
+                    buffer: Cow::Owned(vec![1u8; 128 * 32]),
+                    dispose: DisposalMethod::Keep,
+                    delay: cs,
+                    ..Default::default()
+                };
+                f.palette = Some(vec![0, 0, 0, i.wrapping_mul(37), 255 - i, i]);
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        out
+    }
+
+    /// `n` files, all of `gif`, each with a prepared copy, played in order
+    /// under `dwell` with the default transition, a firmware's linger.
+    fn timed_rig(n: usize, gif: &[u8], dwell: DwellPolicy) -> Engine {
+        let mut gifs = HashMap::new();
+        let mut copies = HashMap::new();
+        let mut manifest = String::new();
+        for i in 0..n {
+            let path = format!("/gifs/Consoles/NES_T{i:03}_01.gif");
+            copies.insert(path.clone(), prepared(gif));
+            gifs.insert(path.clone(), gif.to_vec());
+            manifest += &path;
+            manifest.push('\n');
+        }
+        let cat = catalog(&manifest, &Filter::new());
+        let sched = Scheduler::new(cat.len(), Mode::Sequential, 0);
+        let src = CopySource {
+            gifs,
+            copies,
+            opens: Default::default(),
+            adopted: Default::default(),
+        };
+        let mut e = Engine::new(Box::new(cat), sched, dwell, Box::new(src));
+        e.set_ahead_linger(LINGER);
+        e
+    }
+
+    /// The firmware's linger (`config::AHEAD_LINGER`), and its FAT index
+    /// build's rules (`config::FATIDX_SLICE_MS`, `_SLICE_MIN_MS`,
+    /// `_WALK_MIN_MS`, `_STARVED_MS`, `_STARVED_LOOKS`, `_QUIET_WANT`; the
+    /// network worker looks at it up to a second apart).
+    const LINGER: Duration = Duration::from_millis(80);
+    const SLICE: Duration = Duration::from_millis(250);
+    const SLICE_MIN: Duration = Duration::from_millis(120);
+    const WALK_MIN: Duration = Duration::from_millis(600);
+    const STARVED_MS: u32 = 8_000;
+    const STARVED_LOOKS: u32 = 6;
+    const WANT: Duration = Duration::from_secs(3);
+    /// The worker's looks: 600..1000 ms apart, pseudo-random (a fixed
+    /// period beats against the files' turns, landing on the same moment).
+    fn next_poll(seed: &mut u32) -> Duration {
+        *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        Duration::from_millis(600 + u64::from(*seed >> 16) % 400)
+    }
+
+    fn ms32(d: Duration) -> u32 {
+        d.as_millis() as u32
+    }
+
+    /// What a build's slice is doing on the card.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Unit {
+        /// One directory's walk: it cannot stop half way.
+        Dir,
+        /// One read of a pass (the pass is made again from its start if
+        /// the slice stops before it is whole; its group is held meanwhile).
+        Read,
+        /// The trailer: one go.
+        Trailer,
+    }
+
+    /// The firmware's FAT index build (`fatidx.rs`) as the card sees it:
+    /// the walk's directories (a test panel's: one of ~0.5 s, a few of
+    /// 0.16 and 0.08 s, many small, ~1.9 s), ten passes of 0.1 s in 2 ms
+    /// reads, a 0.1 s trailer. A slice starts at a look with its window
+    /// (the walk and the trailer the sure one, with `WALK_MIN` left; the
+    /// passes the loose one) and decides at each unit's end whether to go
+    /// on, with the windows as the main loop last set them.
+    #[derive(Debug)]
+    struct Build {
+        dirs: Vec<u64>,
+        next_dir: usize,
+        passes: u32,
+        pass_at: u64,
+        trailer: bool,
+        slice: Option<(Duration, Duration)>,
+        unit: Option<(Unit, Duration)>,
+        done_at: Option<Duration>,
+        /// Every slice stops at once for the heap.
+        heap_short: bool,
+        fed_slices: u32,
+        cut: u32,
+        last_fed: Duration,
+        fed_gap: Duration,
+    }
+
+    const PASS_MS: u64 = 100;
+
+    impl Build {
+        fn rig() -> Build {
+            let mut dirs = vec![490, 160, 160, 160, 80, 80, 80, 80, 80];
+            dirs.extend([20; 25]);
+            dirs.extend([3; 200]);
+            Build {
+                dirs,
+                next_dir: 0,
+                passes: 10,
+                pass_at: 0,
+                trailer: true,
+                slice: None,
+                unit: None,
+                done_at: None,
+                heap_short: false,
+                fed_slices: 0,
+                cut: 0,
+                last_fed: Duration::ZERO,
+                fed_gap: Duration::ZERO,
+            }
+        }
+
+        fn done(&self) -> bool {
+            self.next_dir >= self.dirs.len() && self.passes == 0 && !self.trailer
+        }
+
+        fn busy(&self) -> bool {
+            self.unit.is_some()
+        }
+
+        fn needs_sure(&self) -> bool {
+            self.next_dir < self.dirs.len() || self.passes == 0
+        }
+
+        /// The slice's next unit, if its windows allow; else it ends.
+        fn next_unit(&mut self, now: Duration, sure: Duration, loose: Duration, h: &crate::fatdir::Hunger) {
+            let Some((from, until)) = self.slice else { return };
+            let in_time = now < until;
+            let sure_ok = in_time && sure.saturating_sub(now) >= WALK_MIN;
+            let unit = if self.done() {
+                None
+            } else if self.next_dir < self.dirs.len() {
+                sure_ok.then(|| (Unit::Dir, now + Duration::from_millis(self.dirs[self.next_dir])))
+            } else if self.passes > 0 {
+                (in_time && loose > now).then(|| (Unit::Read, now + Duration::from_millis(2)))
+            } else {
+                sure_ok.then(|| (Unit::Trailer, now + Duration::from_millis(100)))
+            };
+            if unit.is_some() {
+                self.unit = unit;
+                return;
+            }
+            // The slice ends: a pass cut short is made again.
+            self.pass_at = 0;
+            self.slice = None;
+            let ran = now - from;
+            let end = if self.done() {
+                self.done_at = Some(now);
+                crate::fatdir::SliceEnd::Done
+            } else {
+                crate::fatdir::SliceEnd::Ran(ms32(ran))
+            };
+            if ran >= SLICE_MIN || self.done() {
+                self.fed_slices += 1;
+                self.fed_gap = self.fed_gap.max(from - self.last_fed);
+                self.last_fed = from;
+            } else {
+                self.cut += 1;
+            }
+            h.slice_ended(ms32(from), end, ms32(SLICE_MIN));
+        }
+
+        fn step(&mut self, now: Duration, sure: Duration, loose: Duration, h: &crate::fatdir::Hunger) {
+            let Some((unit, ends)) = self.unit else { return };
+            if now < ends {
+                return;
+            }
+            self.unit = None;
+            match unit {
+                Unit::Dir => self.next_dir += 1,
+                Unit::Read => {
+                    self.pass_at += 2;
+                    if self.pass_at >= PASS_MS {
+                        self.passes -= 1;
+                        self.pass_at = 0;
+                    }
+                }
+                Unit::Trailer => self.trailer = false,
+            }
+            self.next_unit(now, sure, loose, h);
+        }
+
+        /// The worker's look.
+        fn look(&mut self, now: Duration, sure: Duration, loose: Duration, h: &crate::fatdir::Hunger) {
+            if self.slice.is_some() || self.done() {
+                return;
+            }
+            // Short of the heap its next work needs: fed (a longer turn
+            // would not help), whatever the window.
+            if self.heap_short {
+                h.slice_ended(ms32(now), crate::fatdir::SliceEnd::HeapShort, ms32(SLICE_MIN));
+                return;
+            }
+            let (left, need) = if self.needs_sure() {
+                (sure.saturating_sub(now), WALK_MIN)
+            } else {
+                (loose.saturating_sub(now), SLICE_MIN)
+            };
+            if left < need {
+                h.no_window();
+                return;
+            }
+            self.slice = Some((now, now + left.min(SLICE)));
+            self.next_unit(now, sure, loose, h);
+        }
+    }
+
+    /// What a run of [`drive`] saw.
+    #[derive(Debug, Default)]
+    struct Timeline {
+        /// Files started: when, and whether ready ahead.
+        starts: Vec<(Duration, bool)>,
+        /// For each switch, how long the next file's copy had been held.
+        held: Vec<Duration>,
+        /// The longest a held copy waited, as a share of its turn.
+        held_share: f64,
+        /// Switches (a new file's first frame: its open, its transition's
+        /// 24 KB) and steps ahead made while the build was on the card.
+        switch_overlaps: u32,
+        step_overlaps: u32,
+        /// Switches made from a linger, and the longest linger.
+        lingered: u32,
+        linger_max: Duration,
+        /// Ticks the starvation ask was on.
+        asked: u32,
+        /// When the build finished, its slices that were fed and cut short,
+        /// and the longest gap between two fed ones.
+        done_at: Option<Duration>,
+        fed_slices: u32,
+        cut: u32,
+        fed_gap: Duration,
+    }
+
+    /// The firmware's two loops in 1 ms steps for `secs`, on `build`: the
+    /// main loop's tick, its windows handed to the build, the steps ahead
+    /// (between frames, no transition; while lingering, once the build's
+    /// slice is off the card), and (`ask`) the starvation ask; the network
+    /// worker's looks and slices as [`Build`] says.
+    fn drive_build(e: &mut Engine, secs: u64, ask: bool, mut build: Build) -> Timeline {
+        let hunger = crate::fatdir::Hunger::new();
+        hunger.fed(0);
+        let mut canvas = Canvas::new();
+        let mut t = Timeline::default();
+        let mut ready_since: Option<Duration> = None;
+        let mut turn_start = Duration::ZERO;
+        let mut linger_from: Option<Duration> = None;
+        let (mut seed, mut poll_at) = (7u32, Duration::from_millis(500));
+        let end = Duration::from_secs(secs);
+        let mut now = Duration::ZERO;
+        while now < end {
+            let out = e.tick(now, &mut canvas).unwrap();
+            if let TickOutcome::Frame { started: true, .. } = out {
+                if build.busy() && !t.starts.is_empty() {
+                    t.switch_overlaps += 1;
+                }
+                if let Some(at) = linger_from.take() {
+                    t.lingered += 1;
+                    t.linger_max = t.linger_max.max(now - at);
+                }
+                if let Some(since) = ready_since.take() {
+                    let held = now - since;
+                    t.held.push(held);
+                    let turn = now.saturating_sub(turn_start).max(Duration::from_millis(1));
+                    t.held_share = t.held_share.max(held.as_secs_f64() / turn.as_secs_f64());
+                }
+                t.starts.push((now, e.started_ahead()));
+                turn_start = now;
+            }
+            if e.is_lingering() && linger_from.is_none() {
+                linger_from = Some(now);
+            }
+            // The windows, as the main loop hands them on after the tick.
+            let sure = now + e.quiet_for(now);
+            let loose = sure.max(now + e.quiet_loose_for(now));
+            let between = matches!(out, TickOutcome::Frame { transitioning: false, .. });
+            // (While a slice is on the card the steps wait: it stops at its
+            // next read, the window closed.)
+            if (between || e.is_lingering()) && !build.busy() {
+                while e.ahead_due(now).is_some() {
+                    if build.busy() {
+                        t.step_overlaps += 1;
+                    }
+                    e.ahead_step();
+                }
+            }
+            if ready_since.is_none() && e.ahead_path().is_some_and(|(_, open)| open) {
+                ready_since = Some(now);
+            }
+            build.step(now, sure, loose, &hunger);
+            if now >= poll_at {
+                poll_at = now + next_poll(&mut seed);
+                build.look(now, sure, loose, &hunger);
+            }
+            if ask {
+                let starved = hunger.starved(ms32(now), !build.done(), STARVED_MS, STARVED_LOOKS);
+                t.asked += u32::from(starved);
+                e.set_quiet_wanted(if starved { WANT } else { Duration::ZERO });
+            }
+            now += Duration::from_millis(1);
+        }
+        t.done_at = build.done_at;
+        t.fed_slices = build.fed_slices;
+        t.cut = build.cut;
+        t.fed_gap = build.fed_gap.max(now - build.last_fed);
+        t
+    }
+
+    fn drive(e: &mut Engine, secs: u64) -> Timeline {
+        drive_build(e, secs, true, Build::rig())
+    }
+
+    fn turns(t: &Timeline) -> Vec<Duration> {
+        t.starts.windows(2).map(|w| w[1].0 - w[0].0).collect()
+    }
+
+    /// No card work of the build's ran into a switch or a step ahead, and
+    /// every file after the first came ready ahead.
+    fn clean(t: &Timeline, what: &str) {
+        assert_eq!((t.switch_overlaps, t.step_overlaps), (0, 0), "{what}: {t:?}");
+        assert!(t.starts[1..].iter().all(|&(_, ahead)| ahead), "{what}: {t:?}");
+        assert!(t.linger_max <= LINGER, "{what}: {t:?}");
+    }
+
+    #[test]
+    fn the_build_model_counts_an_overlap_when_the_windows_ignore_the_switch() {
+        // The red half: the same build, its windows held open past every
+        // switch (what a window up to the cap would do with a walk that
+        // stops only between directories). The overlaps show.
+        let mut e = timed_rig(4, &frames_gif(15, 10), DwellPolicy::default());
+        let hunger = crate::fatdir::Hunger::new();
+        let mut build = Build::rig();
+        let mut canvas = Canvas::new();
+        let (mut overlaps, mut seed, mut poll_at) = (0, 7u32, Duration::ZERO);
+        let mut now = Duration::ZERO;
+        while now < Duration::from_secs(30) {
+            if let TickOutcome::Frame { started: true, .. } = e.tick(now, &mut canvas).unwrap() {
+                overlaps += u32::from(build.busy());
+            }
+            let open = now + Duration::from_secs(29);
+            build.step(now, open, open, &hunger);
+            if now >= poll_at {
+                poll_at = now + next_poll(&mut seed);
+                build.look(now, open, open, &hunger);
+            }
+            now += Duration::from_millis(1);
+        }
+        assert!(overlaps > 0);
+    }
+
+    #[test]
+    fn the_turn_end_is_the_cap_in_the_first_loop_and_predicted_after() {
+        let ms = Duration::from_millis;
+        // 5 frames of 100 ms: a 0.5 s loop, under a 2.2 s minimum.
+        let dwell = DwellPolicy {
+            min: ms(2200),
+            ..DwellPolicy::default()
+        };
+        let mut e = timed_rig(2, &frames_gif(5, 10), dwell);
+        e.set_transition(Transition::NONE);
+        let mut canvas = Canvas::new();
+        assert_eq!(e.turn_end(), None);
+        e.tick(ms(0), &mut canvas).unwrap();
+        // Only the cap is sure until the loop has ended once.
+        assert_eq!(e.turn_end(), Some(ms(30_000)));
+        for t in (100..=500).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        // Looped at 500 ms: the fifth loop's end is the first past 2.2 s,
+        // the next file is opened one loop (0.5 s) before it.
+        assert_eq!(e.turn_end(), Some(ms(2500)));
+        assert_eq!(e.quiet_for(ms(600)), ms(1400));
+        assert_eq!(e.ahead_due(ms(1999)), None);
+        assert_eq!(e.ahead_due(ms(2000)), Some(AheadStage::Pick));
+        // `min_loops` past the time: a seventh loop.
+        e.set_dwell(DwellPolicy { min: ms(2200), min_loops: 7, ..DwellPolicy::default() });
+        assert_eq!(e.turn_end(), Some(ms(3500)));
+        // And the cap still wins.
+        e.set_dwell(DwellPolicy { min: ms(2200), max: ms(3000), min_loops: 7 });
+        assert_eq!(e.turn_end(), Some(ms(3000)));
+    }
+
+    #[test]
+    fn a_long_gif_that_plays_once_lets_the_build_finish_without_running_into_a_switch() {
+        // A 10 s GIF (100 frames of 100 ms) under the default dwell: one
+        // play each, a dissolve in front of each. The walk has no sure
+        // window in a first loop (the loop's end may come any time): the
+        // ask gives it one, the turn no longer (10 s is past the floor).
+        let mut e = timed_rig(3, &frames_gif(100, 10), DwellPolicy::default());
+        let t = drive(&mut e, 90);
+        clean(&t, "10 s");
+        assert!(t.done_at.is_some_and(|d| d < Duration::from_secs(60)), "{t:?}");
+        assert!(turns(&t).iter().all(|&g| g.abs_diff(Duration::from_secs(10)) < Duration::from_millis(20)), "{:?}", turns(&t));
+        // The next copy is opened in a linger at the loop's end: held a ms.
+        assert!(t.held.iter().all(|&h| h <= Duration::from_millis(10)), "{t:?}");
+        assert!(t.lingered as usize >= t.starts.len() - 2, "{t:?}");
+    }
+
+    #[test]
+    fn a_long_gif_that_loops_holds_its_next_copy_only_for_the_lead() {
+        // The same 10 s GIF kept 25 s (`min`): it loops three times, its
+        // end known after the first. The copy is opened 1 s before; the
+        // sure window is long, nothing is asked for.
+        let mut e = timed_rig(
+            3,
+            &frames_gif(100, 10),
+            DwellPolicy { min: Duration::from_secs(25), ..DwellPolicy::default() },
+        );
+        let t = drive(&mut e, 70);
+        clean(&t, "10 s x3");
+        assert!(t.starts.len() >= 3, "{t:?}");
+        assert_eq!((t.lingered, t.asked), (0, 0), "{t:?}");
+        assert!(t.done_at.is_some(), "{t:?}");
+        for &h in &t.held {
+            assert!(h <= AHEAD_LEAD + Duration::from_millis(50), "held {h:?}: {t:?}");
+        }
+        assert!(t.held_share < 0.1, "{t:?}");
+    }
+
+    #[test]
+    fn short_and_mid_gifs_finish_the_build_without_running_into_a_switch() {
+        // 1.5 s and 1.0 s (play once), 0.3 s (four times), 0.5 s (twice):
+        // the passes in the loose windows, the walk in the sure ones (a
+        // short loop's known end) or in the turns asked for.
+        for (frames, cs) in [(15u8, 10u16), (10, 10), (3, 10), (5, 10)] {
+            let what = format!("{frames}x{cs}");
+            let mut e = timed_rig(4, &frames_gif(frames, cs), DwellPolicy::default());
+            let t = drive(&mut e, 150);
+            clean(&t, &what);
+            assert!(t.done_at.is_some_and(|d| d < Duration::from_secs(120)), "{what}: {t:?}");
+            assert!(t.held_share <= 0.6, "{what}: {t:?}");
+            // Most turns are their own length: the ask lengthens a few.
+            let g = turns(&t);
+            let long = g.iter().filter(|&&d| d > Duration::from_millis(2000)).count();
+            assert!(long * 5 < g.len(), "{what}: {g:?}");
+        }
+    }
+
+    #[test]
+    fn short_gifs_that_play_once_cannot_starve_the_index_build() {
+        // 0.5 s GIFs: a 1 s turn (two loops), a 0.4 s dissolve, the next
+        // file opened a loop before the end: no window of their own.
+        let gif = frames_gif(5, 10);
+        let mut e = timed_rig(6, &gif, DwellPolicy::default());
+        let alone = drive_build(&mut e, 120, false, Build::rig());
+        assert!(alone.done_at.is_none(), "{alone:?}");
+        assert!(alone.fed_gap >= Duration::from_secs(60), "{alone:?}");
+        // Asked for once the build has gone 8 s (and six looks) without:
+        // a turn long enough for 3 s of sure quiet, then short ones again.
+        let mut e = timed_rig(6, &gif, DwellPolicy::default());
+        let t = drive_build(&mut e, 120, true, Build::rig());
+        clean(&t, "0.5 s");
+        assert!(t.done_at.is_some(), "{t:?}");
+        let g = turns(&t);
+        let short = g.iter().filter(|&&d| d < Duration::from_millis(1500)).count();
+        assert!(short * 4 > g.len() * 3, "{g:?}");
+    }
+
+    #[test]
+    fn a_build_short_of_heap_does_not_lengthen_the_turns() {
+        // Every slice stops at once for the heap (a free heap between the
+        // slice's floor and its buffers'): fed, not starved, nothing asked.
+        let mut e = timed_rig(6, &frames_gif(5, 10), DwellPolicy::default());
+        let mut build = Build::rig();
+        build.heap_short = true;
+        let t = drive_build(&mut e, 60, true, build);
+        assert_eq!(t.asked, 0, "{t:?}");
+        assert!(turns(&t).iter().all(|&d| d < Duration::from_millis(1100)), "{:?}", turns(&t));
+    }
+
+    #[test]
+    fn the_ask_never_lengthens_an_entry_with_its_own_dwell_or_a_file_played_directly() {
+        let ms = Duration::from_millis;
+        let mut e = timed_rig(3, &frames_gif(5, 10), DwellPolicy::default());
+        e.set_transition(Transition::NONE);
+        e.set_ahead_linger(Duration::ZERO);
+        // Entry 0: `loops=1` (one 0.5 s pass); entry 1 plain.
+        let mut ov = Overrides::default();
+        ov.push(0, Override { loops: Some(1), ..Override::default() });
+        e.set_overrides(&ov);
+        let mut canvas = Canvas::new();
+        let mut now = ms(0);
+        let mut starts = Vec::new();
+        while now < ms(12_000) {
+            if let TickOutcome::Frame { started: true, playing, .. } = e.tick(now, &mut canvas).unwrap() {
+                starts.push((now, playing.index));
+                // A send at 8 s: played directly, under the default dwell.
+                if starts.len() == 3 {
+                    e.play_now("/gifs/Consoles/NES_T002_01.gif", now).unwrap();
+                }
+            }
+            e.set_quiet_wanted(WANT);
+            now += ms(1);
+        }
+        let gaps: Vec<_> = starts.windows(2).map(|w| (w[0].1, w[1].0 - w[0].0)).collect();
+        // The `loops=1` entry: one pass, asked or not.
+        assert!(gaps[0].0 == 0 && gaps[0].1.abs_diff(ms(500)) <= WAKE_SLACK, "{starts:?}");
+        // The plain entry: lengthened to the transition, 3 s and the lead.
+        assert!(gaps[1].0 == 1 && gaps[1].1 >= ms(4000), "{starts:?}");
+        // The file played directly (the third start, replaced at once by
+        // the play): its own 1 s.
+        let played = gaps.iter().find(|&&(i, _)| i == OFF_PLAYLIST).expect("the play");
+        assert!(played.1 <= ms(1001), "{starts:?}");
+    }
+
+    /// Ticks `e` every `period` (frames late by up to that) from `from` to
+    /// `to`, pausing over `pause` if given; at each tick, the sure window's
+    /// end it promises, and at each new file, when. Returns the switches
+    /// and, for each turn, the latest sure end promised and the prediction
+    /// made once its first loop had ended, with that loop's length.
+    #[allow(clippy::type_complexity)]
+    fn ticked(
+        e: &mut Engine,
+        period: Duration,
+        to: Duration,
+        pause: Option<(Duration, Duration)>,
+    ) -> Vec<(Duration, Duration, Option<(Duration, Duration)>)> {
+        // No steps ahead taken here: no linger either.
+        e.set_ahead_linger(Duration::ZERO);
+        let mut canvas = Canvas::new();
+        let mut out = Vec::new();
+        let (mut promised, mut predicted) = (Duration::ZERO, None);
+        let mut now = Duration::ZERO;
+        while now < to {
+            if let Some((p0, p1)) = pause {
+                if now >= p0 && now < p1 {
+                    if !e.is_paused() {
+                        e.pause(now);
+                    }
+                    now += period;
+                    continue;
+                }
+                if now >= p1 && e.is_paused() {
+                    e.resume(now);
+                    // A pause moves what was promised with it.
+                    promised += p1 - p0;
+                }
+            }
+            if let TickOutcome::Frame { started: true, .. } = e.tick(now, &mut canvas).unwrap() {
+                out.push((now, promised, predicted.take()));
+                promised = Duration::ZERO;
+            }
+            let q = e.quiet_for(now);
+            if !q.is_zero() {
+                promised = promised.max(now + q);
+            }
+            if predicted.is_none() {
+                if let Some(p) = e.current.as_ref().filter(|p| !p.loop_len.is_zero()) {
+                    predicted = Some((p.turn_end(e.current_dwell()), p.loop_len));
+                }
+            }
+            now += period;
+        }
+        out
+    }
+
+    #[test]
+    fn late_frames_end_a_turn_no_sooner_than_the_sure_window_promised() {
+        // A 0.3 s GIF ticked every 7 ms (each frame up to 7 ms late), and
+        // a 0.25 s one ticked every 45 ms (frames 50 ms, badly late: a loop
+        // takes ~0.45 s of wall time): the prediction may be late or early,
+        // early by less than a loop; the sure window never reaches past
+        // the switch.
+        for (frames, cs, period) in [(3u8, 10u16, 7u64), (5, 5, 45), (7, 3, 13)] {
+            let mut e = timed_rig(3, &frames_gif(frames, cs), DwellPolicy::default());
+            let runs = ticked(&mut e, Duration::from_millis(period), Duration::from_secs(20), None);
+            assert!(runs.len() > 8, "{runs:?}");
+            for &(at, promised, predicted) in &runs[1..] {
+                assert!(promised <= at, "{frames}x{cs}/{period}: promised {promised:?}, switched {at:?}");
+                if let Some((end, loop_len)) = predicted {
+                    assert!(at + loop_len + Duration::from_millis(period) >= end, "{at:?} vs {end:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn variable_frame_delays_are_predicted_from_the_loop_not_the_frame() {
+        // Frames of 20, 30, ... ms (a 0.35 s loop of uneven delays) under a
+        // 2 s minimum, ticked on time: the prediction is the switch.
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            for (i, cs) in [2u16, 3, 5, 8, 13, 4].iter().enumerate() {
+                let mut f = Frame {
+                    width: 128,
+                    height: 32,
+                    buffer: Cow::Owned(vec![1u8; 128 * 32]),
+                    delay: *cs,
+                    ..Default::default()
+                };
+                f.palette = Some(vec![0, 0, 0, i as u8 * 40, 0, 0]);
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        let dwell = DwellPolicy { min: Duration::from_secs(2), ..DwellPolicy::default() };
+        let mut e = timed_rig(3, &out, dwell);
+        let runs = ticked(&mut e, Duration::from_millis(1), Duration::from_secs(10), None);
+        for &(at, promised, predicted) in &runs[1..] {
+            let (end, _) = predicted.expect("a prediction");
+            assert!(at.abs_diff(end) <= Duration::from_millis(2), "{at:?} vs {end:?}");
+            assert!(promised <= at);
+        }
+    }
+
+    #[test]
+    fn a_pause_mid_turn_moves_the_prediction_and_the_window_with_it() {
+        // A 0.5 s GIF under a 3 s minimum, paused from 1.2 s to 6.2 s: the
+        // turn ends 5 s later than it would have, as predicted.
+        let dwell = DwellPolicy { min: Duration::from_secs(3), ..DwellPolicy::default() };
+        let mut e = timed_rig(3, &frames_gif(5, 10), dwell);
+        let ms = Duration::from_millis;
+        let runs = ticked(&mut e, ms(1), ms(9_000), Some((ms(1200), ms(6200))));
+        // The first switch: 3 s of play plus the 5 s pause.
+        let (at, promised, predicted) = runs[1];
+        assert!(at.abs_diff(ms(8000)) <= ms(2), "{runs:?}");
+        assert!(promised <= at, "{runs:?}");
+        let (end, _) = predicted.unwrap();
+        // Predicted before the pause (3 s): the pause moved the turn on.
+        assert!(end.abs_diff(ms(3000)) <= ms(2), "{runs:?}");
+        assert_eq!(e.turn_end().map(|t| t > ms(8000)), Some(true));
+    }
+
+    #[test]
+    fn without_a_linger_a_first_loop_end_switches_at_once() {
+        // The simulator and the web app take no steps ahead: nothing waits.
+        let mut e = timed_rig(2, &frames_gif(15, 10), DwellPolicy::default());
+        e.set_ahead_linger(Duration::ZERO);
+        e.set_transition(Transition::NONE);
+        let mut canvas = Canvas::new();
+        let ms = Duration::from_millis;
+        e.tick(ms(0), &mut canvas).unwrap();
+        for t in (100..1500).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        let b = started(&mut e, ms(1500), &mut canvas);
+        assert_eq!(b.index, 1);
+        assert!(!e.is_lingering());
+    }
+
+    #[test]
+    fn a_linger_ends_when_the_steps_stop_or_its_time_is_up() {
+        let ms = Duration::from_millis;
+        let mut e = timed_rig(3, &frames_gif(15, 10), DwellPolicy::default());
+        e.set_transition(Transition::NONE);
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        for t in (100..1500).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        // The loop's end: the turn is over, nothing was opened ahead.
+        assert_eq!(e.tick(ms(1500), &mut canvas).unwrap(), TickOutcome::Idle);
+        assert!(e.is_lingering());
+        assert_eq!(e.quiet_for(ms(1500)), Duration::ZERO);
+        assert_eq!(e.frame_due(), Some(ms(1500) + LINGER));
+        assert_eq!(e.ahead_due(ms(1501)), Some(AheadStage::Pick));
+        // Nothing taken: it waits, then moves on at the linger's end.
+        assert_eq!(e.tick(ms(1550), &mut canvas).unwrap(), TickOutcome::Idle);
+        assert_eq!(started(&mut e, ms(1580), &mut canvas).index, 1);
+        assert!(!e.started_ahead());
+        // The next one's end: the caller cannot take the steps (a transfer).
+        for t in (1680..3080).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        assert_eq!(e.tick(ms(3080), &mut canvas).unwrap(), TickOutcome::Idle);
+        assert!(e.is_lingering());
+        e.stop_ahead();
+        assert_eq!(started(&mut e, ms(3081), &mut canvas).index, 2);
+        // A sequence that holds, set while it lingers: held, not moved on.
+        for t in (3181..4581).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        assert_eq!(e.tick(ms(4581), &mut canvas).unwrap(), TickOutcome::Idle);
+        assert!(e.is_lingering());
+        e.set_hold(true);
+        assert_eq!(e.tick(ms(4700), &mut canvas).unwrap(), TickOutcome::Idle);
+        assert!(e.is_waiting() && !e.is_lingering());
+        assert_eq!(e.now_playing().unwrap().index, 2);
+    }
+
+    #[test]
+    fn a_formula_kept_on_screen_is_quiet_until_near_its_cap() {
+        // A file that never ends a loop (a Formula, a long GIF): only the
+        // cap is known.
+        let ms = Duration::from_millis;
+        let mut e = timed_rig(2, &frames_gif(200, 50), DwellPolicy::default());
+        e.set_transition(Transition::NONE);
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        e.tick(ms(500), &mut canvas).unwrap();
+        // The loose window to the lead before the cap; the sure one only to
+        // the soonest the turn could end (its frame on screen, 0.5 s).
+        assert_eq!(e.quiet_loose_for(ms(600)), ms(30_000) - AHEAD_LEAD - ms(600));
+        assert_eq!(e.quiet_for(ms(600)), ms(1000) - WAKE_SLACK - ms(600));
+        assert_eq!(e.ahead_due(ms(28_999)), None);
+        assert_eq!(e.ahead_due(ms(29_000)), Some(AheadStage::Pick));
+    }
+
+    #[test]
+    fn the_sure_window_trusts_a_loop_only_after_two_of_the_same_length() {
+        // A 0.5 s GIF under a 0.6 s minimum with `min_loops` 4: once two
+        // loops have matched, the sure end is the fourth loop's; a loop
+        // that comes out shorter (a fallback's restart, a pass of another
+        // length) drops it back to the frame on screen.
+        let ms = Duration::from_millis;
+        let dwell = DwellPolicy { min: ms(600), max: ms(30_000), min_loops: 4 };
+        let mut e = timed_rig(2, &frames_gif(5, 10), dwell);
+        e.set_transition(Transition::NONE);
+        e.set_ahead_linger(Duration::ZERO);
+        let mut canvas = Canvas::new();
+        for t in (0..=1000).step_by(100) {
+            e.tick(ms(t), &mut canvas).unwrap();
+        }
+        let p = e.current.as_ref().unwrap();
+        assert_eq!((p.loops, p.loop_len, p.loop_steady), (2, ms(500), true));
+        // Two loops to go, 0.5 s each, from the last at 1 s.
+        assert_eq!(p.sure_end(dwell), ms(2000) - WAKE_SLACK);
+        // A first loop only: the frame on screen (the next is due at 1.1 s)
+        // or `min`, whichever is later.
+        let p = e.current.as_mut().unwrap();
+        p.loop_steady = false;
+        assert_eq!(p.sure_end(dwell), ms(1100) - WAKE_SLACK);
+        // A loop shorter than the last: not steady.
+        p.loop_steady = true;
+        p.frame_at += ms(300);
+        p.looped(ms(1300));
+        assert!(!p.loop_steady && p.loop_len < ms(500));
+        assert_eq!(p.sure_end(dwell), p.next_frame_at - WAKE_SLACK);
+        assert!(e.quiet_for(ms(1050)) <= ms(1100) - ms(1050));
+    }
+
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_live_retune_keeps_the_sure_window_to_the_frame_on_screen() {
+        // A Formula played for 9 s (under a 10 s minimum), then edited
+        // live: its clock starts again, its frames' position does not.
+        // Under no minimum from then, the sure window is the frame on
+        // screen's, not 9 s on.
+        let ms = Duration::from_millis;
+        let mut e = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            DwellPolicy { min: Duration::from_secs(10), max: Duration::from_secs(30), min_loops: 1 },
+        );
+        e.set_transition(Transition::NONE);
+        let mut c = Canvas::new();
+        let a = crate::fx_psi::path("rgb(a, x, 0)", "a=0.5");
+        let b = crate::fx_psi::path("rgb(a, y, 0)", "a=1");
+        e.play_now(&a, ms(0)).unwrap();
+        e.note_sent();
+        let mut t = 0;
+        while t < 9_000 {
+            e.tick(ms(t), &mut c).unwrap();
+            t += 20;
+        }
+        e.retune(&b, ms(t), None, crate::fx_psi::Retune::Edit).unwrap().unwrap();
+        e.set_dwell(DwellPolicy { min: Duration::ZERO, max: Duration::from_secs(30), min_loops: 0 });
+        e.tick(ms(t), &mut c).unwrap();
+        let due = e.frame_due().unwrap();
+        let sure = ms(t) + e.quiet_for(ms(t));
+        assert!(sure <= due, "sure to {sure:?}, frame due {due:?}, retuned at {t} ms");
+        let p = e.current.as_ref().unwrap();
+        assert!(p.frame_at > ms(8_000), "the position runs on: {:?}", p.frame_at);
     }
 }

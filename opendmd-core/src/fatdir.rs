@@ -15,6 +15,75 @@
 //! indexed (the device's CP437 API mangles those paths anyway).
 
 use std::io;
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+
+/// Whether the index's build is starved of the player's quiet windows,
+/// so it should ask the player's turns for one (`Engine::set_quiet_wanted`).
+/// Shared by the task that runs the slices (which tells it how each look
+/// and slice went) and the display loop (which asks [`starved`](Self::starved)
+/// each tick): atomics, no lock. Times are wrapping milliseconds.
+///
+/// Fed: a slice that worked its window's worth (`min_ms`), finished, or
+/// stopped for the heap or stepped aside for an upload; a look that found
+/// the window but the heap, a transfer or an upload in the way. Starved: nothing fed for `after_ms` *and* at least
+/// `after_looks` looks found no window (a cut-short slice is one): a task
+/// that did not look meanwhile (busy elsewhere) is not starved by the
+/// player, and a build short of heap is not helped by longer turns.
+pub struct Hunger {
+    fed: AtomicU32,
+    looks: AtomicU32,
+}
+
+/// How a slice ended, for [`Hunger::slice_ended`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SliceEnd {
+    /// It stopped (its window or its time over) after this many ms.
+    Ran(u32),
+    /// The build is done.
+    Done,
+    /// It stopped for the heap (or could not take its buffers).
+    HeapShort,
+    /// It stepped aside for something other than the player (an upload).
+    SteppedAside,
+}
+
+impl Hunger {
+    pub const fn new() -> Hunger {
+        Hunger { fed: AtomicU32::new(0), looks: AtomicU32::new(0) }
+    }
+
+    /// Fed at `now` (a build starting counts).
+    pub fn fed(&self, now: u32) {
+        self.fed.store(now, Relaxed);
+        self.looks.store(0, Relaxed);
+    }
+
+    /// A look found no window long enough.
+    pub fn no_window(&self) {
+        self.looks.fetch_add(1, Relaxed);
+    }
+
+    /// A slice that began at `at` ended so.
+    pub fn slice_ended(&self, at: u32, end: SliceEnd, min_ms: u32) {
+        match end {
+            SliceEnd::Ran(ms) if ms < min_ms => self.no_window(),
+            _ => self.fed(at),
+        }
+    }
+
+    /// Whether a build under way (`building`) is starved at `now`.
+    pub fn starved(&self, now: u32, building: bool, after_ms: u32, after_looks: u32) -> bool {
+        building
+            && self.looks.load(Relaxed) >= after_looks
+            && now.wrapping_sub(self.fed.load(Relaxed)) >= after_ms
+    }
+}
+
+impl Default for Hunger {
+    fn default() -> Self {
+        Hunger::new()
+    }
+}
 
 /// Sector size: SD cards, and FatFs as configured (`CONFIG_WL_SECTOR_SIZE_512`).
 pub const SS: usize = 512;
@@ -786,6 +855,51 @@ pub fn dirs_match(indexed: &[(u32, u32)], now: &[(u32, u32)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hunger_asks_only_when_the_player_kept_the_build_out() {
+        let h = Hunger::new();
+        h.fed(1_000);
+        // Long without a slice, but no look refused: not the player's doing.
+        assert!(!h.starved(20_000, true, 8_000, 6));
+        // Looks that found no window, and cut-short slices, count...
+        for _ in 0..4 {
+            h.no_window();
+        }
+        h.slice_ended(15_000, SliceEnd::Ran(40), 120);
+        h.slice_ended(16_000, SliceEnd::Ran(119), 120);
+        assert!(h.starved(20_000, true, 8_000, 6));
+        // ...not without a build, nor within the time.
+        assert!(!h.starved(20_000, false, 8_000, 6));
+        assert!(!h.starved(8_999, true, 8_000, 6));
+        // A slice stopped for the heap feeds it, every time: a longer turn
+        // would not help (a free heap of ~20-30 KB, every turn asked else).
+        h.slice_ended(20_000, SliceEnd::HeapShort, 120);
+        assert!(!h.starved(40_000, true, 8_000, 6));
+        for _ in 0..10 {
+            h.no_window();
+        }
+        // Stepped aside for an upload: fed too.
+        h.slice_ended(20_000, SliceEnd::SteppedAside, 120);
+        assert!(!h.starved(40_000, true, 8_000, 6));
+        for _ in 0..10 {
+            h.no_window();
+        }
+        assert!(h.starved(40_000, true, 8_000, 6));
+        h.slice_ended(40_000, SliceEnd::Ran(250), 120);
+        assert!(!h.starved(40_001, true, 8_000, 6));
+        for _ in 0..10 {
+            h.no_window();
+        }
+        h.slice_ended(48_500, SliceEnd::Done, 120);
+        assert!(!h.starved(60_000, true, 8_000, 6));
+        // Wrapping milliseconds.
+        h.fed(u32::MAX - 1_000);
+        for _ in 0..6 {
+            h.no_window();
+        }
+        assert!(h.starved(7_500, true, 8_000, 6));
+    }
 
     #[test]
     fn dir_sets_compare_whatever_the_order() {

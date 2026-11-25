@@ -86,7 +86,7 @@ button lands on them.
   a Formula's are "Formula". Keys while Now is up: Space pauses or
   resumes, → skips, ← is Previous (not in a field or on a slider). In local
   mode this view is the simulator: a manifest or the whole folder, a platform
-  filter, shuffle and a seed, with the firmware's 3-30 s dwell.
+  filter, shuffle and a seed, with the firmware's 1-30 s dwell.
   **Recently played** (under the preview) and **Previous** / **Replay**
   (beside Skip and Pause): the device keeps the last 16 distinct files the
   panel started, wherever they came from (`opendmd_core::history`, 640 B of

@@ -3,7 +3,10 @@
 //! ahead" in CLAUDE.md).
 //!
 //! The engine says which step is due — the pick (scheduler + catalog
-//! lookup), the open of the copy, its header — and this decides whether
+//! lookup), the open of the copy, its header: from a second (or a loop)
+//! before the file on screen is expected to end its turn, or, when that
+//! could not be told (a GIF playing once), while it lingers on its last
+//! frame (`config::AHEAD_LINGER`) — and this decides whether
 //! there is time and heap for it now: it runs on the display task, between
 //! a frame going up and the next one being due, only with
 //! `config::AHEAD_*_SLACK` to spare, no transfer on the card and the cache
@@ -49,7 +52,23 @@ counters!(
     OPEN_HELD,
     // Card errors seen at the last check.
     ERRORS,
+    // Turns that lingered on their last frame for the steps
+    // (`config::AHEAD_LINGER`), the longest (µs), and those whose linger
+    // ran out (the switch opened what was left).
+    LINGERS,
+    LINGER_MAX,
+    LINGER_OUT,
+    // Times the steps waited for the FAT index's slice to leave the card.
+    SLICE_WAITS,
 );
+
+/// `emu-census` builds: the next file's decoder ready ahead (each tick,
+/// [`guard`]), the census's steady point (`net_worker`).
+#[cfg(feature = "emu-census")]
+pub static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// When the linger under way began (`uclock::now_us`, low bits; 0: none).
+static LINGER_AT: AtomicU32 = AtomicU32::new(0);
 
 /// What a step of `stage` takes from the heap, and the time it needs.
 fn needs(stage: AheadStage) -> (usize, Duration) {
@@ -65,6 +84,22 @@ fn needs(stage: AheadStage) -> (usize, Duration) {
 /// no good, and the switch's own open then counts as it always did), or if
 /// the heap is low.
 pub fn guard(eng: &mut Engine) {
+    let at = LINGER_AT.load(Relaxed);
+    if eng.is_lingering() {
+        if at == 0 {
+            LINGER_AT.store((crate::uclock::now_us() as u32).max(1), Relaxed);
+            LINGERS.fetch_add(1, Relaxed);
+        }
+    } else if at != 0 {
+        LINGER_AT.store(0, Relaxed);
+        let us = (crate::uclock::now_us() as u32).wrapping_sub(at);
+        LINGER_MAX.fetch_max(us, Relaxed);
+        if us >= config::AHEAD_LINGER.as_micros() as u32 {
+            LINGER_OUT.fetch_add(1, Relaxed);
+        }
+    }
+    #[cfg(feature = "emu-census")]
+    READY.store(eng.ahead_ready(), Relaxed);
     let held = eng.ahead_path().is_some_and(|(_, open)| open);
     let errors = crate::sdhealth::errors_seen();
     if ERRORS.swap(errors, Relaxed) != errors && held {
@@ -99,6 +134,21 @@ pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &crate::ucloc
     // The A/B switch for measurements: a probe build with `ahead-off`
     // never steps ahead (everything else identical).
     if cfg!(feature = "ahead-off") || crate::cache_builder::task_up() || crate::cache_builder::transfer_in_flight() {
+        // A turn over and waiting for the steps: it moves on now, opening
+        // what is left at the switch (as before there was a linger).
+        if eng.is_lingering() {
+            eng.stop_ahead();
+        }
+        return false;
+    }
+    // The index build's slice on the card stops first: the steps are due
+    // where the player's quiet window ends, and it stops at its next read
+    // once the window is closed (a lingering turn waits for it, within the
+    // linger's bound; between frames the steps come a frame later).
+    if crate::fatidx::slice_running() {
+        if eng.ahead_due(epoch.elapsed()).is_some() {
+            SLICE_WAITS.fetch_add(1, Relaxed);
+        }
         return false;
     }
     let mut ran = false;
@@ -173,7 +223,8 @@ pub fn summary(eng: Option<&Engine>) -> String {
     let n = HELD_N.load(Relaxed);
     format!(
         ", ahead: {} ready, {} used, {} dropped (heap {}, card {}, asked {}), {} heap skips, picks used {}, \
-         held avg {} B (min {} max {}), steps {} max pick/open/parse {}/{}/{} us, overruns {}",
+         held avg {} B (min {} max {}), steps {} max pick/open/parse {}/{}/{} us, overruns {}, \
+         lingers {} (max {} us, {} ran out), waits for the index {}",
         st.ready,
         st.used,
         st.dropped,
@@ -190,5 +241,9 @@ pub fn summary(eng: Option<&Engine>) -> String {
         OPEN_MAX.load(Relaxed),
         PARSE_MAX.load(Relaxed),
         OVERRUNS.load(Relaxed),
+        LINGERS.load(Relaxed),
+        LINGER_MAX.load(Relaxed),
+        LINGER_OUT.load(Relaxed),
+        SLICE_WAITS.load(Relaxed),
     )
 }
