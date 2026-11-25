@@ -2332,6 +2332,15 @@ fn main() -> Result<()> {
         // leaves out a Formula's first frame and its JIT trial.
         #[cfg(feature = "psi")]
         arm_beam(off, &panel, &looks, eng);
+        // A dissolve begun before an upload came in (the gate cuts those
+        // after it) ends now, its 24 KB given back before the upload's
+        // frames pile up: in the emulator's bursts the lowest heaps (14.7
+        // and 19.8 KB, under the 20 KB bound) were each the dissolve of a
+        // switch just before the first upload, still running beside it.
+        if eng.is_transitioning() && (crate::stream::uploads_within(config::UPLOAD_QUIET_S) || crate::cache_builder::transfer_in_flight()) {
+            eng.finish_transition(&mut canvas);
+            TRANSITIONS_CUT_UPLOAD.fetch_add(1, Ordering::Relaxed);
+        }
         let outcome = if off {
             TickOutcome::Idle
         } else {

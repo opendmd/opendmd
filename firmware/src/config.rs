@@ -346,8 +346,9 @@ pub const LOOK_TRANSITION_MARGIN: usize = 8 * 1024;
 
 /// While an upload (a LAN one, a Connect send) is in hand or a transfer
 /// shares the card, and for this long (s) after an upload was last asked
-/// for, taken or finished (uploads come in runs), a new file cuts in
-/// (`transitions_cut_upload`) and the FAT index's build stands down: the
+/// for, taken or finished (uploads come in runs), a new file cuts in and a
+/// dissolve already running ends at once (`transitions_cut_upload`), and
+/// the FAT index's build stands down: the
 /// upload's peak
 /// (six WiFi receive buffers ~10 KB, a refused one's frames, a status
 /// reply's segments ~4.4 KB beside it) under a dissolve's 24 KB took the
