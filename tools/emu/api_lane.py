@@ -155,6 +155,16 @@ class LaneFail(Exception):
     pass
 
 
+def steady_only(samples):
+    """A quiet spell's census samples (blocks, bytes, line) as (blocks, bytes): those taken at the
+    player's steady point (`steady true`: the next file ready ahead, the read-ahead ring held, no
+    transition or index build; emu-census builds wait up to 10 s for it) when the spell has any,
+    else all. A sample without the copy made ready ahead (~4-5 KB) or the ring (8 KB) once set a
+    spell's least that no later spell met again (a flat heap failed)."""
+    steady = [s for s in samples if "steady true" in s[2]]
+    return [(b, y) for b, y, _ in (steady or samples)]
+
+
 # --- the seeded image ----------------------------------------------------------
 
 # The card's SPI pins, SCLK,MOSI,MISO,CS (firmware/src/config.rs SD_*): the classic's VSPI
@@ -1436,7 +1446,7 @@ class Lane:
             counts = self.load(api, k)
             self.ok(f"load {k + 1}/{ROUNDS}", ", ".join(f"{n} {v}" for n, v in counts.items()))
             start = emu.mark()
-            spell = lambda: [(int(m[1]), int(m[2])) for _, m in emu.find(CENSUS, start)]  # noqa: E731
+            spell = lambda: steady_only([(int(m[1]), int(m[2]), m.string) for _, m in emu.find(CENSUS, start)])  # noqa: E731
             end = time.time() + QUIET_S
             while time.time() < end:
                 emu.check()

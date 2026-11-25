@@ -1340,31 +1340,34 @@ fn census() {
     if since < 20_000 {
         return;
     }
-    // The player's steady point: the next file's decoder ready ahead, no
-    // transition, no index build. Between a switch and the next file made
-    // ready (much of a turn at dwell_min 1) its ~4-5 KB (the heartbeat's
-    // `held avg`) are not held, and the API lane's census, the least of a
-    // quiet spell against the earlier ones', took such a moment as its
-    // reference in 2 full runs of 9 at that dwell, and no later spell met it
-    // again (the copy opened ahead alone did not tell). Waited for
+    // The player's steady point: the next file's decoder ready ahead, the
+    // read-ahead ring held, no transition, no index build. Each comes and
+    // goes within a turn (the copy made ready ahead ~4-5 KB, the heartbeat's
+    // `held avg`; the ring 8 KB), and the API lane's census, the least of a
+    // quiet spell against the earlier ones', took a moment without one as
+    // its reference in 3 full runs (2 at dwell_min 1 without the copy ready,
+    // 1 at 3 without the ring), which no later spell met again. Waited for
     // up to 10 s past due (it may never come: a Formula on screen, the
-    // network off); the line says what the player held.
+    // network off); the line says what the player held, and whether it was
+    // the steady point (the lane compares those alone when it has them).
     let player = lowwatch::player();
     let ready = crate::ahead::READY.load(std::sync::atomic::Ordering::Relaxed);
-    if (!ready || player & 0x61 != 0) && since < 30_000 {
+    let steady = ready && player & 0x63 == 0x02;
+    if !steady && since < 30_000 {
         return;
     }
     LAST.store(now, std::sync::atomic::Ordering::Relaxed);
     let mut info: esp_idf_sys::multi_heap_info_t = unsafe { std::mem::zeroed() };
     unsafe { esp_idf_sys::heap_caps_get_info(&mut info, crate::state::internal(esp_idf_sys::MALLOC_CAP_8BIT)) };
     log::info!(
-        "census: {} blocks in use, {} B allocated, {} B free, largest {} B, player {:#x}, ready ahead {}",
+        "census: {} blocks in use, {} B allocated, {} B free, largest {} B, player {:#x}, ready ahead {}, steady {}",
         info.allocated_blocks,
         info.total_allocated_bytes,
         info.total_free_bytes,
         info.largest_free_block,
         player,
-        ready
+        ready,
+        steady
     );
     // The Rust allocator's live blocks by size class (count/bytes), to tell
     // what grew between two quiet spells.
