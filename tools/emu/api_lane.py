@@ -1008,8 +1008,11 @@ class Lane:
             return "edited" if m.group(1) else "played", int(m.group(2)), int(m.group(3))
         # (Kept until changed: its turn must not end between the steps.)
         api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (Its start on the console, not in /api/status: at dwell_min 1 it plays once, ~1 s
+        # of device time, ~0.4 s wall, and a status poll every 0.5 s missed it twice.)
+        mark = emu.mark()
         api.json("POST", "/api/play", {"path": gif})
-        self.wait_status(api, lambda s: on(s) == gif, 30, "the GIF before")
+        emu.wait_for(re.compile(re.escape(f"] {gif} <- ")), 30, mark, "the GIF before")
         api.json("POST", "/api/play", {"path": heavy})
         self.wait_status(api, lambda s: on(s).startswith("@formula")
                          and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the heavy Formula playing")
