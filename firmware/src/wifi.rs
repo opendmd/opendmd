@@ -57,7 +57,7 @@ use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi,
 };
 use log::{info, warn};
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -76,15 +76,36 @@ static TRIES: AtomicU32 = AtomicU32::new(0);
 static RECONNECTS: AtomicU32 = AtomicU32::new(0);
 /// The last drop's uptime, seconds (`u32::MAX`: none yet).
 static LAST_DROP_S: AtomicU32 = AtomicU32::new(u32::MAX);
-/// The driver's reason for its last station disconnect (0: none yet), and
-/// the driver restarts this run ([`WifiManager::reset_driver`]).
+/// Why the last connect attempt failed (0: none yet, or one under way),
+/// and the driver restarts this run ([`WifiManager::reset_driver`]).
 static LAST_REASON: AtomicU32 = AtomicU32::new(0);
 static RESETS: AtomicU32 = AtomicU32::new(0);
+/// A leave of our own was asked for (`esp_wifi_disconnect`, a stop): its
+/// disconnect (`WIFI_REASON_ASSOC_LEAVE`) is not the attempt's reason.
+static OWN_LEAVE: AtomicBool = AtomicBool::new(false);
+/// `wifi_err_reason_t`s kept here.
+const REASON_ASSOC_LEAVE: u32 = esp_idf_sys::wifi_err_reason_t_WIFI_REASON_ASSOC_LEAVE;
+const REASON_NO_AP_FOUND: u32 = esp_idf_sys::wifi_err_reason_t_WIFI_REASON_NO_AP_FOUND;
 
-/// The driver's reason for its last station disconnect (a failed attempt
-/// is one too), `wifi_err_reason_t`; 0 before the first.
+/// Why the last connect attempt failed, or the association was lost:
+/// the driver's `wifi_err_reason_t` from its disconnect (never the leave
+/// our own retry asks for), or 201 (no access point found) for a scan that
+/// did not find the network; 0 before the first, and while one is under
+/// way ([`begin_try`]), after one that joined, and for one the driver gave
+/// no reason for (a pinned connect that timed out).
 pub fn last_reason() -> u32 {
     LAST_REASON.load(Relaxed)
+}
+
+/// A connect attempt begins: the last one's reason forgotten.
+fn begin_try() {
+    LAST_REASON.store(0, Relaxed);
+}
+
+/// A leave of our own is next (its disconnect's reason is ours, not the
+/// network's).
+fn own_leave() {
+    OWN_LEAVE.store(true, Relaxed);
 }
 
 /// `WIFI_EVENT_STA_DISCONNECTED`, on the system event task: the reason
@@ -98,7 +119,11 @@ unsafe extern "C" fn on_disconnect(
     if !data.is_null() {
         // SAFETY: the event's data is the driver's own disconnect record.
         let ev = unsafe { &*(data as *const esp_idf_sys::wifi_event_sta_disconnected_t) };
-        LAST_REASON.store(ev.reason as u32, Relaxed);
+        let reason = ev.reason as u32;
+        if reason == REASON_ASSOC_LEAVE && OWN_LEAVE.swap(false, Relaxed) {
+            return;
+        }
+        LAST_REASON.store(reason, Relaxed);
     }
 }
 
@@ -351,6 +376,8 @@ pub struct WifiManager {
     eap_on: bool,
     /// The last good connection, for [`WifiManager::connect_direct`].
     learned: Option<Learned>,
+    /// The last scan for the network found it ([`WifiManager::saw_network`]).
+    saw: bool,
 }
 
 /// The station's DHCP client name (`esp_netif_set_hostname`). Before the
@@ -417,6 +444,7 @@ impl WifiManager {
             state: WifiState::Disconnected,
             eap_on: false,
             learned: None,
+            saw: false,
         })
     }
 
@@ -442,6 +470,13 @@ impl WifiManager {
             l.bssid[5] ^= 0x55;
             l.channel = l.channel % 13 + 1;
         }
+    }
+
+    /// The last [`WifiManager::connect_sta`] scan found the network (every
+    /// stage that failed after it was refused: the password, most likely),
+    /// or did not (the network away).
+    pub fn saw_network(&self) -> bool {
+        self.saw
     }
 
     /// The last good connection is to `ssid` (a pinned connect can be tried).
@@ -690,6 +725,7 @@ impl WifiManager {
                     return Ok(true);
                 }
             }
+            own_leave();
             let _ = self.wifi.disconnect();
             if waited == Waited::GaveWay {
                 return Err(());
@@ -725,6 +761,8 @@ impl WifiManager {
         if ssid.is_empty() {
             return Ok(false);
         }
+        begin_try();
+        self.saw = false;
         // 802.1X: the password goes to the EAP client, not the driver's
         // PSK (and may be longer than its 64 bytes).
         if !self.set_eap(eap, password) {
@@ -740,6 +778,7 @@ impl WifiManager {
         // it first, or the wait below sees the old association at once and
         // takes it for the new one.
         if self.wifi.is_connected().unwrap_or(false) {
+            own_leave();
             let _ = self.wifi.disconnect();
         }
         let fallback_auth = if eap.is_some() {
@@ -791,8 +830,10 @@ impl WifiManager {
             }
         };
 
+        self.saw = found.is_some();
         let Some(ap) = found else {
             warn!("'{ssid}' not found (a scan for it answered by {scanned} APs)");
+            LAST_REASON.store(REASON_NO_AP_FOUND, Relaxed);
             self.state = WifiState::Disconnected;
             set_act(WifiAct::Down);
             return Ok(false);
@@ -859,12 +900,14 @@ impl WifiManager {
         let Some(l) = self.learned.filter(|l| l.is_for(ssid)) else {
             return Ok(false);
         };
+        begin_try();
         let password = if eap.is_some() { "" } else { password };
         info!(
             "reconnecting to '{ssid}' at {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch {} ({:?}), no scan",
             l.bssid[0], l.bssid[1], l.bssid[2], l.bssid[3], l.bssid[4], l.bssid[5], l.channel, l.auth
         );
         if self.wifi.is_connected().unwrap_or(false) {
+            own_leave();
             let _ = self.wifi.disconnect();
         }
         self.wifi
@@ -900,6 +943,7 @@ impl WifiManager {
         RESETS.fetch_add(1, Relaxed);
         set_act(WifiAct::Connecting);
         if self.wifi.is_started().unwrap_or(false) {
+            own_leave();
             self.wifi.stop()?;
         }
         self.wifi.start()?;
@@ -913,6 +957,7 @@ impl WifiManager {
     #[inline(never)]
     pub fn disconnect(&mut self) -> anyhow::Result<()> {
         if self.wifi.is_connected().unwrap_or(false) {
+            own_leave();
             self.wifi.disconnect()?;
         }
         self.state = WifiState::Disconnected;

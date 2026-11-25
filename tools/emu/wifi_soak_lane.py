@@ -18,7 +18,14 @@ the station and logs each step as `wifi-soak: …`; this judges the console and 
   tight     ~12 KB free in pieces just big enough for the reconnect's scan, the learned access point
             spoiled, the association dropped, for 150 s: what the reconnect does there is reported
             (the finding: can it rejoin in such a heap?); then the heap given back: it must rejoin
-  status    net.wifi_driver_resets 3, wifi_last_reason non-zero, wifi_activity up
+  status    net.wifi_driver_resets 3 or more, wifi_last_reason 0 (the last try joined), wifi_activity up;
+            the reasons logged: 201 for every scan that did not find the network, never 8 (our own
+            leave) for a refused round
+  stuck 1   the name taken away with a short hour (150 s): the `wifi_stuck` restart; boot 2, told to
+            look for the name too, does not find it: no setup network, the reconnect carries on, and
+            joins once the name is given back; restarts[0] `wifi_stuck`, /api/log/last kept
+  stuck 2   a wrong password with a short hour: the `wifi_stuck` restart; boot 3, told to join with
+            it, finds the network and is refused: the setup network, as at any boot
 
 A test panel was offline for hours on 2026-11-21 with its network up: 1356 tries, the heap at 11.7 KB
 free in pieces of 2.3 KB at the end, from ~45 KB. Its loss, ~25 B a try, would be ~1 KB over the
@@ -55,6 +62,15 @@ NOT_FOUND = re.compile(r"'demo' not found \(a scan for it answered by (\d+) APs\
 BACK_ANY = re.compile(r"\[net\] reconnected \((straight back|after a scan)\)")
 REC_ERR = re.compile(r"\[net\] reconnect error: (.*)")
 DONE = re.compile(r"wifi-soak: done: playback resumed")
+STUCK1 = re.compile(r"wifi-soak: stuck 1: ")
+STUCK2 = re.compile(r"wifi-soak: stuck 2: ")
+HOUR = re.compile(r"\[net\] WiFi down for an hour \(.*\): restarting to rejoin")
+REASON = re.compile(r"reset reason: (\S+) \((\w+)\)")
+BOOT2 = re.compile(r"wifi-soak: boot 2: joining 'demo-away'")
+BOOT2_BACK = re.compile(r"wifi-soak: boot 2 back: joined")
+BOOT3 = re.compile(r"wifi-soak: boot 3: joining 'demo' with a wrong password")
+QUIET = re.compile(r"not joined after a restart to rejoin, the network not found; reconnecting, no setup network")
+AP_MODE = re.compile(r"starting AP mode: OpenDMD-Setup")
 RESTART = re.compile(r"restarting to rejoin")
 
 # Bytes a try may lose on a least-squares slope, and in all over a step: well under the test panel's
@@ -85,11 +101,12 @@ def run(a, sim, rom, fail_rx) -> int:
 
     try:
         image = seeded_image(a.image, a.emu_dir / "wifisoak")
-        cmd = [*machine(sim, "esp32", image, rom, ["--sd", str(a.card)]), "--max-seconds", str(a.seconds or 2400),
+        cmd = [*machine(sim, "esp32", image, rom, ["--sd", str(a.card)]), "--max-seconds", str(a.seconds or 3600),
                "--console", "uart0", "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
         emu = Emulator(cmd, dict(os.environ), log, fail_rx, "wifi-soak")
+        emu.resets_allowed = 3  # the power-on, and the two wifi_stuck restarts
         emu.start()
-        wall = a.wall or 5400
+        wall = a.wall or 7200
         api = Api(emu)
 
         i, _ = emu.wait_for(CONNECTED, 600, what="WiFi connected at boot")
@@ -139,6 +156,8 @@ def run(a, sim, rom, fail_rx) -> int:
         sl = slope(pts)
         lost = pts[0][1] - pts[-1][1]
         reasons = sorted({int(m[2]) for _, m in fails})
+        if reasons != [201]:
+            raise LaneFail(f"away: the failed scans' reasons {reasons}, wanted [201] (not found)")
         detail = (f"{len(fails)} scans for '{wm[1]}' that found nothing, driver restarts at rounds {rounds}; heap after each "
                   f"{pts[0][1]} -> {pts[-1][1]} B ({-lost:+d} B, slope {sl:+.1f} B/try, least {min(y for _, y in pts)} B), "
                   f"largest {fails[0][1][4]} -> {fails[-1][1][4]} B; disconnect reasons {reasons}")
@@ -158,6 +177,8 @@ def run(a, sim, rom, fail_rx) -> int:
         frees = [int(rfm[1]), *(int(m[3]) for _, m in rounds)]
         lost = frees[1] - frees[-1]
         reasons = sorted({int(m[2]) for _, m in rounds})
+        if 8 in reasons or 0 in reasons or 201 in reasons:
+            raise LaneFail(f"refused: the failed rounds' reasons {reasons}: our own leave (8), none (0) or not found (201)")
         detail = (f"{len(rounds)} rounds of ten handshakes that failed (disconnect reasons {reasons}); heap {frees} B, "
                   f"{-lost:+d} B from the first round's end to the last's, largest {rounds[-1][1][4]} B")
         if lost > DRIFT_MAX:
@@ -196,13 +217,53 @@ def run(a, sim, rom, fail_rx) -> int:
 
         st = api.wait_up(120)
         net = st.get("net") or {}
-        if not (net.get("wifi_driver_resets") == 3 and (net.get("wifi_last_reason") or 0) > 0 and net.get("wifi_activity") == "up"):
+        # (3 while away; the tight step's pinned connects can add one after the release.)
+        if not ((net.get("wifi_driver_resets") or 0) >= 3 and net.get("wifi_last_reason") == 0 and net.get("wifi_activity") == "up"):
             raise LaneFail(f"/api/status net: wifi_driver_resets {net.get('wifi_driver_resets')}, wifi_last_reason "
                            f"{net.get('wifi_last_reason')}, wifi_activity {net.get('wifi_activity')!r}")
-        ok("status", f"net.wifi_driver_resets 3, wifi_last_reason {net['wifi_last_reason']}, "
+        ok("status", f"net.wifi_driver_resets {net['wifi_driver_resets']}, wifi_last_reason 0, "
                      f"wifi_reconnect_tries {net.get('wifi_reconnect_tries')}, wifi_activity up")
-        if emu.find(RESTART):
-            raise LaneFail("a firmware restart to rejoin: " + emu.find(RESTART)[0][1].string[:160])
+
+        # Stuck 1: the short hour's restart, boot 2 quiet, then back.
+        s1, _ = emu.wait_for(STUCK1, 300, rl, what="wifi-soak: stuck 1")
+        if emu.find(RESTART, 0, s1):
+            raise LaneFail("a firmware restart to rejoin before stuck 1: " + emu.find(RESTART, 0, s1)[0][1].string[:160])
+        h1, _ = emu.wait_for(HOUR, 600, s1, what="the hour's restart (stuck 1)")
+        r2, rm2 = emu.wait_for(REASON, 300, h1, what="boot 2's reset reason")
+        if rm2[2] != "wifi_stuck":
+            raise LaneFail(f"boot 2: {emu.lines[r2][:200]}")
+        emu.wait_for(BOOT2, 120, r2, what="wifi-soak: boot 2")
+        q, _ = emu.wait_for(QUIET, 300, r2, what="boot 2 reconnecting without the setup network")
+        bb, _ = emu.wait_for(BOOT2_BACK, 600, q, what="wifi-soak: boot 2 back")
+        if emu.find(AP_MODE, r2, bb):
+            raise LaneFail("boot 2: the setup network for a network not found")
+        if emu.find(HOUR, r2, bb):
+            raise LaneFail("boot 2: a second hour's restart in the same outage")
+        st = api.wait_up(120)
+        last = (st.get("restarts") or [{}])[0]
+        if last.get("reason") != "wifi_stuck":
+            raise LaneFail(f"boot 2: /api/status restarts[0] {last}")
+        code, _, body = api.raw("GET", "/api/log/last", timeout=20)
+        text = body.decode(errors="replace")
+        if code != 200 or "wifi_stuck" not in text.splitlines()[0]:
+            raise LaneFail(f"boot 2: GET /api/log/last HTTP {code}: {text[:200]!r}")
+        ok("stuck 1", f"{emu.lines[h1][emu.lines[h1].index('[net]'):][:150]}; boot 2 {emu.lines[r2][emu.lines[r2].index('reset reason'):][:60]}: "
+                      f"not found, no setup network, joined once the name came back; restarts[0] wifi_stuck; /api/log/last {len(body)} B")
+
+        # Stuck 2: refused; boot 3 raises the setup network.
+        s2, _ = emu.wait_for(STUCK2, 300, bb, what="wifi-soak: stuck 2")
+        h2, _ = emu.wait_for(HOUR, 900, s2, what="the hour's restart (stuck 2)")
+        r3, rm3 = emu.wait_for(REASON, 300, h2, what="boot 3's reset reason")
+        if rm3[2] != "wifi_stuck":
+            raise LaneFail(f"boot 3: {emu.lines[r3][:200]}")
+        emu.wait_for(BOOT3, 120, r3, what="wifi-soak: boot 3")
+        ap, _ = emu.wait_for(AP_MODE, 900, r3, what="boot 3's setup network")
+        if emu.find(QUIET, r3, ap):
+            raise LaneFail("boot 3: said quiet for a network found and refused")
+        if not emu.find(FOUND_DEMO, r3, ap):
+            raise LaneFail("boot 3: the setup network without the scan finding 'demo'")
+        ok("stuck 2", f"{emu.lines[h2][emu.lines[h2].index('[net]'):][:150]}; boot 3 {emu.lines[r3][emu.lines[r3].index('reset reason'):][:60]}: "
+                      f"found, refused: {emu.lines[ap][emu.lines[ap].index('starting'):][:40]}")
     except LaneFail as e:
         print(f"EMU_WIFI_SOAK_FAIL: {e}")
         if emu:

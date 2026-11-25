@@ -308,6 +308,10 @@ struct Net {
     again: Reconnect,
     /// When a reconnect held back for the heap last said so (uptime ms).
     held_said: Option<u32>,
+    /// This boot came out of a restart to rejoin (`wifi_heap`,
+    /// `wifi_stuck`): the boot decision raises the setup network only for a
+    /// network found and refused.
+    rejoining: bool,
 }
 
 /// Uptime, ms (wraps after ~49 days; `wifi_reconnect` compares wrapping).
@@ -351,6 +355,8 @@ fn run(worker: NetWorker) {
     #[cfg(feature = "connect")]
     let link = crate::connect::dispatch_link(cmd.clone(), status.clone(), settings.clone());
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
+    #[cfg(feature = "emu-wifi-soak")]
+    let (ssid, password) = crate::wifi_soak::boot_login(ssid, password);
     let Some(mut net) = start(modem, sysloop, nvs, ssid, password, eap, hostname, status, save_settings, save_cmd) else {
         return;
     };
@@ -504,7 +510,7 @@ fn run(worker: NetWorker) {
         #[cfg(feature = "emu-oom-test")]
         crate::oom_test::tick(&mut net.wifi, &net.save_cmd);
         #[cfg(feature = "emu-wifi-soak")]
-        crate::wifi_soak::tick(&mut net.wifi, &mut net.ssid, &mut net.password, &net.save_cmd);
+        crate::wifi_soak::tick(&mut net.wifi, &mut net.ssid, &mut net.password, &mut net.again, &net.save_cmd);
     }
 }
 
@@ -819,20 +825,21 @@ fn start(
     }
 
     // A restart to rejoin (`wifi_heap`, `wifi_stuck`) that still finds no
-    // way back: the reconnect carries on (`Net::reconnect`), no setup
-    // network. The panel was on this network; it was not set up wrong.
+    // network: the reconnect carries on (`Net::reconnect`), no setup
+    // network, and no second hour's restart this outage. Found but refused
+    // (a changed password): the setup network, as at any boot.
     let rejoining = matches!(
         crate::restarts::this_boot_reason(),
         Some(opendmd_core::restarts::Reason::WifiHeap | opendmd_core::restarts::Reason::WifiStuck)
     );
     let mut again = Reconnect::new();
-    if rejoining && wifi.state() != WifiState::Connected {
-        warn!("[net] not joined after a restart to rejoin; reconnecting, no setup network");
-        if crate::restarts::this_boot_reason() == Some(opendmd_core::restarts::Reason::WifiStuck) {
-            // Once an outage: a network really away does not restart the
-            // panel every hour.
-            again.no_stuck_restart();
-        }
+    if rejoining {
+        // Once an outage: a network really away does not restart the panel
+        // every hour.
+        again.no_stuck_restart();
+    }
+    if rejoining && wifi.state() != WifiState::Connected && boot_failures.is_none() && !wifi.saw_network() {
+        warn!("[net] not joined after a restart to rejoin, the network not found; reconnecting, no setup network");
     } else if wifi.state() != WifiState::Connected && boot_failures.is_none() {
         match wifi.start_ap() {
             Ok(()) => ap_started_at = Some(Instant::now()),
@@ -917,6 +924,7 @@ fn start(
         last_scan,
         again,
         held_said: None,
+        rejoining,
     })
 }
 
@@ -1083,6 +1091,9 @@ impl Net {
                     // The scan's connect starts it if the start failed.
                     warn!("[net] WiFi driver restart: {e:#}");
                 }
+                // Done, whatever the round does next (a round that gives way
+                // to the installer is not failed, and is not reset again).
+                self.again.reset_done();
             }
             let joined = match step {
                 Step::Direct => self.wifi.connect_direct(&self.ssid, &self.password, self.eap.as_ref()),
@@ -1114,7 +1125,10 @@ impl Net {
                     // STA_MAX_FAILURES, as at boot.
                     let n = self.boot_failures.unwrap_or(0) + 1;
                     self.boot_failures = Some(n);
-                    if n >= config::STA_MAX_FAILURES {
+                    if n >= config::STA_MAX_FAILURES && self.rejoining && !self.wifi.saw_network() {
+                        self.boot_failures = None;
+                        warn!("[net] not joined after a restart to rejoin, the network not found; reconnecting, no setup network");
+                    } else if n >= config::STA_MAX_FAILURES {
                         self.boot_failures = None;
                         match self.wifi.start_ap() {
                             Ok(()) => {
