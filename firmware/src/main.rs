@@ -254,7 +254,7 @@ impl SafeStart {
 /// the heap must keep [`config::TRANSITION_HEAP_RESERVE`] after both, and a
 /// 16 KB block (the LZW's largest piece) must exist. No dissolve while an
 /// upload (a LAN one, a Connect send) is in hand or was in the last
-/// [`config::UPLOAD_QUIET_S`] (or a transfer shares the card). Called on the
+/// [`config::UPLOAD_QUIET_S`] (never for a download). Called on the
 /// main task inside the tick; counts refusals, for the heap and for uploads
 /// apart.
 fn transition_gate(need: usize) -> bool {
@@ -265,8 +265,11 @@ fn transition_gate(need: usize) -> bool {
     } else {
         0
     };
-    // An upload in hand or just before (uploads come in runs), or a
-    // transfer on the card: the next upload's peak may come at any moment
+    // An upload in hand or just before (uploads come in runs; noted by
+    // `stream::receive_file` and Connect sends, never a download: the web
+    // app's thumbnails and previews are card reads on the stream task, and
+    // browsing the library cut dissolves when any stream job counted): the
+    // next upload's peak may come at any moment
     // (the WiFi driver's receive buffers, a refused one's frames, a status
     // reply beside it), and a dissolve's 24 KB under it took the heap under
     // 20 KB in the emulator's simultaneous-upload bursts (every low there
@@ -277,7 +280,7 @@ fn transition_gate(need: usize) -> bool {
     // cannot play without: its own heap rule stands. Told apart by its
     // size, which no transition asks: see the assertion below.)
     let fallback = need == opendmd_core::player::GIF_CRATE_BYTES;
-    if !fallback && (crate::stream::uploads_within(config::UPLOAD_QUIET_S) || crate::cache_builder::transfer_in_flight()) {
+    if !fallback && crate::stream::uploads_within(config::UPLOAD_QUIET_S) {
         TRANSITIONS_CUT_UPLOAD.fetch_add(1, Ordering::Relaxed);
         return false;
     }
@@ -2337,9 +2340,21 @@ fn main() -> Result<()> {
         // frames pile up: in the emulator's bursts the lowest heaps (14.7
         // and 19.8 KB, under the 20 KB bound) were each the dissolve of a
         // switch just before the first upload, still running beside it.
-        if eng.is_transitioning() && (crate::stream::uploads_within(config::UPLOAD_QUIET_S) || crate::cache_builder::transfer_in_flight()) {
+        // Uploads only, as the gate (no download ends one). The finished
+        // picture goes up at once: `finish_transition` only marks what the
+        // panel is owed, and a still or a slow GIF's next frame may be
+        // seconds away, the half-dissolved blend on the panel meanwhile.
+        if eng.is_transitioning() && crate::stream::uploads_within(config::UPLOAD_QUIET_S) {
             eng.finish_transition(&mut canvas);
             TRANSITIONS_CUT_UPLOAD.fetch_add(1, Ordering::Relaxed);
+            // (Over a formula look already held: its picture, which takes
+            // nothing new; never one that would take its buffers now.)
+            if formula_look::HELD.load(Ordering::Relaxed) {
+                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), 0);
+                panel.blit(pic);
+            } else {
+                panel.blit(eng.display_mut(&mut canvas));
+            }
         }
         let outcome = if off {
             TickOutcome::Idle

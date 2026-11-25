@@ -344,8 +344,8 @@ pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
 /// transients still find room. Measured on the device later.
 pub const LOOK_TRANSITION_MARGIN: usize = 8 * 1024;
 
-/// While an upload (a LAN one, a Connect send) is in hand or a transfer
-/// shares the card, and for this long (s) after an upload was last asked
+/// While an upload (a LAN one, a Connect send; never a download) is in
+/// hand, and for this long (s) after an upload was last asked
 /// for, taken or finished (uploads come in runs), a new file cuts in and a
 /// dissolve already running ends at once (`transitions_cut_upload`), and
 /// the FAT index's build stands down: the
