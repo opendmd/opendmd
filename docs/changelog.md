@@ -22,35 +22,29 @@ the web app. No internals.
 
 ## 1.1.0-beta.4 · 2026-11-20
 
-Remote control no longer switches itself off after power dips, and the
-panel copes better with WiFi drops and low memory.
+Short GIFs play once, Remote control no longer switches itself off after
+power dips, and the panel copes better with WiFi drops and low memory.
 
+- Short GIFs now play once before the next one, instead of repeating until
+  3 seconds have passed: the shortest time a GIF stays is 1 second by
+  default. A panel that has already saved its settings keeps its time;
+  change it under **Settings › Playback** ("Each GIF stays"). While the
+  panel is indexing a new card, a GIF now and then stays about 4 seconds.
 - A dip in the power supply (a weak USB supply can cause one) restarts the
   panel but no longer counts as a crash, so Remote control stays on. If
   dips keep restarting the panel soon after it starts, Remote control waits
-  15 minutes after each start before it connects.
-- On the ESP32-S3 board, a restart from its USB port no longer counts as a
-  crash either.
+  15 minutes after each start before it connects. On the ESP32-S3 board, a
+  restart from its USB port no longer counts as a crash either.
 - After a WiFi drop the panel goes straight back to your network, without
   searching for it first, and waits instead of retrying while it is short
   of memory. If it can't get back onto your WiFi, it keeps trying harder,
   and after an hour restarts itself once. If you've changed your WiFi
-  password, it opens its setup network after that restart. A panel low on memory
+  password, it opens its setup network after that restart.
+- While you upload files to the panel, the next GIF cuts in instead of
+  dissolving, so the upload has more memory, and a panel low on memory
   keeps playing where it could stop before.
 - If the panel ever restarts unexpectedly, it keeps a note of what it was
   doing and its last log lines, to help find the cause.
-- Short GIFs now play once before the next one, instead of repeating until
-  3 seconds have passed. The shortest time a GIF stays is now 1 second by
-  default. A panel that has already saved its settings keeps the time it
-  has; change it under **Settings › Playback** ("Each GIF stays").
-  While the panel is indexing its card's GIFs (a new card, or after GIFs
-  were added or removed), now and then one playlist GIF stays at least about 4
-  seconds, repeating if it is shorter, to give the indexing time. GIFs
-  with their own playing time in a playlist, and GIFs you send to the
-  panel, are not affected.
-- While files are being uploaded to the panel (and for 10 seconds after),
-  the next GIF cuts in instead of dissolving: the panel keeps more memory
-  free for the upload.
 
 ## 1.1.0-beta.3 · 2026-11-19
 
