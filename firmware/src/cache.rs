@@ -305,8 +305,9 @@ pub fn run_count() {
                 );
                 return;
             }
-            // Superseded mid-count, or stopped for a signature check: go
-            // round again (which gives way to the check first).
+            // Superseded mid-count, or stopped for a signature check or a
+            // Formula sent: go round again (which gives way to the check
+            // first, and waits for the Formulas).
             Ok(None) => continue,
             Err(e) => {
                 log::warn!("cache: counting {manifest} failed: {e:#}");
@@ -467,7 +468,7 @@ struct Abortable<R> {
 
 impl<R: Read> Read for Abortable<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if GEN.load(Relaxed) != self.gen || crate::ota::verify_waiting() {
+        if stop_asked(self.gen) {
             return Err(io::Error::other("superseded"));
         }
         let n = self.inner.read(buf)?;
@@ -501,7 +502,19 @@ fn originals() -> Vec<(u8, u32)> {
     out
 }
 
-/// Steps 1-3. `Ok(None)` if superseded (the generation moved) part way.
+/// A count under way stops (and `run_count` goes round again): superseded,
+/// a signature check waiting, or a Formula sent meanwhile. `run_count`'s
+/// gate for Formulas holds only a count's start, and one begun a moment
+/// before an editor's first edit kept its key slice beside the edits'
+/// compiles in the API lane (3 runs of 8: an edit not applied in place, or
+/// refused for the heap); it gives the slice back now.
+fn stop_asked(gen: u32) -> bool {
+    GEN.load(Relaxed) != gen
+        || crate::ota::verify_waiting()
+        || crate::http::formula_sent_within(config::CACHE_FORMULA_QUIET_S)
+}
+
+/// Steps 1-3. `Ok(None)` if stopped part way ([`stop_asked`]).
 fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount, String)>> {
     let filter = build_filter(platforms);
     let t = Instant::now();
@@ -521,7 +534,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         keys.clear();
         let mut hi = lo;
         loop {
-            if GEN.load(Relaxed) != gen || crate::ota::verify_waiting() {
+            if stop_asked(gen) {
                 return Ok(None);
             }
             dirs += walk_bucket(&parents, hi as u8, config::CACHE_PACE_SLEEP, |path| {
@@ -574,7 +587,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
             match layout::count_prepared(reader, &filter, (lo as u8, hi as u8), &keys, passes == 0)
             {
                 Ok(c) => c,
-                Err(_) if GEN.load(Relaxed) != gen || crate::ota::verify_waiting() => return Ok(None),
+                Err(_) if stop_asked(gen) => return Ok(None),
                 Err(e) => return Err(e.into()),
             };
         pass_ms += tp.elapsed().as_millis();
