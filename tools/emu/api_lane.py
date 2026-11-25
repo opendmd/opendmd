@@ -155,14 +155,15 @@ class LaneFail(Exception):
     pass
 
 
-def steady_only(samples):
-    """A quiet spell's census samples (blocks, bytes, line) as (blocks, bytes): those taken at the
-    player's steady point (`steady true`: the next file ready ahead, the read-ahead ring held, no
-    transition or index build; emu-census builds wait up to 10 s for it) when the spell has any,
-    else all. A sample without the copy made ready ahead (~4-5 KB) or the ring (8 KB) once set a
-    spell's least that no later spell met again (a flat heap failed)."""
-    steady = [s for s in samples if "steady true" in s[2]]
-    return [(b, y) for b, y, _ in (steady or samples)]
+def steady_split(samples):
+    """A quiet spell's census samples (blocks, bytes, line): (the steady ones, all), each as
+    (blocks, bytes). Steady: taken at the player's steady point (`steady true`: the next file
+    ready ahead, the read-ahead ring held, no transition or index build; emu-census builds wait up
+    to 10 s for it, then sample anyway with `steady false`). A sample without the copy made ready
+    ahead (~4-5 KB) or the ring (8 KB) once set a spell's least that no later spell met again (a
+    flat heap failed): spells are compared by their steady samples alone, never steady against
+    not (`load_rounds` fails such a mix)."""
+    return [(b, y) for b, y, line in samples if "steady true" in line], [(b, y) for b, y, _ in samples]
 
 
 # --- the seeded image ----------------------------------------------------------
@@ -1441,34 +1442,53 @@ class Lane:
     # -- the load -------------------------------------------------------------
 
     def load_rounds(self, emu, api):
-        quiet = []
+        raws = []
+        # Whether the image marks its samples (`steady true/false`, emu-census builds since the
+        # steady point): then spells are compared by their steady samples alone.
+        marked = lambda: any(" steady " in line for r in raws for _, _, line in r)  # noqa: E731
+        pick = lambda r: steady_split(r)[0] if marked() else steady_split(r)[1]  # noqa: E731
         for k in range(ROUNDS):
             counts = self.load(api, k)
             self.ok(f"load {k + 1}/{ROUNDS}", ", ".join(f"{n} {v}" for n, v in counts.items()))
             start = emu.mark()
-            spell = lambda: steady_only([(int(m[1]), int(m[2]), m.string) for _, m in emu.find(CENSUS, start)])  # noqa: E731
+            raw = lambda: [(int(m[1]), int(m[2]), m.string) for _, m in emu.find(CENSUS, start)]  # noqa: E731
             end = time.time() + QUIET_S
             while time.time() < end:
                 emu.check()
                 time.sleep(1)
-            if k == ROUNDS - 1 and all(quiet):
+            if k == ROUNDS - 1 and raws and all(pick(r) for r in raws):
                 # The last: on until it meets its lowest phase again (see QUIET_MORE_S).
-                b0, y0 = min(c[0] for s in quiet for c in s), min(c[1] for s in quiet for c in s)
+                earlier = [pick(r) for r in raws]
+                b0, y0 = min(c[0] for s in earlier for c in s), min(c[1] for s in earlier for c in s)
                 flat = lambda c: c and min(x[0] for x in c) - b0 <= LEAK_BLOCKS and min(x[1] for x in c) - y0 <= LEAK_BYTES  # noqa: E731
                 end = time.time() + QUIET_MORE_S
-                while not flat(spell()) and time.time() < end:
+                while not flat(pick(raw())) and time.time() < end:
                     emu.check()
                     if emu.done:  # (no more census lines will come: say so, not "the heap grew")
                         raise LaneFail(f"boot {emu.label}: the emulator stopped (exit {emu.p.returncode}) in the last quiet spell")
                     time.sleep(1)
-            quiet.append(spell())
-        self.expect(all(quiet), "census", f"census lines per quiet spell {[len(c) for c in quiet]}: is this an emu-census image?")
+            raws.append(raw())
+        self.expect(all(raws), "census", f"census lines per quiet spell {[len(r) for r in raws]}: is this an emu-census image?")
+        counts = [(len(steady_split(r)[0]), len(r)) for r in raws]
+        mids = lambda quiet: ", ".join(  # noqa: E731
+            f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B ({n} steady of {t} samples)" if s else f"none steady of {t} samples"
+            for s, (n, t) in zip(quiet, counts))
+        if marked():
+            quiet = [steady_split(r)[0] for r in raws]
+            # Steady against not is not like with like (the copy ready ahead and the ring are
+            # ~12 KB between them): a spell with no steady sample fails the census, not falls back.
+            self.expect(all(quiet), "census", f"a quiet spell with no steady sample (each quiet spell: {mids(quiet)}): "
+                        "its samples are not comparable with the others' steady ones")
+            how = "steady samples"
+        else:
+            quiet = [steady_split(r)[1] for r in raws]
+            how = "every sample (this image marks none steady)"
+            print("api: census: NOTE: the image's census lines carry no `steady`: every sample compared", flush=True)
         b0, y0 = min(c[0] for s in quiet[:-1] for c in s), min(c[1] for s in quiet[:-1] for c in s)
         b1, y1 = min(c[0] for c in quiet[-1]), min(c[1] for c in quiet[-1])
-        mids = ", ".join(f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B ({len(s)} samples)" for s in quiet)
         self.expect(b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES, "census",
-                    f"the heap grew across the load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")
-        self.ok("census", f"flat across {ROUNDS} load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")
+                    f"the heap grew across the load rounds ({how}): least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids(quiet)})")
+        self.ok("census", f"flat across {ROUNDS} load rounds ({how}): least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids(quiet)})")
 
     def load(self, api, k):
         """display-stress's loads at once for LOAD_S: status polls, settings saves, uploads
