@@ -1317,6 +1317,11 @@ class Lane:
         mark = emu.mark()
         api.json("POST", "/api/play", {"path": self.card_gif})
         emu.wait_for(re.compile(re.escape(f"] {self.card_gif} <- ")), 60, mark, f"`{self.card_gif} <- `")
+        # And its dissolve over (400 ms of device time; 2 s wall is ~5 s of it here): begun before
+        # any upload, it ran beside round 1's first one (the firmware ends one an upload finds
+        # running, at its next tick, but the upload's first frames pile up in lwIP before its
+        # handler runs): round 1's low 14.7-19.8 KB with a transition at it in 3 runs of 15.
+        time.sleep(2)
         work = self.logs / f"burst-{self.stamp}"
         work.mkdir(parents=True, exist_ok=True)
         src = work / "blob.bin"
