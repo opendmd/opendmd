@@ -1123,15 +1123,27 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if fast {
             // One block for the answer, the size of the last one and some:
             // no regrowth while it is written, and no abort when the heap
-            // has no such block.
-            let mut json = String::new();
+            // has no such block. An answer longer than that (the last one
+            // shorter: a read without `recent`, a Formula's name) grows
+            // only by `try_reserve`, and is a 503 when the heap has no
+            // room: it grew infallibly before, and an emulator run aborted
+            // there (11 KB asked, the largest block 9.7 KB, a Formula's
+            // live edits on screen).
+            let mut json = Bounded { s: String::new(), short: false };
             let want = STATUS_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize + STATUS_SLACK;
-            if json.try_reserve_exact(want).is_err() {
+            if json.s.try_reserve_exact(want).is_err() {
                 req.header("Retry-After", "1")?;
                 return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
             }
             status_json(&snap, &looks, recent, &mut json);
             drop(snap);
+            if json.short {
+                drop(json);
+                STATUS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                req.header("Retry-After", "1")?;
+                return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
+            }
+            let json = json.s;
             STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
             STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
             let sent = req.json(&json);
@@ -3406,6 +3418,24 @@ fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
     let copy = Box::new(s.clone());
     STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
     copy
+}
+
+/// A fast poller's answer as it is written: grows only when the heap has
+/// room (`try_reserve`); the first growth refused ends it (`short`).
+struct Bounded {
+    s: String,
+    short: bool,
+}
+
+impl std::fmt::Write for Bounded {
+    fn write_str(&mut self, x: &str) -> std::fmt::Result {
+        if self.short || self.s.try_reserve(x.len()).is_err() {
+            self.short = true;
+            return Err(std::fmt::Error);
+        }
+        self.s.push_str(x);
+        Ok(())
+    }
 }
 
 /// A status answer kept for a fast poller: when it was made, with or
