@@ -57,7 +57,7 @@ use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi,
 };
 use log::{info, warn};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -80,9 +80,15 @@ static LAST_DROP_S: AtomicU32 = AtomicU32::new(u32::MAX);
 /// and the driver restarts this run ([`WifiManager::reset_driver`]).
 static LAST_REASON: AtomicU32 = AtomicU32::new(0);
 static RESETS: AtomicU32 = AtomicU32::new(0);
-/// A leave of our own was asked for (`esp_wifi_disconnect`, a stop): its
-/// disconnect (`WIFI_REASON_ASSOC_LEAVE`) is not the attempt's reason.
-static OWN_LEAVE: AtomicBool = AtomicBool::new(false);
+/// When (uptime ms, 0: none) a leave of our own was asked for
+/// (`esp_wifi_disconnect`, a stop): a disconnect with
+/// `WIFI_REASON_ASSOC_LEAVE` within [`OWN_LEAVE_MS`] of it is ours, not the
+/// attempt's reason. A window, not a flag: our leave of an attempt the
+/// driver had already failed brings no event, and a flag left set would
+/// swallow a later genuine one; the event of one that does come may be
+/// handled after the blocking disconnect has returned.
+static OWN_LEAVE: AtomicU32 = AtomicU32::new(0);
+const OWN_LEAVE_MS: u32 = 2_000;
 /// `wifi_err_reason_t`s kept here.
 const REASON_ASSOC_LEAVE: u32 = esp_idf_sys::wifi_err_reason_t_WIFI_REASON_ASSOC_LEAVE;
 const REASON_NO_AP_FOUND: u32 = esp_idf_sys::wifi_err_reason_t_WIFI_REASON_NO_AP_FOUND;
@@ -105,7 +111,12 @@ fn begin_try() {
 /// A leave of our own is next (its disconnect's reason is ours, not the
 /// network's).
 fn own_leave() {
-    OWN_LEAVE.store(true, Relaxed);
+    OWN_LEAVE.store(now_ms().max(1), Relaxed);
+}
+
+fn now_ms() -> u32 {
+    // SAFETY: an argument-free read of the IDF's microsecond clock.
+    (unsafe { esp_idf_sys::esp_timer_get_time() } / 1000) as u32
 }
 
 /// `WIFI_EVENT_STA_DISCONNECTED`, on the system event task: the reason
@@ -120,8 +131,11 @@ unsafe extern "C" fn on_disconnect(
         // SAFETY: the event's data is the driver's own disconnect record.
         let ev = unsafe { &*(data as *const esp_idf_sys::wifi_event_sta_disconnected_t) };
         let reason = ev.reason as u32;
-        if reason == REASON_ASSOC_LEAVE && OWN_LEAVE.swap(false, Relaxed) {
-            return;
+        if reason == REASON_ASSOC_LEAVE {
+            let at = OWN_LEAVE.swap(0, Relaxed);
+            if at != 0 && now_ms().wrapping_sub(at) < OWN_LEAVE_MS {
+                return;
+            }
         }
         LAST_REASON.store(reason, Relaxed);
     }

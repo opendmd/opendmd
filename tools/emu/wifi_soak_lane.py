@@ -77,7 +77,7 @@ RESTART = re.compile(r"restarting to rejoin")
 # ~25 B a try, well over the heap's own jitter with playback paused.
 SLOPE_MAX = 8.0
 DRIFT_MAX = 512
-TIGHT_MS_S = 150  # wifi_soak::TIGHT_MS
+TIGHT_MS_S = 150  # wifi_soak::TIGHT_MS (and STUCK_MS)
 
 
 def slope(points):
@@ -239,6 +239,10 @@ def run(a, sim, rom, fail_rx) -> int:
             raise LaneFail("boot 2: the setup network for a network not found")
         if emu.find(HOUR, r2, bb):
             raise LaneFail("boot 2: a second hour's restart in the same outage")
+        # The short hour was set from boot 2's start: down past it, the outage spent, no restart.
+        up_ms = int(re.search(r"\((\d+)\)", emu.lines[bb])[1])
+        if up_ms < TIGHT_MS_S * 1000 + 10_000:
+            raise LaneFail(f"boot 2: back at {up_ms} ms, before the short hour ({TIGHT_MS_S} s) could have fired")
         st = api.wait_up(120)
         last = (st.get("restarts") or [{}])[0]
         if last.get("reason") != "wifi_stuck":

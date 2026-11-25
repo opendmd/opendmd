@@ -180,6 +180,7 @@ impl Reconnect {
 
     /// [`DOWN_STUCK_MS`] made `ms` (an emulator lane's short outage); kept
     /// across [`Reconnect::connected`].
+    #[cfg(any(test, feature = "soak-test"))]
     pub fn set_down_stuck_ms(&mut self, ms: u32) {
         self.down_stuck_ms = ms;
     }

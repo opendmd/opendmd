@@ -27,6 +27,9 @@ serde_json = "1"
 opendmd-psi = { path = "../opendmd-psi" }
 
 [features]
+# The firmware's emulator WiFi soak lane (`emu-wifi-soak`): a short hour
+# for `wifi_reconnect`'s restart. Never in a release.
+soak-test = []
 # The ESP32 build with SRAM1 as IRAM (opendmd-psi's `sram1-iram`): more hot
 # functions in IRAM.
 sram1-iram = ["opendmd-psi?/sram1-iram"]

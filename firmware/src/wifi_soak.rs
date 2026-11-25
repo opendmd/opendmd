@@ -34,8 +34,10 @@
 //!    [`STUCK_MS`] (`Reconnect::set_down_stuck_ms`), and the next boot told
 //!    (RTC memory) to look for the name nobody answers to: the `wifi_stuck`
 //!    restart; boot 2 does not find the network, so it reconnects without
-//!    the setup network; after [`BOOT2_TRIES`] tries the name is given
-//!    back and it rejoins (`boot 2 back`).
+//!    the setup network, and with the short hour set from its start it is
+//!    not restarted again (the outage spent); after [`BOOT2_TRIES`] tries,
+//!    past the short hour, the name is given back and it rejoins
+//!    (`boot 2 back`).
 //! 8. `stuck 2`: a wrong password and a short hour again, the next boot
 //!    told to join with it: the `wifi_stuck` restart; boot 3 finds the
 //!    network and is refused, so it raises the setup network, as any boot
@@ -65,7 +67,9 @@ pub const TIGHT_MS: u32 = 150_000;
 /// The hour's restart in the `stuck` steps.
 pub const STUCK_MS: u32 = 150_000;
 /// Boot 2's reconnect tries before the name is given back.
-pub const BOOT2_TRIES: u32 = 3;
+/// Past [`STUCK_MS`] (~17 s a try): the short hour set from boot 2's start
+/// would have restarted it, were the outage not spent.
+pub const BOOT2_TRIES: u32 = 12;
 
 /// What the next boot joins with (`[MAGIC, stage]`, RTC slow memory: kept
 /// across a restart, lost at a power-on; plain word loads and stores).
@@ -299,7 +303,8 @@ pub fn tick(
 /// to): the name given back after [`BOOT2_TRIES`] tries, then `stuck 2`.
 fn boot2(ssid: &mut String, password: &mut String, again: &mut Reconnect, up: bool) {
     match STEP.load(Relaxed) {
-        0 if crate::wifi::reconnect_tries() >= BOOT2_TRIES => {
+        0 if crate::wifi::reconnect_tries() < BOOT2_TRIES => again.set_down_stuck_ms(STUCK_MS),
+        0 => {
             let n = ssid.len() - AWAY.len();
             ssid.truncate(n);
             log::info!("wifi-soak: boot 2: {BOOT2_TRIES} tries; the reconnect looks for '{ssid}' again");
