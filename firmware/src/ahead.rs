@@ -62,6 +62,11 @@ counters!(
     SLICE_WAITS,
 );
 
+/// `emu-census` builds: the next file's decoder ready ahead (each tick,
+/// [`guard`]), the census's steady point (`net_worker`).
+#[cfg(feature = "emu-census")]
+pub static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// When the linger under way began (`uclock::now_us`, low bits; 0: none).
 static LINGER_AT: AtomicU32 = AtomicU32::new(0);
 
@@ -93,6 +98,8 @@ pub fn guard(eng: &mut Engine) {
             LINGER_OUT.fetch_add(1, Relaxed);
         }
     }
+    #[cfg(feature = "emu-census")]
+    READY.store(eng.ahead_ready(), Relaxed);
     let held = eng.ahead_path().is_some_and(|(_, open)| open);
     let errors = crate::sdhealth::errors_seen();
     if ERRORS.swap(errors, Relaxed) != errors && held {

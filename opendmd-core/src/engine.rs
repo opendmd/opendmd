@@ -1739,6 +1739,12 @@ impl Engine {
         })
     }
 
+    /// The next file's decoder is ready (its header read, its tables
+    /// allocated: the most a step ahead holds).
+    pub fn ahead_ready(&self) -> bool {
+        self.ahead.next.as_ref().is_some_and(|n| matches!(n.file, AheadFile::Ready(_)))
+    }
+
     /// Counts of the files made ready ahead, used and dropped.
     pub fn ahead_stats(&self) -> AheadStats {
         self.ahead.stats
