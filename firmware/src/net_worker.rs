@@ -487,6 +487,7 @@ fn run(worker: NetWorker) {
         crate::fatidx::tick();
         crate::heapmap::cp_if_moved("fat index tick first took heap", before);
         crate::netstat::tick();
+        crate::http::status_cache_tick();
         #[cfg(feature = "emu-census")]
         census();
 

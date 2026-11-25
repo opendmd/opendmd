@@ -3417,8 +3417,23 @@ struct KeptStatus {
 }
 
 /// The last status answer, kept only while reads come faster than
-/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale).
+/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale, or
+/// by [`status_cache_tick`] when no read comes).
 static STATUS_LAST: std::sync::Mutex<Option<KeptStatus>> = std::sync::Mutex::new(None);
+
+/// A kept status answer (~5 KB) once stale, freed: the next read freed it
+/// before, so a client that stopped polling (the web app closed, the
+/// emulator's load rounds over) left it held until another came, and the
+/// API lane's heap census saw ~5.3 KB more after a load round whose last
+/// read was a fast one. From the network worker's loop (about once a
+/// second); never waits for a read in hand.
+pub fn status_cache_tick() {
+    if let Ok(mut last) = STATUS_LAST.try_lock() {
+        if last.as_ref().is_some_and(|k| k.at.elapsed() >= STATUS_CACHE) {
+            *last = None;
+        }
+    }
+}
 
 /// When the last status read came (no heap: an `Instant`).
 static STATUS_READ: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
