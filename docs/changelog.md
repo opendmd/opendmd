@@ -20,7 +20,7 @@ it can be written ahead. Write for a panel's owner: GIFs, Formulas, playlists,
 the web app. No internals.
 -->
 
-## 1.1.0-beta.4 · 2026-11-20
+## 1.1.0-beta.4 · 2026-11-26
 
 Short GIFs play once, Remote control no longer switches itself off after
 power dips, and the panel copes better with WiFi drops and low memory.
