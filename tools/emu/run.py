@@ -52,6 +52,10 @@ wifi-soak: (an `emu-wifi-soak` image, make emu-wifi-soak) on the virtual AP in i
        oom: the network kept away from the station (failing pinned connects, then a name nobody
        answers to), the heap per try, the driver restarts and the rejoin (tools/emu/wifi_soak_lane.py);
        EMU_WIFI_SOAK_OK.
+outage: (a `wifi-outage-test` image, make emu-outage) the hardware outage test's hook, as wifi-soak:
+       two outages asked for over PUT /api/config (five minutes; five with a two-minute hour, its
+       wifi_stuck restart and the boot after it), playback throughout (tools/emu/outage_lane.py);
+       EMU_OUTAGE_OK.
 --chip s3: the ESP32-S3 preview image (VARIANT=s3) in esp32sim's S3 machine (`--chip s3 --board none`,
        8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF), the card on SPI3 through the GPIO matrix at the S3
        firmware's pins (`--sd-spi 39,40,41,21`, SCLK, MOSI, MISO, CS): smoke and nocard run as on the
@@ -239,7 +243,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom", "wifi-soak"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom", "wifi-soak", "outage"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -309,7 +313,7 @@ def main():
         return api(a, sim, rom, want_sha)
     if a.mode == "offline":
         return offline(a, sim, rom, want_sha)
-    if a.mode in ("oom", "wifi-soak"):
+    if a.mode in ("oom", "wifi-soak", "outage"):
         return oom(a, sim, rom, want_sha)
     if a.mode == "power-safe":
         if a.chip != "s3":
@@ -782,6 +786,9 @@ def oom(a, sim, rom, want_sha):
     if a.mode == "oom":
         import oom_lane as lane
         sub, tag = "oom", "EMU_OOM"
+    elif a.mode == "outage":
+        import outage_lane as lane
+        sub, tag = "outage", "EMU_OUTAGE"
     else:
         import wifi_soak_lane as lane
         sub, tag = "wifisoak", "EMU_WIFI_SOAK"

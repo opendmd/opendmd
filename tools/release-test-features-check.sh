@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # No test-only firmware feature in a release's app image: the emulator lanes'
-# hooks (nocard-test, emu-ballast, emu-census, emu-oom-test, emu-wifi-soak) each log a line
-# no other build has, so its text in the image means the feature is in it.
+# and hardware tests' hooks (nocard-test, emu-ballast, emu-census,
+# emu-oom-test, emu-wifi-soak, wifi-outage-test) each log a line no other
+# build has, so its text in the image means the feature is in it.
 # The Makefile refuses them in a build into dist/ (FW_TEST_ONLY_GUARD) and
 # tools/release.sh clears FW_RELEASE_FEATURES; this checks the image itself.
 # Run by release.yml (on whichever dist/ it checks) and tools/release.sh
@@ -18,6 +19,7 @@ set -euo pipefail
 MARKERS=(
   "emu-oom-test" "oom-test: "
   "emu-wifi-soak" "wifi-soak: "
+  "wifi-outage-test" "wifi-outage: "
   "nocard-test" "nocard-test: "
   "emu-census" "census: "
   "emu-ballast" "ballast: "

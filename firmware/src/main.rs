@@ -97,6 +97,8 @@ mod nocard_test;
 mod oom_test;
 #[cfg(feature = "emu-wifi-soak")]
 mod wifi_soak;
+#[cfg(feature = "wifi-outage-test")]
+mod outage_test;
 mod settings_card;
 mod sdhealth;
 mod show;

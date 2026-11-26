@@ -49,6 +49,11 @@ emu-oom-test = []
 # name nobody answers to), the heap watched per try, the driver restarts
 # and the way back. Never in a release.
 emu-wifi-soak = ["opendmd-core/soak-test"]
+# A WiFi outage on real hardware on request (src/outage_test.rs): a dev
+# field of PUT /api/config, `wifi_outage_s`, has the station look for a
+# name nobody answers to for that long (live only, the saved details never
+# touched). Never in a release.
+wifi-outage-test = ["opendmd-core/soak-test"]
 # The components a build can leave out (opendmd-notes docs/notes/firmware-build.md
 # "Feature flags"): all on by default, releases included; the Makefile's
 # FW_DISABLE=<name>[,<name>] builds without (`/api/status` and

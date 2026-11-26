@@ -891,7 +891,7 @@ FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEA
 # (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
 # emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
 # and tools/release-test-features-check.sh checks the image for their text.
-FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test emu-wifi-soak connect-test dev-credentials bench
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test emu-wifi-soak wifi-outage-test connect-test dev-credentials bench
 FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
@@ -1521,6 +1521,18 @@ emu-oom: emu-build emu-card
 # network found, every handshake failing), then the way back. Fails if the tries
 # keep heap (a slope over them), or the driver restarts or the rejoin do
 # not come. A test image, never a release. EMU_WIFI_SOAK_OK.
+# The hardware WiFi outage test's hook in the emulator (tools/emu/outage_lane.py):
+# a `wifi-outage-test` image (src/outage_test.rs), two outages asked for over
+# PUT /api/config, the second with a short hour (its wifi_stuck restart and
+# the boot after it). A test image, never a release. EMU_OUTAGE_OK.
+EMU_OUTAGE_IMAGE = $(EMU_DIR)/outage/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-outage:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=wifi-outage-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/outage/target DIST=$(EMU_DIR)/outage/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-outage: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-outage &&) \
+	uv run --quiet tools/emu/run.py outage --image $(or $(FW_IMAGE),$(EMU_OUTAGE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
 EMU_WIFI_SOAK_IMAGE = $(EMU_DIR)/wifisoak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-wifi-soak:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web

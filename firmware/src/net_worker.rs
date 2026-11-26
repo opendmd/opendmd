@@ -357,6 +357,8 @@ fn run(worker: NetWorker) {
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
     #[cfg(feature = "emu-wifi-soak")]
     let (ssid, password) = crate::wifi_soak::boot_login(ssid, password);
+    #[cfg(feature = "wifi-outage-test")]
+    let ssid = crate::outage_test::boot_login(ssid);
     let Some(mut net) = start(modem, sysloop, nvs, ssid, password, eap, hostname, status, save_settings, save_cmd) else {
         return;
     };
@@ -512,6 +514,12 @@ fn run(worker: NetWorker) {
         crate::oom_test::tick(&mut net.wifi, &net.save_cmd);
         #[cfg(feature = "emu-wifi-soak")]
         crate::wifi_soak::tick(&mut net.wifi, &mut net.ssid, &mut net.password, &mut net.again, &net.save_cmd);
+        #[cfg(feature = "wifi-outage-test")]
+        {
+            let joined = net.wifi.state() == WifiState::Connected && net.wifi.is_associated();
+            let misses = net.status.lock().unwrap().deadline_misses;
+            crate::outage_test::tick(&mut net.ssid, &mut net.again, joined, misses);
+        }
     }
 }
 
@@ -1052,6 +1060,8 @@ impl Net {
             let heap = crate::wifi::heap_now();
             let step = self.again.next(uptime_ms(), self.wifi.knows(&self.ssid), heap);
             if let Step::Restart { heap: for_heap } = step {
+                #[cfg(feature = "wifi-outage-test")]
+                crate::outage_test::on_restart(for_heap);
                 error!(
                     "[net] WiFi {} (heap {} B free, largest block {} B, {} tries, {} driver restarts, last disconnect reason {}): restarting to rejoin",
                     if for_heap { "held down by the heap for 10 min" } else { "down for an hour" },
@@ -1095,6 +1105,8 @@ impl Net {
                 // Done, whatever the round does next (a round that gives way
                 // to the installer is not failed, and is not reset again).
                 self.again.reset_done();
+                #[cfg(feature = "wifi-outage-test")]
+                crate::outage_test::on_reset(self.again.rounds());
             }
             let joined = match step {
                 Step::Direct => self.wifi.connect_direct(&self.ssid, &self.password, self.eap.as_ref()),

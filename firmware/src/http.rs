@@ -947,6 +947,13 @@ pub struct ConfigPatch {
     /// Dev: where upload pacing starts, % of a Formula's frame time
     /// (`pace`); live only, never saved.
     pub(crate) pace_on_pct: Option<u32>,
+    /// Test builds only (`outage_test`): a WiFi outage this many seconds
+    /// long (1..7200), and the hour's restart made this long (60..3600);
+    /// live only, never saved. A request with it changes nothing else.
+    #[cfg(feature = "wifi-outage-test")]
+    pub(crate) wifi_outage_s: Option<u32>,
+    #[cfg(feature = "wifi-outage-test")]
+    pub(crate) wifi_outage_hour_s: Option<u32>,
     /// `true` keeps the trial (with `panel`: saved without one), `false`
     /// undoes it.
     pub(crate) panel_confirm: Option<bool>,
@@ -3631,6 +3638,16 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
         (patch.lat, patch.lon) = (hundredths(&body, b"\"lat\""), hundredths(&body, b"\"lon\""));
+        // The outage test: taken as it is, nothing else applied or saved.
+        #[cfg(feature = "wifi-outage-test")]
+        if let Some(s) = patch.wifi_outage_s {
+            let hour = patch.wifi_outage_hour_s.unwrap_or(0);
+            if !(1..=7200).contains(&s) || !(hour == 0 || (60..=3600).contains(&hour)) {
+                return req.bad_request("wifi_outage_s: 1..7200 s; wifi_outage_hour_s: 60..3600 s");
+            }
+            crate::outage_test::request(s, hour);
+            return req.ok("application/json", br#"{"ok":true,"wifi_outage":"starting"}"#);
+        }
         // On the open setup network: the WiFi, the name and the key, and
         // nothing else (`opendmd_core::access::SETUP_CONFIG_KEYS`).
         if crate::httpd::setup_mode() {
