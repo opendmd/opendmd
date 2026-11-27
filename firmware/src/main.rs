@@ -576,7 +576,7 @@ fn main() -> Result<()> {
     #[cfg(feature = "psi")]
     card_formulas::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
     // Where the in-order playlists left off (`resume`).
-    resume::boot(reset == opendmd_core::restarts::Reset::PowerOn);
+    resume::boot(reset == opendmd_core::restarts::Reset::PowerOn, reset.is_crash());
     heapmap::cp("restarts + fatidx boot");
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();
@@ -2479,7 +2479,7 @@ fn main() -> Result<()> {
                         _ => false,
                     };
                     log_started(playing.ordinal, &playing.path, served);
-                    resume::started(playing.index, &playing.path);
+                    resume::started(playing.index, &playing.path, eng.in_order());
                     misslog::switched();
                     probe::switch_frame(tick_us, eng.started_ahead());
                 }
@@ -3481,7 +3481,7 @@ fn engine_over(
     engine.set_overrides(overrides);
     // In order: on after the entry of this playlist that last started
     // (`resume`), looked for by the main loop before the first tick.
-    resume::building(list);
+    resume::building(list, &settings.platforms);
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
     // A turn that ends before its next file could be opened ahead (a GIF
@@ -3500,15 +3500,22 @@ fn engine_over(
 /// either side (`Engine::resume_at`), at most 17 catalog reads, once.
 #[inline(never)]
 fn resume_engine(eng: &mut Engine) {
-    let Some(mark) = resume::pending() else {
+    let Some((mark, step)) = resume::pending() else {
         return;
     };
     let t = uclock::now_us();
-    if let Some(at) = eng.resume_at(&mark) {
+    if let Some(at) = eng.resume_at(&mark, step) {
+        use opendmd_core::resume::Step;
+        let how = match (at.found, step) {
+            _ if at.failed => "a read failed: its place",
+            (Some(_), Step::Next) => "after the last",
+            (Some(_), Step::Replay) => "the last again, it was up briefly",
+            (Some(_), Step::Over) => "one past the last, after 2 crash boots",
+            (None, _) => "the last gone: its place",
+        };
         log::info!(
-            "resume: in order at entry {} ({}, {} read in {} us)",
+            "resume: in order at entry {} ({how}, {} read in {} us)",
             at.next,
-            if at.found.is_some() { "after the last" } else { "the last gone: its place" },
             at.probes,
             uclock::since(t)
         );

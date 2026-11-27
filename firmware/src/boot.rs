@@ -181,6 +181,7 @@ fn publish(
         }
         id
     });
+    crate::resume::set_card(card_id.as_deref());
     let mut s = status.lock().unwrap();
     s.sd_mounted = card.is_some();
     s.sd_readable = card.is_some() && readable;

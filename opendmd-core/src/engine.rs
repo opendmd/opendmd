@@ -1190,20 +1190,27 @@ impl Engine {
     }
 
     /// Continue an in-order playlist where `mark` says it left off
-    /// ([`crate::resume`]): the scheduler's next draw is the entry after the
-    /// mark's, looked for within [`resume::WINDOW`] of its old index (at
-    /// most `2 * WINDOW + 1` catalog reads), else the mark's old position
-    /// clamped to the catalog. For an engine just built, before its first
-    /// tick. Nothing for a shuffle or an empty catalog.
-    pub fn resume_at(&mut self, mark: &resume::Mark) -> Option<resume::Located> {
+    /// ([`crate::resume`]): the scheduler's next draw is `step` on from the
+    /// mark's entry, looked for within [`resume::WINDOW`] of its old index
+    /// (at most `2 * WINDOW + 1` catalog reads, none after one that fails),
+    /// else at the mark's old position, or the top when the catalog no
+    /// longer reaches it. A pick made ahead is dropped. Nothing for a
+    /// shuffle or an empty catalog.
+    pub fn resume_at(&mut self, mark: &resume::Mark, step: resume::Step) -> Option<resume::Located> {
         if self.scheduler.mode() != Mode::Sequential {
             return None;
         }
-        let at = resume::locate(&mut *self.catalog, mark, resume::WINDOW)?;
+        let at = resume::locate(&mut *self.catalog, mark, resume::WINDOW, step)?;
         // A pick made ahead came from the old cursor.
         self.ahead.take_pick();
         self.scheduler.start_at(at.next);
         Some(at)
+    }
+
+    /// Whether the order is the playlist's own (not a shuffle): only then
+    /// is a start the playlist's place ([`crate::resume`]).
+    pub fn in_order(&self) -> bool {
+        self.scheduler.mode() == Mode::Sequential
     }
 
     /// Drop the file on screen now — its decoder, buffers and handle — and
@@ -5597,6 +5604,8 @@ mod tests {
 
     // -- resuming an in-order playlist (crate::resume) -------------------------
 
+    use resume::Step::Next;
+
     fn gif_list(n: usize) -> Vec<String> {
         (0..n).map(|i| format!("/gifs/T/T_G{i}_01.gif")).collect()
     }
@@ -5647,14 +5656,14 @@ mod tests {
         assert_eq!(starts(&mut e, 4), paths[..4]);
         let m = mark_of(&e);
         let mut e = in_order(&paths, Mode::Sequential);
-        let at = e.resume_at(&m).unwrap();
+        let at = e.resume_at(&m, Next).unwrap();
         assert_eq!((at.found, at.probes), (Some(3), 1));
         assert_eq!(starts(&mut e, 3), paths[4..7]);
         // `ordinal` keeps its meaning: starts since this engine was built.
         assert_eq!(e.now_playing().unwrap().ordinal, 3);
         // Wrapping at the end.
         let mut e = in_order(&paths, Mode::Sequential);
-        e.resume_at(&resume::Mark { index: 9, entry: resume::path_hash(&paths[9]), ..m });
+        e.resume_at(&resume::Mark { index: 9, entry: resume::path_hash(&paths[9]), ..m }, Next);
         assert_eq!(starts(&mut e, 2), [paths[0].clone(), paths[1].clone()]);
     }
 
@@ -5669,13 +5678,13 @@ mod tests {
         grown.insert(1, "/gifs/T/T_New_01.gif".into());
         grown.insert(1, "/gifs/T/T_New_02.gif".into());
         let mut e = in_order(&grown, Mode::Sequential);
-        assert_eq!(e.resume_at(&m).unwrap().found, Some(7));
+        assert_eq!(e.resume_at(&m, Next).unwrap().found, Some(7));
         assert_eq!(starts(&mut e, 2), paths[6..8]);
         // And two appended at the end (adding to a playlist): not moved.
         let mut grown = paths.clone();
         grown.extend(["/gifs/T/T_New_01.gif".into(), "/gifs/T/T_New_02.gif".into()]);
         let mut e = in_order(&grown, Mode::Sequential);
-        assert_eq!(e.resume_at(&m).unwrap().probes, 1);
+        assert_eq!(e.resume_at(&m, Next).unwrap().probes, 1);
         assert_eq!(starts(&mut e, 1), paths[6..7]);
     }
 
@@ -5689,27 +5698,27 @@ mod tests {
         let mut fewer = paths.clone();
         fewer.remove(4);
         let mut e = in_order(&fewer, Mode::Sequential);
-        assert_eq!(e.resume_at(&m).unwrap().found, None);
+        assert_eq!(e.resume_at(&m, Next).unwrap().found, None);
         assert_eq!(starts(&mut e, 2), paths[5..7]);
     }
 
     #[test]
-    fn a_list_shrunk_below_the_position_is_clamped() {
+    fn a_list_shrunk_below_the_position_starts_at_the_top() {
         let paths = gif_list(10);
         let mut e = in_order(&paths, Mode::Sequential);
         starts(&mut e, 9);
         let m = mark_of(&e);
         let other = gif_list(20)[12..15].to_vec();
         let mut e = in_order(&other, Mode::Sequential);
-        assert_eq!(e.resume_at(&m).unwrap().next, 2);
-        assert_eq!(starts(&mut e, 2), [other[2].clone(), other[0].clone()]);
+        assert_eq!(e.resume_at(&m, Next).unwrap().next, 0);
+        assert_eq!(starts(&mut e, 2), other[..2], "not the last entry again");
         // One entry, and none.
         let one = gif_list(1);
         let mut e = in_order(&one, Mode::Sequential);
-        assert_eq!(e.resume_at(&m).unwrap().next, 0);
+        assert_eq!(e.resume_at(&m, Next).unwrap().next, 0);
         assert_eq!(starts(&mut e, 2), [one[0].clone(), one[0].clone()]);
         let mut e = in_order(&[], Mode::Sequential);
-        assert_eq!(e.resume_at(&m), None);
+        assert_eq!(e.resume_at(&m, Next), None);
     }
 
     #[test]
@@ -5728,10 +5737,10 @@ mod tests {
         note(&mut marks, &e, kb);
         // ...and back: A goes on after its third, B is remembered too.
         let mut e = in_order(&a, Mode::Sequential);
-        e.resume_at(&marks.get(ka).unwrap());
+        e.resume_at(&marks.get(ka).unwrap(), Next);
         assert_eq!(starts(&mut e, 2), a[3..5]);
         let mut e = in_order(&b, Mode::Sequential);
-        e.resume_at(&marks.get(kb).unwrap());
+        e.resume_at(&marks.get(kb).unwrap(), Next);
         assert_eq!(starts(&mut e, 1), b[4..5]);
     }
 
@@ -5747,14 +5756,30 @@ mod tests {
         let words = marks.encode();
         let back = resume::Marks::decode(&words);
         let mut e = in_order(&paths, Mode::Sequential);
-        e.resume_at(&back.get(key).unwrap());
+        e.resume_at(&back.get(key).unwrap(), Next);
         assert_eq!(starts(&mut e, 1), paths[7..8]);
-        // A torn or garbage record: no mark, the list starts at the top.
+        // A torn record: a reset in the middle of rewriting the slot for a
+        // later start (its first two words the new mark's, the rest the
+        // old one's). Decoded as the firmware does at boot: no mark, the
+        // list starts at the top.
+        let mut later = resume::Marks::default();
+        later.note(resume::Mark { index: 8, entry: resume::path_hash(&paths[8]), ..mark_of(&e) });
+        let new_words = later.encode();
         let mut torn = words;
-        torn[0][1] ^= 0x40;
-        assert_eq!(resume::Marks::decode(&torn).get(key), None);
+        torn[0][..2].copy_from_slice(&new_words[0][..2]);
+        assert_ne!(torn, words);
+        assert_ne!(torn, new_words);
         let mut e = in_order(&paths, Mode::Sequential);
+        if let Some(m) = resume::Marks::decode(&torn).get(key) {
+            e.resume_at(&m, Next);
+        }
         assert_eq!(starts(&mut e, 1), paths[..1]);
+        // Replayed, and stepped over, from a good one.
+        for (step, want) in [(resume::Step::Replay, 6), (resume::Step::Over, 8)] {
+            let mut e = in_order(&paths, Mode::Sequential);
+            e.resume_at(&back.get(key).unwrap(), step);
+            assert_eq!(starts(&mut e, 1), paths[want..want + 1], "{step:?}");
+        }
     }
 
     #[test]
@@ -5769,17 +5794,27 @@ mod tests {
         let mut s = in_order(&paths, Mode::Shuffle);
         let plain = starts(&mut s, 5);
         let mut s = in_order(&paths, Mode::Shuffle);
-        assert_eq!(s.resume_at(&m), None);
+        assert_eq!(s.resume_at(&m, Next), None);
         assert_eq!(starts(&mut s, 5), plain);
         // In order: the pick made ahead, given back, is drawn again; a skip
         // moves on in order from there.
         let mut e = in_order(&paths, Mode::Sequential);
-        e.resume_at(&m);
+        e.resume_at(&m, Next);
         assert_eq!(e.ahead_step(), Some(AheadOutcome::Picked));
         assert_eq!(e.ahead_path().map(|(p, _)| p.to_string()), Some(paths[5].clone()));
         e.drop_ahead();
         assert_eq!(starts(&mut e, 1), paths[5..6]);
         e.skip();
         assert_eq!(starts(&mut e, 1), paths[6..7]);
+        // A pick already made ahead when the place is set: dropped, the
+        // place plays, not the pick.
+        let mut e = in_order(&paths, Mode::Sequential);
+        assert_eq!(e.ahead_step(), Some(AheadOutcome::Picked));
+        assert_eq!(e.ahead_path().map(|(p, _)| p.to_string()), Some(paths[0].clone()));
+        e.resume_at(&m, Next);
+        assert_eq!(e.ahead_path(), None);
+        assert_eq!(starts(&mut e, 2), paths[5..7]);
+        assert!(e.in_order());
+        assert!(!in_order(&paths, Mode::Shuffle).in_order());
     }
 }
