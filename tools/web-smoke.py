@@ -1982,6 +1982,16 @@ def _selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
         page.select_option("#bm-folder", "\n")
         page.click("#bm-ok")
 
+    # A folder forgotten while its listing is in flight (a move answered
+    # meanwhile): the late answer is not kept as the folder's listing, so a
+    # search lists it again (a stale one made "Sel Smoke" count 12 under load).
+    slow = lambda r: (time.sleep(1), r.continue_())
+    page.route("**/api/files?dir=%2Fgifs%2FSel_B*", slow)
+    kept = page.evaluate("""async () => { const t = await import('./js/tree.js'); const p = t.listCat('Sel_B');
+        await new Promise((r) => setTimeout(r, 200)); t.forget('Sel_B'); await p;
+        return document.querySelector('#lib-list')._tree.items('Sel_B') !== undefined; }""")
+    page.unroute("**/api/files?dir=%2Fgifs%2FSel_B*", slow)
+    check(not kept, "selection: a listing answered after its folder was forgotten is not kept")
     page.click("#lib-select")
     search("Sel Smoke", 6)
     page.click("#lib-all")

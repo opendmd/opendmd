@@ -46,16 +46,23 @@ function needs(tags, again) {
 // A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
 export function listCat(c) {
   const dir = `/gifs/${c}`;
-  if (!lists.has(c)) lists.set(c, listOr(dir).then((fs) => {
-    const l = fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
-      const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
-      return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
-    }).sort(cmp);
-    got.set(c, l);
-    counts()[c] = l.length;
-    store.set(countsFor, countsOf);
-    return l;
-  }, () => { lists.delete(c); return null; }));
+  if (!lists.has(c)) {
+    const p = listOr(dir).then((fs) => {
+      const l = fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
+        const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
+        return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
+      }).sort(cmp);
+      // (Forgotten while it was being read — a move or a delete answered
+      // meanwhile —: what it read is not kept, or a search would take the
+      // folder as listed and find GIFs that have left it.)
+      if (lists.get(c) !== p) return l;
+      got.set(c, l);
+      counts()[c] = l.length;
+      store.set(countsFor, countsOf);
+      return l;
+    }, () => { if (lists.get(c) === p) lists.delete(c); return null; });
+    lists.set(c, p);
+  }
   return lists.get(c);
 }
 export function forget(c) {
