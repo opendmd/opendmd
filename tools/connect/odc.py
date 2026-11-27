@@ -63,7 +63,7 @@ ADD_MAC_DOMAIN = b"opendmd add v1"
 CONFIRM_DOMAIN = b"opendmd confirm v1"
 
 ALLOWED = (
-    "play", "next", "prev", "pause", "brightness", "playlist", "playlists",
+    "play", "next", "prev", "pause", "brightness", "playlist", "playlists", "formulas",
     "send", "send-cancel", "controllers", "add-controller", "remove-controller", "name",
 )
 
@@ -517,7 +517,7 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
         if not remote_play_path_ok(p):
             raise Bad("bad-arg")
         return c, {"path": p}
-    if c in ("next", "prev", "pause", "playlists", "controllers"):
+    if c in ("next", "prev", "pause", "playlists", "formulas", "controllers"):
         return c, {}
     if c == "brightness":
         v = a.get("v")
@@ -620,6 +620,31 @@ class Session:
         except Bad as e:
             raise no(str(e)) from None
         return k, n, c, args
+
+
+# What an ack adds around its result (t, a key id, the largest n, ok): a
+# bounded result (playlists, formulas) takes at most RESULT_ROOM bytes.
+ACK_OVERHEAD = 100
+RESULT_ROOM = MAX_TEXT_OUT - ACK_OVERHEAD
+
+
+def formulas_result(builtin, card, cut: bool = False) -> dict:
+    """`formulas`'s result (opendmd_core::connect::proto::FormulaList):
+    {"builtin": [[stem, name], ...], "card": [[stem, name], ...] or None
+    (no card), "more": bool}. Built-in ones first, then the card's, while
+    the whole is at most RESULT_ROOM bytes; the first that does not fit and
+    every one after it are left out, and `more` says so (as it does when
+    the panel stopped early: `cut`)."""
+    out = {"builtin": [], "card": None if card is None else [], "more": False}
+    for part, items in (("builtin", builtin), ("card", card or ())):
+        for stem, name in items:
+            out[part].append([stem, name])
+            if len(dumps(out).encode()) >= RESULT_ROOM:
+                out[part].pop()
+                out["more"] = True
+                return out
+    out["more"] = bool(cut)
+    return out
 
 
 def ack_ok(k: bytes, n: int, r=None) -> str:

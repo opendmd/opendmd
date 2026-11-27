@@ -19,7 +19,7 @@ use crate::nvs_config::Settings;
 use crate::state::{Applied, Command, PlayError, Status};
 use opendmd_core::connect::codec::hex;
 use opendmd_core::connect::keys::{key_id, Entry};
-use opendmd_core::connect::proto::{self, Accepted, Command as Remote, Refusal, MAX_TEXT_OUT};
+use opendmd_core::connect::proto::{self, Accepted, Command as Remote, Refusal};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,6 +65,11 @@ impl Client {
             Remote::Brightness { v } => self.config(k, Some(v), None),
             Remote::Playlist { set } => self.config(k, None, Some(set)),
             Remote::Playlists => self.playlists(),
+            Remote::Formulas => {
+                // (The status lock let go before the card is read.)
+                let card = self.link.status.lock().unwrap().sd_usable();
+                Ok(Some(formulas(card)))
+            }
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
                 self.last_use.iter().find(|(x, _)| x == k).map(|(_, at)| at.elapsed().as_secs())
             }))),
@@ -320,13 +325,42 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
     }
 }
 
+/// What this panel can play by reference (`formulas`): the built-in
+/// Formulas (`@formula:<stem>`, named from their compiled header), then,
+/// with a card it can read, the card's (`/formulas/<stem>.psi`,
+/// `card_formulas::remote_list`), bounded to the panel's text limit
+/// (`proto::FormulaList`). A build without Formulas plays none: two empty
+/// lists.
+#[optimize(size)]
+#[inline(never)]
+fn formulas(card: bool) -> String {
+    let mut out = proto::FormulaList::new();
+    #[cfg(feature = "psi")]
+    {
+        use opendmd_core::synth;
+        for stem in synth::bundled_names().filter(|s| proto::formula_stem_ok(s)) {
+            let name = synth::bundled(stem).and_then(synth::compiled_name).unwrap_or_else(|| synth::stem_title(stem));
+            out.push(stem, &name);
+        }
+    }
+    if !card {
+        return out.finish(false);
+    }
+    out.card();
+    #[cfg(feature = "psi")]
+    let cut = crate::card_formulas::remote_list(&mut out);
+    #[cfg(not(feature = "psi"))]
+    let cut = false;
+    out.finish(cut)
+}
+
 /// `{"sets":[…],"more":bool}`, bounded so the `ack` that carries it (its
 /// key id, `n` and the rest: under 100 B) stays inside the panel's text
 /// limit.
 #[optimize(size)]
 #[inline(never)]
 fn sets_result(names: &[String], cut: bool) -> String {
-    const ROOM: usize = MAX_TEXT_OUT - 100;
+    const ROOM: usize = proto::RESULT_ROOM;
     let mut s = String::from(r#"{"sets":["#);
     let mut more = cut;
     for (i, n) in names.iter().enumerate() {

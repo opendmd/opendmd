@@ -317,6 +317,7 @@ pub const ALLOWED: &[&str] = &[
     "brightness",
     "playlist",
     "playlists",
+    "formulas",
     "send",
     "send-cancel",
     "controllers",
@@ -394,6 +395,7 @@ pub enum Command {
     Brightness { v: u8 },
     Playlist { set: String },
     Playlists,
+    Formulas,
     Send(SendArgs),
     SendCancel { id: u32 },
     Controllers,
@@ -415,7 +417,7 @@ pub const MAX_NAME_CHARS: usize = 32;
 /// A Formula's stem in a remote play: `[a-z0-9_-]`, 1 to 64, starting with
 /// a letter or digit (so never `~sent`).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn formula_stem_ok(s: &str) -> bool {
+pub fn formula_stem_ok(s: &str) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
         && b.len() <= 64
@@ -560,6 +562,7 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             Command::Playlist { set: set.to_string() }
         }
         "playlists" => Command::Playlists,
+        "formulas" => Command::Formulas,
         "send" => Command::Send(send_args(a)?),
         "send-cancel" => Command::SendCancel { id: u32_arg(a, "id")? },
         "controllers" => Command::Controllers,
@@ -748,6 +751,100 @@ impl Session {
 }
 
 // --- Text messages -------------------------------------------------------------
+
+/// What an `ack` adds around its result `r` (`t`, a key id, the largest
+/// `n`, `ok`): under this, so a result of [`RESULT_ROOM`] bytes keeps the
+/// `ack` inside [`MAX_TEXT_OUT`].
+pub const ACK_OVERHEAD: usize = 100;
+/// The most a bounded result (`playlists`, `formulas`) may take.
+pub const RESULT_ROOM: usize = MAX_TEXT_OUT - ACK_OVERHEAD;
+
+/// `formulas`'s result, built a Formula at a time so the caller can stop
+/// reading the card once it is full:
+/// `{"builtin":[[stem,name],…],"card":[[stem,name],…]|null,"more":bool}`.
+/// The built-in Formulas first, then the card's (`null`: no card the panel
+/// can read), each a `[stem, display name]` pair, while the whole stays
+/// within [`RESULT_ROOM`]; the first that does not fit, and every one after
+/// it, is left out and `more` is true (as it is when the caller stopped
+/// early: [`FormulaList::finish`]).
+#[derive(Debug)]
+pub struct FormulaList {
+    s: String,
+    card: bool,
+    more: bool,
+}
+
+/// What closes a [`FormulaList`]'s JSON, at most.
+const FORMULAS_TAIL: &str = r#"],"more":false}"#;
+
+impl Default for FormulaList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FormulaList {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn new() -> FormulaList {
+        FormulaList { s: String::from(r#"{"builtin":["#), card: false, more: false }
+    }
+
+    /// Room for one more `[stem, name]`? False once anything was left out.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn full(&self) -> bool {
+        self.more
+    }
+
+    /// Add one; false (and `more`) if it did not fit, or an earlier one did
+    /// not: the list never skips one to fit a later, shorter one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn push(&mut self, stem: &str, name: &str) -> bool {
+        if self.more {
+            return false;
+        }
+        let mut e = String::with_capacity(stem.len() + name.len() + 8);
+        if !self.s.ends_with('[') {
+            e.push(',');
+        }
+        e.push('[');
+        push_str(&mut e, stem);
+        e.push(',');
+        push_str(&mut e, name);
+        e.push(']');
+        // The card's opening (if still to come) and the tail must fit too.
+        let later = if self.card { 0 } else { r#"],"card":["#.len() };
+        if self.s.len() + e.len() + later + FORMULAS_TAIL.len() + 1 > RESULT_ROOM {
+            self.more = true;
+            return false;
+        }
+        self.s.push_str(&e);
+        true
+    }
+
+    /// The built-in ones are in; the card's follow.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn card(&mut self) {
+        if !self.card {
+            self.s.push_str(r#"],"card":["#);
+            self.card = true;
+        }
+    }
+
+    /// The result. `cut`: the caller stopped before the card's end (its
+    /// read cap, or the card busy): `more` is true then too. A list whose
+    /// [`card`](Self::card) was never called says `"card":null`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn finish(mut self, cut: bool) -> String {
+        let more = self.more || cut;
+        if self.card {
+            self.s.push(']');
+        } else {
+            self.s.push_str(r#"],"card":null"#);
+        }
+        self.s.push_str(if more { r#","more":true}"# } else { r#","more":false}"# });
+        self.s
+    }
+}
 
 /// `ack` for an accepted command; `r`: its result as JSON, if any.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
@@ -1027,6 +1124,51 @@ mod tests {
         }
         let no_g = format!(r#"{{"t":"pair","pub":"{}","label":"phone","mac":"{}"}}"#, "ab".repeat(32), "cd".repeat(32));
         assert_eq!(parse_server_text(no_g.as_bytes()), Err(TextError::Malformed));
+    }
+
+    #[test]
+    fn formula_lists() {
+        let parse = |s: &str| json::parse(s.as_bytes()).unwrap();
+        // None on the card, no card.
+        let mut l = FormulaList::new();
+        assert!(l.push("fire", "Fire") && l.push("big-clock", "Big \"clock\""));
+        l.card();
+        let r = l.finish(false);
+        assert_eq!(r, r#"{"builtin":[["fire","Fire"],["big-clock","Big \"clock\""]],"card":[],"more":false}"#);
+        let mut l = FormulaList::new();
+        l.push("fire", "Fire");
+        let r = l.finish(false);
+        assert_eq!(r, r#"{"builtin":[["fire","Fire"]],"card":null,"more":false}"#);
+        assert!(parse(&r).get("card").is_some_and(|c| matches!(c, Value::Null)));
+        // A cut by the caller says more.
+        let mut l = FormulaList::new();
+        l.card();
+        assert_eq!(l.finish(true), r#"{"builtin":[],"card":[],"more":true}"#);
+
+        // Full: the worst names JSON makes of 60 characters, until one does
+        // not fit; every later one, however short, is left out too, and the
+        // ack that carries it fits the panel's text limit.
+        let worst = "\u{2028}".repeat(60);
+        let mut l = FormulaList::new();
+        for i in 0..10 {
+            assert!(l.push(&format!("built-{i}"), "Built in"));
+        }
+        l.card();
+        let mut n = 0;
+        while l.push(&format!("{}{n:03}", "s".repeat(61)), &worst) {
+            n += 1;
+        }
+        assert!(n > 0 && l.full());
+        assert!(!l.push("x", "X"));
+        let r = l.finish(false);
+        let ack = ack_ok(&[0xff; 8], MAX_N, Some(&r));
+        assert!(ack.len() <= MAX_TEXT_OUT, "{}", ack.len());
+        assert!(r.len() + 300 > RESULT_ROOM, "{} left unused", RESULT_ROOM - r.len());
+        let v = parse(&ack);
+        let r = v.get("r").unwrap();
+        assert_eq!(r.get("more").and_then(Value::as_bool), Some(true));
+        let Some(Value::Array(card)) = r.get("card") else { panic!() };
+        assert_eq!(card.len(), n);
     }
 
     #[test]

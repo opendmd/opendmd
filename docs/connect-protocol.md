@@ -275,7 +275,7 @@ to the sockets of key `k`.
 
 **Acks are not authenticated.** The panel does not sign them, so a
 hostile server can fake an `ok`, a `controllers` list or a `playlists`
-result, or drop a real one; it still cannot make the panel do anything.
+or `formulas` result, or drop a real one; it still cannot make the panel do anything.
 And a signed command the server withholds stays valid until that key's
 next command in the same session (or the session ends): the server can
 delay a command, never forge or repeat one. Both are accepted for P1.
@@ -299,12 +299,49 @@ for anything else. At compile time no name in it may contain any of
 | `brightness` | `v` | an integer, 0 to the panel's `max_brightness` | `ApplyConfig` |
 | `playlist` | `set` | `""` (the main list) or one name of at most 64 bytes: no `/`, `\`, `..`, control character, leading `.` or trailing `.` or space | `ApplyConfig`; `ack` may say `pending` |
 | `playlists` | none | | `r`: the `/sets` listing, bounded to fit the panel's 2,048-byte text limit |
+| `formulas` | none | | `r`: the Formulas this panel can play by reference, built in and on its card, bounded to fit the panel's 2,048-byte text limit (5.6) |
 | `send` | `id, name, size, sha256, copy_size, copy_sha256, play` | section 8 | a transfer |
 | `send-cancel` | `id` | | |
 | `controllers` | none | | `r`: `[{k, label, f, added, added_by, last_s}]` |
 | `add-controller` | `pub`, `label` | only from a key with `can_add` (else `not-allowed`); a usable key not on the list; a label that survives cleaning; `quota` when the list has 8 | stored with no flags; `keys` follows |
 | `remove-controller` | `k` | a key on the list; any paired key may remove any key, itself included | removed; `keys` follows; the server closes its sockets |
 | `name` | `name` | at most 32 characters after cleaning | stored; `info` follows |
+
+### 5.6 `formulas`
+
+What a controller can offer to `play`, as the panel itself knows it (a
+panel up to 1.1.0-beta.4 answers `not-allowed`: a controller then offers
+the Formulas built into that firmware from its own copy of the list):
+
+```json
+{"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
+```
+
+- `builtin`: the Formulas built into the firmware, `[stem, name]` each,
+  played as `@formula:<stem>`; `name` from its `name "…"` line, else
+  the stem's title (`big-clock` → "Big clock"). Empty in a build without
+  Formulas.
+- `card`: the card's, played as `/formulas/<stem>.psi`: each
+  `<stem>.psi` in `/formulas/` whose stem is one a remote `play` may name
+  (5.5: `[a-z0-9_-]`, 1 to 64, a letter or digit first) and whose
+  compiled `<stem>.psb` beside it is ready for this firmware (one that is
+  missing, empty, marked as not compiling, or compiled for another version
+  is left out: it would not play). `name` is the one the source's
+  `name "…"` line gave the compiled file, else the stem's title. In the
+  card directory's order: a controller sorts them. `null` when the panel
+  has no card it can read; `[]` when it has none on it.
+- **Bounded.** The result is at most 1,948 bytes (2,048 less 100 for the
+  `ack` around it). Built-in ones first, then the card's in order; the
+  first entry that would not fit, and every one after it, is left out
+  (never a later, shorter one in its place), and `more` is `true`. `more`
+  is also `true` when the panel stopped early: it looks at no more than 64
+  card Formulas per request, and stops if the card stays busy with a
+  file transfer for more than a second in all. Otherwise `more` is
+  `false` and the lists are whole.
+- The card is read the gentle way: one pass over the directory listing
+  (every entry's name at once) and, per candidate, one read of at most
+  261 bytes of its compiled file's header; nothing is written, and the
+  panel keeps playing. No list is kept between requests.
 
 ## 6. Pairing
 
@@ -476,7 +513,7 @@ server can show a controller a false state, never change the panel's.
 made from fixed strings (never use one for anything real) and, for each,
 what every implementation must compute: the id and its tag, the register
 body, the key blob and `keys` message, attach signatures, pairing and
-invite MACs (with a label that needs escaping, and one rewritten), the confirm code, version negotiation, acks, and 81 command
+invite MACs (with a label that needs escaping, and one rewritten), the confirm code, version negotiation, acks, and 82 command
 frames, each with what the panel answers (`expect`) and what the server's
 pre-check does (`server`). The cases cover the red list's single-frame
 attacks: replays, unsigned, tampered and re-serialised frames, wrong

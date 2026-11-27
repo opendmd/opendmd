@@ -182,7 +182,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack connect-mock connect-roots-check \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-connect-psb emu-image-connect \
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -1388,9 +1388,13 @@ emu-image-connect: emu-connect-certs
 	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 OPENDMD_CONNECT_PAIR_TTL_S=$(EMU_CONNECT_PAIR_TTL_S) \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
-emu-connect: emu-build emu-card
+# A card Formula for `formulas` (the host's psi build, put on the card by the lane).
+emu-connect-psb:
+	@mkdir -p $(EMU_CONNECT_DIR)/psb
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
+emu-connect: emu-build emu-card emu-connect-psb
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
-	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 $(EMU_ARGS)
+	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real

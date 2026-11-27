@@ -19,7 +19,9 @@ HTTP (the controllers' side, this script's).
 Blue: Remote control off by default; switched on over the LAN (no hold);
 registration, `hello`, `keys`, `info`; a controller attaches, watches and
 gets status; play, next, previous, pause, brightness, playlist,
-playlists, controllers, name, add-controller; the LAN routes; the panel
+playlists, formulas (the built-in ones and the card's that can play, put on
+the card over the LAN; one played by remote), controllers, name,
+add-controller; the LAN routes; the panel
 reconnecting after a server close; a refusal (4403) and a too-new close
 (4406) handled by policy; the server gone and back; pairing (the LAN
 link's window with its QR code on the panel, a guest found by `pair_id`,
@@ -487,6 +489,7 @@ class Lane:
             self.expect(r and r.get("err") == "bad-arg", "play a GIF that is not there: bad-arg", json.dumps(r))
             r = await cmd("playlists")
             self.expect(r and r.get("ok") and isinstance((r.get("r") or {}).get("sets"), list), "playlists: a bounded list", json.dumps(r)[:300])
+            await self.card_formulas(cmd)
             await asyncio.sleep(1.2)
             r = await cmd("playlist", {"set": ""})
             self.expect(r and r.get("ok"), "playlist \"\" (the main list): ok", json.dumps(r))
@@ -1376,6 +1379,62 @@ class Lane:
             self.expect(code == 200, f"the paired device {k.hex()[:6]} removed on the LAN", f"{code}")
         await asyncio.sleep(2)
 
+    def _put_bytes(self, path, data: bytes):
+        req = urllib.request.Request(self.base + "/api/files" + urllib.parse.quote(path), method="PUT", data=data,
+                                     headers={"Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    async def card_formulas(self, cmd):
+        """`formulas`: the built-in Formulas and the card's that can play.
+        Put on the card over the LAN: one ready (the host's `psi build`),
+        one with no compiled file, one compiled for another player, one
+        whose stem a remote play cannot name; only the first is listed,
+        under its `name` line, and plays by remote."""
+        psb = (Path(self.psb_dir) / "ramp.psb").read_bytes()
+        src = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes()
+        files = {
+            "/formulas/lane-ramp.psi": src, "/formulas/lane-ramp.psb": psb,
+            "/formulas/lane-raw.psi": src,
+            "/formulas/lane-old.psi": src, "/formulas/lane-old.psb": psb[:3] + bytes([psb[3] ^ 0x7f]) + psb[4:],
+            "/formulas/Lane-Upper.psi": src, "/formulas/Lane-Upper.psb": psb,
+        }
+        codes = {}
+        for path, data in files.items():
+            codes[path] = await asyncio.to_thread(self._put_bytes, path, data)
+        self.expect(all(c == 200 for c in codes.values()), "four card Formulas put on the card over the LAN", f"{codes}")
+        try:
+            await asyncio.sleep(1.2)
+            r = await cmd("formulas")
+            fr = (r or {}).get("r") or {}
+            builtin, card = fr.get("builtin") or [], fr.get("card")
+            self.expect(r and r.get("ok") and ["starfield", "Starfield"] in builtin and len(builtin) >= 5 and fr.get("more") is False,
+                        "formulas: the built-in ones, [stem, name] from their compiled headers", json.dumps(fr)[:400])
+            stems = [x[0] for x in card or []]
+            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper"} & set(stems),
+                        "formulas: the card's that can play, named by their name line; none with no compiled file, another player's, or a stem remote play refuses",
+                        json.dumps(card)[:400])
+            self.report["formulas_bytes"] = len(json.dumps(fr))
+            await asyncio.sleep(1.2)
+            r = await cmd("play", {"path": "/formulas/lane-ramp.psi"})
+            self.expect(r and r.get("ok"), "play a card Formula from the list: ack ok", json.dumps(r))
+            await self.wait("the card Formula on screen", lambda: self._playing("/formulas/lane-ramp.psi"), 120)
+            self.ok("play a card Formula: on screen")
+            await asyncio.sleep(1.2)
+            r = await cmd("play", {"path": "@formula:starfield"})
+            self.expect(r and r.get("ok"), "back to a built-in Formula", json.dumps(r))
+            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120)
+        finally:
+            for path in files:
+                await self.http("DELETE", "/api/files" + urllib.parse.quote(path))
+        await asyncio.sleep(1.2)
+        r = await cmd("formulas")
+        card = ((r or {}).get("r") or {}).get("card")
+        self.expect(isinstance(card, list) and not any(x[0].startswith("lane-") for x in card), "formulas after the card's were deleted: gone from the list", json.dumps(card)[:300])
+
     async def _moved(self, o0):
         return ((await self.status()).get("now_playing") or {}).get("ordinal") != o0
 
@@ -1406,7 +1465,7 @@ class Lane:
         return st.get("uptime_secs", 9999) < s and "connect" in st
 
 
-async def serve_and_run(emu, logs, certs: Path) -> Lane:
+async def serve_and_run(emu, logs, certs: Path, psb: Path) -> Lane:
     from aiohttp import web
 
     srv = lane_server()
@@ -1430,6 +1489,7 @@ async def serve_and_run(emu, logs, certs: Path) -> Lane:
     await asyncio.get_running_loop().create_datagram_endpoint(lambda: srv.dns, local_addr=(host_resolver(), 53))
     await web.TCPSite(runner, "127.0.0.1", CTL_PORT).start()
     lane = Lane(emu, srv, logs)
+    lane.psb_dir = psb
     try:
         await lane.run()
     finally:
@@ -1451,13 +1511,14 @@ def main():
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--certs", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
+    ap.add_argument("--psb", type=Path, required=True, help="the host's psi build of tools/emu/offline/ramp.psi, its directory")
     ap.add_argument("--rom", type=Path)
     ap.add_argument("--seconds", type=int, default=7500, help="emulated seconds at most")
     ap.add_argument("--wall", type=int, default=12600, help="wall-clock limit (s)")
     a = ap.parse_args()
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)
-    for what, p in (("emulator (make emu-build)", sim), ("image", a.image), ("card (make emu-card)", a.card), ("rom", rom), ("certs", a.certs / "chain.pem")):
+    for what, p in (("emulator (make emu-build)", sim), ("image", a.image), ("card (make emu-card)", a.card), ("rom", rom), ("certs", a.certs / "chain.pem"), ("compiled Formula (make emu-connect-psb)", a.psb / "ramp.psb")):
         if not p or not Path(p).exists():
             sys.exit(f"EMU_CONNECT_FAIL: missing {what}: {p}")
     seeded = api_lane.seeded_image(a.image, EMU_DIR / "connect" / "seed")
@@ -1486,7 +1547,7 @@ def main():
     code = 0
     lane = None
     try:
-        lane = asyncio.run(serve_and_run(emu, logs, a.certs))
+        lane = asyncio.run(serve_and_run(emu, logs, a.certs, a.psb))
         print(f"EMU_CONNECT_OK ({len(lane.passes)} checks, {time.time() - t0:.0f} s wall)", flush=True)
     except (Fail, api_lane.LaneFail, Exception) as e:  # noqa: BLE001
         print(f"EMU_CONNECT_FAIL: {e}\n--- console tail:\n{emu.tail(25)}", flush=True)

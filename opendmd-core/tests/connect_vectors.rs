@@ -82,6 +82,7 @@ fn cases(w: &World) -> Vec<Case> {
     v.push(case("ok-play-formula-file", "", a(1, "play", r#""path":"/formulas/big-clock.psi""#), "ok", "forward"));
     v.push(case("ok-brightness-ceiling", "max_brightness is 128", a(1, "brightness", r#""v":128"#), "ok", "forward"));
     v.push(case("ok-playlist", "", a(1, "playlist", r#""set":"consoles""#), "ok", "forward"));
+    v.push(case("ok-formulas", "what the panel can play: no arguments", a(1, "formulas", ""), "ok", "forward"));
     v.push(case("ok-no-args", "`a` may be left out", sign(&w.a, &format!(r#"{{"v":1,"dev":"{}","sess":"{}","n":1,"c":"pause"}}"#, w.dev.text(), hex(&w.sess))), "ok", "forward"));
     v.push(case(
         "ok-bytes-as-sent",

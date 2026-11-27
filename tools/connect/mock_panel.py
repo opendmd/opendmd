@@ -25,9 +25,28 @@ import hashlib
 import os
 import time
 
+import re
+from pathlib import Path
+
 import aiohttp
 
 import odc
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def bundled_formulas() -> list[tuple[str, str]]:
+    """The firmware's built-in Formulas, as its `formulas` lists them:
+    (stem, the `name "…"` line or the stem), the `-- bundle` files of
+    opendmd-web/formulas/ in file-name order."""
+    out = []
+    for p in sorted((REPO / "opendmd-web" / "formulas").glob("*.psi")):
+        src = p.read_text()
+        if not re.search(r"^-- bundle", src, re.M):
+            continue
+        m = re.search(r'^\s*name\s+"([^"\n]*)"', src, re.M)
+        out.append((p.stem, m.group(1) if m else p.stem))
+    return out
 
 
 def now_us() -> int:
@@ -60,6 +79,12 @@ class Panel:
         self.quota_used = 0
         self.landed: dict[str, tuple[bytes, bytes]] = {}  # name -> (gif, copy)
         self.last_landed = None  # (k, args, name, when)
+        # `formulas`: the built-in ones and a pretend card's ((stem, name);
+        # None: no card); `formulas_cmd` False answers it as a panel up to
+        # 1.1.0-beta.4 does (`not-allowed`).
+        self.builtin_formulas = bundled_formulas()
+        self.card_formulas: list[tuple[str, str]] | None = [("my-road", "My road"), ("den-clock", "Den clock")]
+        self.formulas_cmd = True
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -252,7 +277,13 @@ class Panel:
         elif c == "playlist":
             self.set = a["set"]
         elif c == "playlists":
-            r = ["", "consoles", "arcade"]
+            # As the firmware answers: {sets, more}, the main list ("") not in it.
+            r = {"sets": ["consoles", "arcade"], "more": False}
+        elif c == "formulas":
+            if not self.formulas_cmd:
+                await self.send(odc.Refusal("not-allowed", k, n).ack())
+                return
+            r = odc.formulas_result(self.builtin_formulas, self.card_formulas)
         elif c == "controllers":
             r = [{"k": x.k.hex(), "label": x.label, "f": x.flags, "added": x.added, "added_by": x.added_by.hex() if x.added_by else None, "last_s": None} for x in self.keys.values()]
         elif c == "add-controller":

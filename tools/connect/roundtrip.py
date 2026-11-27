@@ -261,7 +261,26 @@ async def main():
         r = await a.command("play", {"path": "@formula:fire"})
         ok(r and r.get("ok") and panel.path == "@formula:fire", "play a bundled Formula")
         r = await a.command("playlists")
-        ok(r and isinstance(r.get("r"), list), "playlists: a listing in r")
+        ok(r and isinstance((r.get("r") or {}).get("sets"), list) and (r.get("r") or {}).get("more") is False, "playlists: {sets, more} in r")
+        r = await a.command("formulas")
+        fr = (r or {}).get("r") or {}
+        ok(r and r.get("ok") and fr.get("builtin") and all(isinstance(x, list) and len(x) == 2 for x in fr["builtin"]) and fr.get("card") == [["my-road", "My road"], ["den-clock", "Den clock"]] and fr.get("more") is False,
+           f"formulas: built in ({len(fr.get('builtin') or [])}) and on the card, [stem, name] each")
+        ok(all(odc.remote_play_path_ok("@formula:" + s) for s, _ in fr.get("builtin") or []) and all(odc.remote_play_path_ok(f"/formulas/{s}.psi") for s, _ in fr.get("card") or []),
+           "formulas: every stem listed is one a remote play may name")
+        panel.card_formulas = None
+        r = await a.command("formulas")
+        ok(r and (r.get("r") or {}).get("card") is None and (r.get("r") or {}).get("builtin"), "formulas with no card: the built-in ones, card null")
+        panel.card_formulas = [(f"saved-{i:03}", "A Formula with a long name, " + "x" * 24) for i in range(80)]
+        r = await a.command("formulas")
+        fr = (r or {}).get("r") or {}
+        ok(r and r.get("ok") and fr.get("more") is True and 0 < len(fr.get("card") or []) < 80 and len(odc.ack_ok(a.k, odc.MAX_SAFE, fr).encode()) <= odc.MAX_TEXT_OUT,
+           f"formulas past the text limit: cut at {len(fr.get('card') or [])} of 80, more, the ack within 2,048 bytes")
+        panel.card_formulas = [("my-road", "My road"), ("den-clock", "Den clock")]
+        panel.formulas_cmd = False
+        r = await a.command("formulas")
+        ok(r and r.get("err") == "not-allowed", "formulas to a 1.1.0-beta.4 panel: not-allowed (the page falls back to its own list)")
+        panel.formulas_cmd = True
         r = await a.command("name", {"name": " Den​ panel "})
         ok(r and r.get("ok") and panel.name == "Den panel", "name: stored cleaned of invisible characters")
         await a.ws.send_str("ping")
