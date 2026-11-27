@@ -473,7 +473,10 @@ fn formula_lists() -> serde_json::Value {
     serde_json::Value::Array(cases)
 }
 
+// (The vectors are the protocol's, `formula-add` included: made and held
+// with the core's `connect-formula-add`, as `make test` builds it.)
 #[test]
+#[cfg_attr(not(feature = "connect-formula-add"), ignore = "the vectors are made with connect-formula-add")]
 fn vectors_are_pinned() {
     let got = serde_json::to_string_pretty(&build()).unwrap() + "\n";
     if std::env::var("CONNECT_VECTORS").as_deref() == Ok("write") {
@@ -487,6 +490,7 @@ fn vectors_are_pinned() {
 /// The pinned file read back as another implementation would: every case
 /// through a fresh session.
 #[test]
+#[cfg_attr(not(feature = "connect-formula-add"), ignore = "the vectors are made with connect-formula-add")]
 fn the_pinned_cases_hold() {
     let w = world();
     let pinned: Value = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();

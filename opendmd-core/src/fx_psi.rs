@@ -2455,14 +2455,17 @@ impl std::fmt::Debug for FormulaLook {
 /// the source and the firmware takes it off this list. (A CRC is enough:
 /// the bytes looked up are the bytes delivered; a collision only ever puts
 /// a program on the VM.)
+#[cfg(feature = "connect-formula-add")]
 static UNCONFIRMED: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 
 /// The list, whole (the firmware, from `/formulas/.remote` at boot).
+#[cfg(feature = "connect-formula-add")]
 pub fn set_unconfirmed(crcs: Vec<u32>) {
     *UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner()) = crcs;
 }
 
 /// One more (a remote add just landed).
+#[cfg(feature = "connect-formula-add")]
 pub fn add_unconfirmed(crc: u32) {
     let mut l = UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
     if !l.contains(&crc) {
@@ -2473,8 +2476,17 @@ pub fn add_unconfirmed(crc: u32) {
 /// Is `psb` a program the panel has not compiled itself? (No CRC is made
 /// while the list is empty, as it nearly always is.)
 pub fn unconfirmed(psb: &[u8]) -> bool {
-    let l = UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
-    !l.is_empty() && l.contains(&crate::settings_file::crc32(psb))
+    #[cfg(feature = "connect-formula-add")]
+    {
+        let l = UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
+        !l.is_empty() && l.contains(&crate::settings_file::crc32(psb))
+    }
+    // (Without remote adds there is no program the panel did not compile.)
+    #[cfg(not(feature = "connect-formula-add"))]
+    {
+        let _ = psb;
+        false
+    }
 }
 
 /// Why the VM draws a program, before anything else is asked: one not
@@ -2922,6 +2934,7 @@ mod tests {
     /// held to the VM as an effect and as a look, opened and retuned; any
     /// other is not. (The tests share the list: each uses its own bytes.)
     #[test]
+    #[cfg(feature = "connect-formula-add")]
     fn unconfirmed_programs_never_reach_the_jit() {
         let remote = psi::build("name \"Remote\"\ngray(x * 0.37 + t)").unwrap();
         let local = psi::build("name \"Local\"\ngray(x * 0.41 + t)").unwrap();

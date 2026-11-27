@@ -139,6 +139,9 @@ connect-send-classic = ["connect"]
 # build.rs refuses those variables in any build without it, and the
 # release recipe refuses them outright.
 connect-test = ["connect"]
+# Formulas added by remote (src/connect/fadd.rs; protocol 5.7): test images
+# only for now (FW_TEST_ONLY_FEATURES: never in a release or a beta).
+connect-formula-add = ["connect", "formulas", "opendmd-core/connect-formula-add"]
 # ESP32-S3 measurement switches (S3 port phase 1, `make fw-s3-image`;
 # refused on the classic): mbedTLS's allocations from PSRAM (the Connect
 # probe's allocator, with sdkconfig's MBEDTLS_EXTERNAL_MEM_ALLOC for IDF's

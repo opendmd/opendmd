@@ -231,7 +231,7 @@ pub struct Client {
     /// `formulas`'s own rate, per panel (5.6).
     pub(super) formulas_rate: proto::FormulasRate,
     /// A Formula added by remote, under way (`fadd`).
-    #[cfg(feature = "psi")]
+    #[cfg(feature = "connect-formula-add")]
     pub(super) adds: opendmd_core::connect::fadd::Adds,
     /// The settings' card copy (`settings_card`) is due then: once remote
     /// config commands stop (one card write for a drag), or at the
@@ -325,7 +325,7 @@ impl Client {
             pending: None,
             config_rate: Vec::new(),
             formulas_rate: proto::FormulasRate::default(),
-            #[cfg(feature = "psi")]
+            #[cfg(feature = "connect-formula-add")]
             adds: Default::default(),
             card_due: None,
             last_use: Vec::new(),

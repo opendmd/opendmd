@@ -224,7 +224,7 @@ impl Client {
             return Err(Refusal::Busy);
         }
         if checked != Ok(true) {
-            log::warn!("connect: a Formula added by remote refused: not one this panel can play");
+            log::warn!("formula-add: a Formula added by remote refused: not one this panel can play");
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::BadArg);
@@ -247,9 +247,9 @@ impl Client {
         }
         old_date(&psb_to);
         if let Err(e) = crate::card_formulas::note_remote(&stem, crc) {
-            log::warn!("connect: noting a Formula added by remote failed ({e}); it stays on the VM until a restart compiles it");
+            log::warn!("formula-add: noting a Formula added by remote failed ({e}); it stays on the VM until a restart compiles it");
         }
-        log::info!("connect: a Formula added by remote landed as /formulas/{stem}.psi (on the VM until compiled here)");
+        log::info!("formula-add: a Formula added by remote landed as /formulas/{stem}.psi (on the VM until compiled here)");
         self.adds.landed(&stem, core_now());
         Ok(done(&stem))
     }

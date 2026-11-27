@@ -318,7 +318,9 @@ pub const ALLOWED: &[&str] = &[
     "playlist",
     "playlists",
     "formulas",
+    #[cfg(feature = "connect-formula-add")]
     "formula-add",
+    #[cfg(feature = "connect-formula-add")]
     "formula-part",
     "send",
     "send-cancel",
@@ -400,8 +402,10 @@ pub enum Command {
     /// `formulas`; `after`: the page after this stem (5.6), `None` the first.
     Formulas { after: Option<String> },
     /// `formula-add` (5.7): a Formula's source and compiled file to come.
+    #[cfg(feature = "connect-formula-add")]
     FormulaAdd(super::fadd::AddArgs),
     /// `formula-part`: `data` of the add `id` at stream offset `off`.
+    #[cfg(feature = "connect-formula-add")]
     FormulaPart { id: u32, off: u32, data: Vec<u8> },
     Send(SendArgs),
     SendCancel { id: u32 },
@@ -582,7 +586,9 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             };
             Command::Formulas { after }
         }
+        #[cfg(feature = "connect-formula-add")]
         "formula-add" => Command::FormulaAdd(super::fadd::add_args(a)?),
+        #[cfg(feature = "connect-formula-add")]
         "formula-part" => {
             let (id, off, data) = super::fadd::part_args(a)?;
             Command::FormulaPart { id, off, data }
@@ -1319,6 +1325,22 @@ mod tests {
         let mut l = FormulaList::new(false);
         l.builtin("s", &fits);
         assert_eq!(l.finish(false, None).len(), RESULT_ROOM);
+    }
+
+    /// Without `connect-formula-add` (every release and beta) the two
+    /// commands are not on the allow-list.
+    #[test]
+    fn formula_add_is_absent_without_its_feature() {
+        let keys = KeyList::new();
+        let limits = Limits { max_brightness: 128 };
+        let empty = Value::Object(Vec::new());
+        let on = cfg!(feature = "connect-formula-add");
+        for c in ["formula-add", "formula-part"] {
+            assert_eq!(ALLOWED.contains(&c), on, "{c}");
+            if !on {
+                assert_eq!(parse_command(c, &empty, &limits, true, &keys), Err(Refusal::NotAllowed), "{c}");
+            }
+        }
     }
 
     #[test]

@@ -95,6 +95,7 @@ const REDO_FILE: &str = ".psb-redo";
 /// those programs never reach the JIT); each Formula is on [`REDO_FILE`]
 /// too, so the next start's pass compiles its source, and its line goes
 /// once that compile resolved it.
+#[cfg(feature = "connect-formula-add")]
 const REMOTE_FILE: &str = ".remote";
 /// The mark written before a compile: `PSB`, ABI 0, then the source's
 /// size and FAT date (date << 16 | time), little-endian.
@@ -869,6 +870,7 @@ impl Drop for Writing {
 
 /// The card's list of refused compiled files, as keys.
 /// `.remote`'s lines: (crc, key).
+#[cfg(feature = "connect-formula-add")]
 fn remote_lines(path: &str) -> Vec<(u32, u32)> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -882,6 +884,7 @@ fn remote_lines(path: &str) -> Vec<(u32, u32)> {
 
 /// At boot, before the card's first Formula may play (the start-up show
 /// included): the unconfirmed list from [`REMOTE_FILE`].
+#[cfg(feature = "connect-formula-add")]
 pub fn load_unconfirmed() {
     let lines = remote_lines(&format!("{}/formulas/{REMOTE_FILE}", config::SD_MOUNT));
     if !lines.is_empty() {
@@ -893,7 +896,7 @@ pub fn load_unconfirmed() {
 /// A Formula a remote controller added (`/formulas/<stem>`, its compiled
 /// bytes' CRC): on [`REMOTE_FILE`] and [`REDO_FILE`] (the next start
 /// compiles it here), and on the unconfirmed list now.
-#[cfg(feature = "connect")]
+#[cfg(feature = "connect-formula-add")]
 pub fn note_remote(stem: &str, crc: u32) -> std::io::Result<()> {
     use std::io::Write;
     let k = key(&format!("/formulas/{stem}"));
@@ -943,12 +946,15 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     };
     // Remote adds are compiled here whatever their dates say (and whether
     // or not their line on the redo list survived).
+    #[cfg(feature = "connect-formula-add")]
     let remote: Vec<(u32, u32)> = if entries.iter().any(|e| e.name == REMOTE_FILE) {
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         remote_lines(&format!("{dir}/{REMOTE_FILE}"))
     } else {
         Vec::new()
     };
+    #[cfg(not(feature = "connect-formula-add"))]
+    let remote: Vec<(u32, u32)> = Vec::new();
     for &(_, k) in &remote {
         if !redo.contains(&k) {
             redo.push(k);
@@ -1073,6 +1079,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     // Remote adds compiled here now are confirmed: off the unconfirmed
     // list, and the JIT may draw them. (Only a compile confirms one: a line
     // whose source is gone stays, its compiled file never on the JIT.)
+    #[cfg(feature = "connect-formula-add")]
     if !remote.is_empty() {
         let remote_path = format!("{dir}/{REMOTE_FILE}");
         let kept: Vec<(u32, u32)> = remote.iter().copied().filter(|(_, k)| !redone.contains(k)).collect();

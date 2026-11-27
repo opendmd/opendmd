@@ -371,6 +371,12 @@ A controller adds a Formula to the panel's card (the gallery's "Add to
 panel"): its source and the compiled file the controller made of it for
 the panel's `abi` (5.6), as `/formulas/<stem>.psi` and `<stem>.psb`.
 
+**Not in releases yet.** The two commands are built only with the
+firmware's `connect-formula-add` feature (test images); every release and
+beta answers them `not-allowed`, and its `formulas` reports no `abi` or
+`psb`, so a controller offers no Add to panel (a release image's check,
+`tools/release-test-features-check.sh`, holds the code out of it).
+
 1. `formula-add {id, stem, name, src_size, src_sha256, psb_size,
    psb_sha256}`: `id` a non-zero 32-bit number; `stem` the web app's save
    rule, `[a-z0-9-]`, 1 to 40, a letter or digit first; `name` what the

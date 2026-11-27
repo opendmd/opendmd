@@ -59,6 +59,10 @@ panel-id = ["dep:sha2"]
 # the crates `ota` links already. The firmware's connect features and the
 # tests use it; it builds for wasm too (`make check-wasm`).
 connect = ["dep:ed25519-dalek", "dep:sha2"]
+# Formulas added by remote (`formula-add`, `formula-part`: src/connect/fadd.rs;
+# docs/connect-protocol.md 5.7). Off in every release and beta: without it the
+# two commands are not on the allow-list, and `formulas` reports no `abi`/`psb`.
+connect-formula-add = ["connect", "psi"]
 # The device's player (the firmware enables it, always): built without
 # `psi` (the firmware's `formulas` off), a playlist's Formula lines
 # (`@formula…`, `/formulas/<stem>.psi`) are skipped as they are read, like

@@ -395,7 +395,7 @@ fn run(task: BootTask) {
             let mut sent = false;
             // Programs a remote controller delivered and this panel has not
             // compiled itself: on the VM only, from before the first plays.
-            #[cfg(feature = "psi")]
+            #[cfg(feature = "connect-formula-add")]
             crate::card_formulas::load_unconfirmed();
             if snapshot.boot_show != opendmd_core::boot::ShowLength::Off {
                 let file = opendmd_core::synth::formula_file(&snapshot.boot_formula);

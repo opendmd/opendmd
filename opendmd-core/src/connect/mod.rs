@@ -19,6 +19,7 @@
 
 pub mod codec;
 pub mod dns;
+#[cfg(feature = "connect-formula-add")]
 pub mod fadd;
 pub mod gate;
 pub mod json;
