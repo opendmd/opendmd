@@ -336,7 +336,8 @@ that lacks a later argument.
 - `card`: the card's, played as `/formulas/<stem>.psi`, **in stem order**
   (byte order), those after `after`: each `<stem>.psi` in `/formulas/`
   whose stem is one a remote `play` may name (5.5: `[a-z0-9_-]`, 1 to 64,
-  a letter or digit first) and whose compiled `<stem>.psb` beside it is
+  a letter or digit first) and whose compiled `<stem>.psb` (or, for one
+  added by remote and not yet compiled here, its `<stem>.psr`) beside it is
   ready for this firmware (one that is missing, empty, marked as not
   compiling, or compiled for another version is left out: it would not
   play). `name` is the one the source's `name "…"` line gave the compiled
@@ -363,7 +364,11 @@ that lacks a later argument.
   smallest candidate stems after `after` among those (a source with no
   compiled file costs no lookup), and one read of at most 261 bytes of the
   header of each one looked at; nothing is written, and the panel keeps
-  playing. No list is kept between requests.
+  playing. No list is kept between requests. **Its worst case**, a
+  listing's 8 pages within the 5 s rate: 8 × (two directory passes + at
+  most 48 header reads), i.e. 16 passes and 384 opens; measured on the
+  emulator with 256 files in `/formulas/`, a page took at most 218 ms of
+  card time (its longest single open 8 ms), with no late frame.
 
 ### 5.7 Adding a Formula: `formula-add`, `formula-part`
 
@@ -383,15 +388,24 @@ beta answers them `not-allowed`, and its `formulas` reports no `abi` or
    source's `name` line says (at most 60 characters after cleaning);
    `src_size` 1 to 16,384 and `psb_size` 6 to 8,192 (more: `too-big`);
    both hashes hex. The panel looks for where it lands: the stem, else
-   `<stem>-2` … `<stem>-9` (a stem is taken when its `.psi` or its `.psb`
-   is there). **A taken stem whose source has the signed `src_sha256` is
-   the same Formula: the answer is `r {done: true, stem}` and nothing is
-   written.** None free: `quota`. Otherwise `r {next: 0}`. Refusals:
-   `no-card`, `busy` (a file transfer on the card; another key's add held,
-   10 minutes after its last progress), `quota` (16 adds or 256 KB in a
-   rolling day per panel), `bad-arg`. The same `formula-add` signed again
-   (a reconnect) answers `r {next}` from where it was, or `done` again if
-   it landed; the same key's other add replaces a stalled one.
+   `<stem>-2` … `<stem>-9` (a stem is taken when its `.psi`, `.psb` or
+   `.psr` is there, as one directory pass sees it). **A taken stem whose
+   source has the signed length and `src_sha256` is the same Formula: the
+   answer is `r {done: true, stem}` and nothing is written.** None free:
+   `quota`. Otherwise `r {next: 0}`. Before the card is read at all: the
+   add's own rate (one `formula-add` in 2 s per panel: `rate`), the same
+   add signed again (a reconnect: `r {next}` from where it was, or `done`
+   again if it landed), another key's add under way (`busy`, until 10
+   minutes after its last progress; a landed add holds nothing), the day's
+   tally (`quota`: 16 adds or 256 KB a day per panel, kept on the card in
+   `/formulas/.add-day` so a restart does not reset it; the day is the
+   panel's clock's, and with no clock the tally stands until a clock shows
+   a new day; a tally it cannot read counts as a full day). In the pass:
+   at most 128 Formulas on the card (`quota`). Also refused: `no-card`,
+   `busy` (a LAN transfer or update on the card), `bad-arg`. The same
+   key's other add replaces its stalled one; a key removed, remotely or on
+   the LAN, takes its add with it; a stale add's part files go when it
+   goes stale.
 2. `formula-part {id, off, data}`: `data` base64url (no padding, canonical)
    of 1 to 384 bytes (512 characters: the largest such body stays within
    700 bytes), strictly at the panel's `next`; the stream is the source then
@@ -403,10 +417,13 @@ beta answers them `not-allowed`, and its `formulas` reports no `abi` or
    ABI and that every program in it loads and passes `psb::verify` (behind
    a heap gate: the compiled bytes, one program and 20 KB for the rest;
    below it `busy`, the bytes kept for the same `formula-add` signed
-   again); then renames its two part files into
-   place (a rename never replaces a file), dates the `.psb` older than any
-   source, and answers `r {done: true, stem}` (the stem it landed under).
-   A check that fails is `bad-arg`, and nothing is kept.
+   again); then renames the program to **`<stem>.psr`** and then the
+   source to `<stem>.psi` (a rename never replaces a file), and answers
+   `r {done: true, stem}` (the stem it landed under). A check that fails
+   is `bad-arg`, and nothing is kept; a second rename that fails takes the
+   first back; a restart between the two leaves a `.psr` with no source,
+   which the next start removes. Parts and the landing wait while a LAN
+   transfer or update is under way.
 
 **The one exception to "no program from a remote controller".** Every other
 path keeps a remote controller's programs off the panel: `play` takes no
@@ -414,21 +431,27 @@ inline Formula (`@formula?psb=…`) and never `~sent`, so a compromised page
 or a hostile relay can choose among programs the panel already has, never
 supply one. `formula-add` is the exception, and what bounds it is:
 
-- **checked, then never on the JIT until the panel's own compiler made it:**
-  the compiled file is loaded and verified like any program from the
-  network (`psb::verify`), and until the next start's mount pass has
-  compiled the source on the panel, the program is drawn only by the
-  bounds-checked VM: its CRC-32 is on the panel's unconfirmed list
-  (`/formulas/.remote`, loaded before anything plays at boot), and the
-  JIT's build path asks that list before anything else
-  (`fx_psi::jit_refusal`). A source that does not compile there is marked
-  as not compiling and never plays again;
+- **checked, then never on the JIT unless the panel's own compiler made
+  it, by construction:** the program is loaded and verified like any
+  program from the network (`psb::verify`) and stored as `<stem>.psr`,
+  never `.psb`. The player reads a card Formula's program in one place
+  (`fx_psi::card_program`): the `.psb` if it opens, else the `.psr`, and
+  what it read from a `.psr` is held to the bounds-checked VM (the JIT's
+  build path asks `fx_psi::jit_refusal` before anything else). Only the
+  panel's own compiler writes `<stem>.psb`, from the source; once it has,
+  and its own output read back and checked, the `.psr` is removed. There
+  is no record to keep, load, race or lose: a missing, torn or unreadable
+  anything is "on the VM" or "not playable", never "JIT". A Formula the
+  board can never compile keeps its `.psr` and stays on the VM for good.
+  A source that does not compile there is marked as not compiling, and
+  its mark (a `.psb`) wins over the `.psr`: it never plays again;
 - **create-new only:** two files under `/formulas/`, their names from the
   stem rule (no separator, no dot), renamed into place where nothing is;
   nothing is overwritten or deleted, and a different source under a taken
   stem gets the next free stem;
 - **sizes and counts:** 16 KB of source, 8 KB compiled, 384 bytes a part,
-  16 adds and 256 KB a rolling day, one add at a time;
+  16 adds and 256 KB a day (kept across restarts), 128 Formulas on the
+  card, one add at a time, one `formula-add` in 2 s;
 - **signed bytes:** every part is a signed command under the session's
   counter, and both hashes are in the signed `formula-add`: a relay can
   drop or delay parts, never alter or replay one.
@@ -609,7 +632,7 @@ server can show a controller a false state, never change the panel's.
 | Pairing window | 5 minutes, one use, 3 tries |
 | Guests | 2 at a time, 60 s each |
 | Guest slot `g` | assigned 1 to 255; read 0 to 2^31 - 1 (to 255 up to 1.1.0-beta.4) |
-| A Formula added by remote | 16 KB of source, 8 KB compiled, 384 B a part; 16 adds and 256 KB a day |
+| A Formula added by remote | 16 KB of source, 8 KB compiled, 384 B a part; 16 adds and 256 KB a day; 128 Formulas on the card; one add in 2 s |
 | `formulas` | a listing's first page one in 5 s per panel; 8 pages a listing |
 
 ## 10. Test vectors and mocks

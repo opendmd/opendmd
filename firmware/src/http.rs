@@ -1813,11 +1813,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             log::warn!("settings: a save stopped between its renames on purpose (bench); restarting");
         }
         info!("reboot requested over HTTP");
-        // The card-failure test hooks (`bench` builds only: a release has
-        // none, so a LAN caller cannot make the next boots fail on purpose).
-        #[cfg(feature = "bench")]
+        // The card-failure test hooks (`bench` builds and the emulator's
+        // Connect image only: a release has none, so a LAN caller cannot
+        // make the next boots fail on purpose).
+        #[cfg(any(feature = "bench", feature = "connect-test"))]
         let hooked = card_test_hooks(req.query());
-        #[cfg(not(feature = "bench"))]
+        #[cfg(not(any(feature = "bench", feature = "connect-test")))]
         let hooked = false;
         // A plain reboot (the UI's button, no hook) is a person's fresh
         // start: the card-failure restart count goes, the slow clock stays.
@@ -1975,6 +1976,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
                 }
+                // A Formula's source deleted takes a remote add's program
+                // with it (the web app knows only `.psi` and `.psb`).
+                if let Some(base) = card.strip_suffix(opendmd_core::synth::FORMULA_EXT).filter(|b| b.starts_with("/formulas/")) {
+                    let _ = std::fs::remove_file(format!("{}{base}{}", config::SD_MOUNT, opendmd_core::synth::REMOTE_EXT));
+                }
                 // The look's Formula deleted: the look goes with it.
                 crate::formula_look::file_changed(&c.settings, &card, true);
                 req.json(r#"{"ok":true}"#)
@@ -2087,7 +2093,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 /// `POST /api/reboot`'s card-failure test hooks (`bench` only; see the
 /// route): `?sd_fail=N`, `?sd_io_fail=N[&sd_io_boots=B]`,
 /// `?sd_fallback=clear`. Whether any was asked for.
-#[cfg(feature = "bench")]
+#[cfg(any(feature = "bench", feature = "connect-test"))]
 fn card_test_hooks(query: Option<&str>) -> bool {
     // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
     // fail, to exercise the no-card boot without touching the card.

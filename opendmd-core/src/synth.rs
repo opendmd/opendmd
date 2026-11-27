@@ -94,6 +94,19 @@ pub const FORMULA_EXT: &str = ".psi";
 /// A compiled Formula's file: `<stem>.psb` beside `<stem>.psi`.
 pub const COMPILED_EXT: &str = ".psb";
 
+/// A program a remote controller delivered for `<stem>.psi` (Connect's
+/// `formula-add`): `<stem>.psr`, never `.psb`. Whatever is read from one
+/// is drawn by the VM only, never the JIT (`fx_psi::card_program`); only
+/// the panel's own compiler writes `<stem>.psb`, and the `.psr` goes once
+/// it has (`card_formulas`). A `.psb` beside it, even a mark, wins.
+pub const REMOTE_EXT: &str = ".psr";
+
+/// [`compiled_path`]'s remote twin (`/formulas/x.psi` -> `/formulas/x.psr`).
+pub fn remote_path(file: &str) -> String {
+    let stem = &file[..file.len().saturating_sub(FORMULA_EXT.len())];
+    format!("{stem}{REMOTE_EXT}")
+}
+
 /// The compiled file for a Formula's `.psi` path (`/formulas/x.psi` ->
 /// `/formulas/x.psb`).
 pub fn compiled_path(file: &str) -> String {

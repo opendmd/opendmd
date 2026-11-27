@@ -233,6 +233,9 @@ pub struct Client {
     /// A Formula added by remote, under way (`fadd`).
     #[cfg(feature = "connect-formula-add")]
     pub(super) adds: opendmd_core::connect::fadd::Adds,
+    /// The day's tally of adds read from the card (once, at the first add).
+    #[cfg(feature = "connect-formula-add")]
+    pub(super) tally_loaded: bool,
     /// The settings' card copy (`settings_card`) is due then: once remote
     /// config commands stop (one card write for a drag), or at the
     /// session's end.
@@ -327,6 +330,8 @@ impl Client {
             formulas_rate: proto::FormulasRate::default(),
             #[cfg(feature = "connect-formula-add")]
             adds: Default::default(),
+            #[cfg(feature = "connect-formula-add")]
+            tally_loaded: false,
             card_due: None,
             last_use: Vec::new(),
             pair_reqs: Vec::new(),
@@ -399,6 +404,8 @@ impl Client {
     fn turn(&mut self, online: bool) {
         let started = Instant::now();
         self.timed = false;
+        #[cfg(feature = "connect-formula-add")]
+        self.formula_tick();
         // This turn's blocking budget, before anything can write.
         if let Some(conn) = self.conn.as_mut() {
             conn.bio.deadline = started + BLOCK_MAX;
@@ -540,6 +547,18 @@ impl Client {
                 l.refused = false;
                 l.too_old = false;
             });
+        }
+        if let Some(k) = &keys {
+            // A key removed on the LAN takes its add with it (and its parts).
+            #[cfg(feature = "connect-formula-add")]
+            {
+                let gone = self.adds.held.as_ref().map(|h| h.k).filter(|hk| k.find(hk).is_none());
+                if let Some(hk) = gone {
+                    self.formula_forget(&hk);
+                }
+            }
+            #[cfg(not(feature = "connect-formula-add"))]
+            let _ = k;
         }
         if let Some(k) = keys {
             // A removed key's config bucket goes with it (else 16 keys

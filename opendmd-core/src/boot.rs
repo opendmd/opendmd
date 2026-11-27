@@ -569,6 +569,12 @@ impl FormulaShow {
         Self::checked(crate::fx_psi::PsiFx::from_bytes(psb, opts)?)
     }
 
+    /// The show for a card Formula's program ([`crate::fx_psi::card_program`]:
+    /// a `.psr`'s on the VM only).
+    pub fn from_card(p: &crate::fx_psi::CardProgram, opts: &str) -> Result<FormulaShow, crate::psi::Error> {
+        Self::from_bytes(&p.bytes, &p.opts(opts))
+    }
+
     fn checked(fx: crate::fx_psi::PsiBox) -> Result<FormulaShow, crate::psi::Error> {
         let est = fx.program().esp32_us();
         if est > FORMULA_MAX_EST_US {

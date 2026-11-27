@@ -23,22 +23,22 @@ pub fn install() {
     opendmd_core::synth::set_bundled(BUNDLED);
 }
 
-/// A Formula on the card (`/formulas/x.psi`, card-absolute): its compiled
-/// file's bytes (`/formulas/x.psb`), or why not as the sentence a look
-/// shows.
+/// A Formula on the card (`/formulas/x.psi`, card-absolute): its program
+/// (`fx_psi::card_program`: its `.psb`, else a remote controller's `.psr`,
+/// VM only), or why not as the sentence a look shows.
 #[cfg(feature = "psi")]
-pub fn read_card(file: &str) -> Result<Vec<u8>, opendmd_core::psi::Error> {
+pub fn read_card(file: &str) -> Result<opendmd_core::fx_psi::CardProgram, opendmd_core::psi::Error> {
     let err = |msg: String| opendmd_core::psi::Error { start: 0, end: 0, msg };
     if crate::files::card_path(crate::config::SD_MOUNT, file).is_none() {
         return Err(err("that Formula's path is not on the card".into()));
     }
-    let full = format!("{}{}", crate::config::SD_MOUNT, opendmd_core::synth::compiled_path(file));
-    let f = std::fs::File::open(&full).map_err(|e| {
+    opendmd_core::fx_psi::card_program(|p| std::fs::File::open(format!("{}{p}", crate::config::SD_MOUNT)), file).map_err(|e| {
         err(if e.kind() == std::io::ErrorKind::NotFound {
             opendmd_core::fx_psi::NOT_PREPARED.into()
+        } else if e.kind() == std::io::ErrorKind::InvalidInput {
+            e.to_string()
         } else {
             format!("that Formula could not be read: {e}")
         })
-    })?;
-    opendmd_core::fx_psi::read_psb(f).map_err(|e| err(e.to_string()))
+    })
 }

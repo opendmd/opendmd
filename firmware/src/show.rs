@@ -421,7 +421,7 @@ pub fn check_formula(path: &str) -> Result<(), String> {
     {
         let r = match opendmd_core::synth::formula_file(path) {
             Some(_) if !crate::CARD_READY.load(Relaxed) => return Err(crate::CARD_NOT_READY.to_string()),
-            Some((file, opts)) => crate::formulas::read_card(file).and_then(|b| boot::FormulaShow::from_bytes(&b, opts)),
+            Some((file, opts)) => crate::formulas::read_card(file).and_then(|p| boot::FormulaShow::from_card(&p, opts)),
             None => boot::FormulaShow::open(path),
         };
         r.map(drop).map_err(|e| e.msg)
@@ -515,7 +515,7 @@ impl Screen {
     /// card mounted on a second attempt, the wordmark already up) the show
     /// goes on as it is, and the card's value plays from the next boot.
     #[cfg(feature = "psi")]
-    pub fn card_formula(&mut self, path: &str, psb: Option<Result<Vec<u8>, opendmd_core::psi::Error>>) {
+    pub fn card_formula(&mut self, path: &str, psb: Option<crate::boot::CardPsb>) {
         let t = self.t();
         if self.scene != Scene::Show || self.len == ShowLength::Off || t >= CARD_WAIT_MS || LET_GO_ASKED.load(Relaxed) {
             if self.scene == Scene::Show && self.len != ShowLength::Off {
@@ -535,8 +535,10 @@ impl Screen {
                 log::info!("boot show: the card's settings name formula {} (at {t} ms)", crate::short(path));
                 Formula::built(path, boot::FormulaShow::open(path), None)
             }
-            Some(Ok(b)) => {
-                let opts = opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o).to_string();
+            Some(Ok(p)) => {
+                // (A `.psr`'s options say `vm`, kept for a retry too.)
+                let opts = p.opts(opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o));
+                let b = p.bytes;
                 let r = boot::FormulaShow::from_bytes(&b, &opts);
                 let keep = r.as_ref().err().and_then(opendmd_core::fx_psi::look_retry).map(|_| (b, opts));
                 log::info!("boot show: the card's formula read at {t} ms");

@@ -518,8 +518,9 @@ fn sim_word(i: usize) -> *mut u32 {
 }
 
 /// Arm [`SIM_FAIL`]: the next boot's first `n` mount attempts fail.
-/// (`bench` builds only: a release has no way to arm it.)
-#[cfg(feature = "bench")]
+/// (`bench` builds and the emulator's Connect image only: a release has no
+/// way to arm it.)
+#[cfg(any(feature = "bench", feature = "connect-test"))]
 pub fn simulate_mount_failures(n: u32) {
     // SAFETY: written once, from the httpd task, just before a restart;
     // read only by the boot task (`boot.rs`), which makes every mount.

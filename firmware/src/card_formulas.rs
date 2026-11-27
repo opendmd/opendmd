@@ -88,15 +88,6 @@ const CHUNK: usize = 2 * 1024;
 /// Compiled files the player refused (`engine::set_formula_refused`), to be
 /// prepared again: the card's list of them (hashes of their paths).
 const REDO_FILE: &str = ".psb-redo";
-/// Compiled files a remote controller delivered (Connect's
-/// `formula-add`) that this panel has not compiled again itself: one line
-/// each, the CRC-32 of the file's bytes and the [`key`] of its Formula, in
-/// hex. Loaded at boot before anything plays (`fx_psi::set_unconfirmed`:
-/// those programs never reach the JIT); each Formula is on [`REDO_FILE`]
-/// too, so the next start's pass compiles its source, and its line goes
-/// once that compile resolved it.
-#[cfg(feature = "connect-formula-add")]
-const REMOTE_FILE: &str = ".remote";
 /// The mark written before a compile: `PSB`, ABI 0, then the source's
 /// size and FAT date (date << 16 | time), little-endian.
 const MARK: &[u8; 4] = b"PSB\0";
@@ -298,7 +289,8 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: O
     let _ = built.try_reserve(64);
     let mut overflow = false;
     let found = each_file(|name, size| {
-        if let Some(st) = stem(name, ".psb") {
+        // (A remote add's `.psr` plays too, on the VM.)
+        if let Some(st) = stem(name, ".psb").or_else(|| stem(name, opendmd_core::synth::REMOTE_EXT)) {
             if size > MARK_LEN {
                 if built.len() >= REMOTE_PSB_MAX {
                     overflow = true;
@@ -352,7 +344,12 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: O
             break;
         }
         let t = Instant::now();
-        let hd = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
+        // Its `.psb`, else its `.psr` (an open that fails is a lookup more, only
+        // for a stem pass 1 saw one of the two for).
+        let mut hd = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
+        if hd.is_empty() {
+            hd = head(&format!("{}/formulas/{st}{}", config::SD_MOUNT, opendmd_core::synth::REMOTE_EXT), 6 + 255);
+        }
         longest = longest.max(t.elapsed());
         opened += 1;
         next = Some(st.clone());
@@ -869,44 +866,6 @@ impl Drop for Writing {
 }
 
 /// The card's list of refused compiled files, as keys.
-/// `.remote`'s lines: (crc, key).
-#[cfg(feature = "connect-formula-add")]
-fn remote_lines(path: &str) -> Vec<(u32, u32)> {
-    fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let (c, k) = l.trim().split_once(' ')?;
-            Some((u32::from_str_radix(c, 16).ok()?, u32::from_str_radix(k, 16).ok()?))
-        })
-        .collect()
-}
-
-/// At boot, before the card's first Formula may play (the start-up show
-/// included): the unconfirmed list from [`REMOTE_FILE`].
-#[cfg(feature = "connect-formula-add")]
-pub fn load_unconfirmed() {
-    let lines = remote_lines(&format!("{}/formulas/{REMOTE_FILE}", config::SD_MOUNT));
-    if !lines.is_empty() {
-        log::info!("formulas: {} added by remote, on the VM until compiled here", lines.len());
-    }
-    opendmd_core::fx_psi::set_unconfirmed(lines.into_iter().map(|(c, _)| c).collect());
-}
-
-/// A Formula a remote controller added (`/formulas/<stem>`, its compiled
-/// bytes' CRC): on [`REMOTE_FILE`] and [`REDO_FILE`] (the next start
-/// compiles it here), and on the unconfirmed list now.
-#[cfg(feature = "connect-formula-add")]
-pub fn note_remote(stem: &str, crc: u32) -> std::io::Result<()> {
-    use std::io::Write;
-    let k = key(&format!("/formulas/{stem}"));
-    let dir = format!("{}/formulas", config::SD_MOUNT);
-    opendmd_core::fx_psi::add_unconfirmed(crc);
-    let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REMOTE_FILE}"))?.write_all(format!("{crc:08x} {k:08x}\n").as_bytes())?;
-    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REDO_FILE}"))?.write_all(format!("{k:08x}\n").as_bytes())
-}
-
 fn redo_keys(path: &str) -> Vec<u32> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -938,28 +897,12 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let sources = entries.iter().filter(|e| stem(&e.name, ".psi").is_some()).take(MAX_FILES);
     let abi_path = format!("{dir}/{ABI_FILE}");
     let redo_path = format!("{dir}/{REDO_FILE}");
-    let mut redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
+    let redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         redo_keys(&redo_path)
     } else {
         Vec::new()
     };
-    // Remote adds are compiled here whatever their dates say (and whether
-    // or not their line on the redo list survived).
-    #[cfg(feature = "connect-formula-add")]
-    let remote: Vec<(u32, u32)> = if entries.iter().any(|e| e.name == REMOTE_FILE) {
-        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        remote_lines(&format!("{dir}/{REMOTE_FILE}"))
-    } else {
-        Vec::new()
-    };
-    #[cfg(not(feature = "connect-formula-add"))]
-    let remote: Vec<(u32, u32)> = Vec::new();
-    for &(_, k) in &remote {
-        if !redo.contains(&k) {
-            redo.push(k);
-        }
-    }
     // The refused ones dealt with (prepared, or found not to compile).
     let mut redone: Vec<u32> = Vec::new();
     let abi_same = redo.is_empty()
@@ -987,6 +930,11 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
         };
         let why = match checked {
             State::Current => {
+                // (A remote add's `.psr` left beside the panel's own compile:
+                // a restart between the two.)
+                if entries.iter().any(|e| stem(&e.name, opendmd_core::synth::REMOTE_EXT).is_some_and(|s| s.eq_ignore_ascii_case(base))) {
+                    let _ = fs::remove_file(format!("{dir}/{base}{}", opendmd_core::synth::REMOTE_EXT));
+                }
                 c.current += 1;
                 continue;
             }
@@ -1076,21 +1024,13 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             let _ = fs::write(&redo_path, text);
         }
     }
-    // Remote adds compiled here now are confirmed: off the unconfirmed
-    // list, and the JIT may draw them. (Only a compile confirms one: a line
-    // whose source is gone stays, its compiled file never on the JIT.)
-    #[cfg(feature = "connect-formula-add")]
-    if !remote.is_empty() {
-        let remote_path = format!("{dir}/{REMOTE_FILE}");
-        let kept: Vec<(u32, u32)> = remote.iter().copied().filter(|(_, k)| !redone.contains(k)).collect();
-        if kept.len() != remote.len() {
-            log::info!("formulas: {} added by remote compiled here: confirmed", remote.len() - kept.len());
-            if kept.is_empty() {
-                let _ = fs::remove_file(&remote_path);
-            } else {
-                let _ = fs::write(&remote_path, kept.iter().map(|(c, k)| format!("{c:08x} {k:08x}\n")).collect::<String>());
+    // A remote program whose source is gone (deleted or moved on the LAN, or
+    // a restart between an add's two renames): it goes, never played again.
+    for e in &entries {
+        if let Some(st) = stem(&e.name, opendmd_core::synth::REMOTE_EXT) {
+            if !entries.iter().any(|x| stem(&x.name, ".psi").is_some_and(|b| b.eq_ignore_ascii_case(st))) {
+                let _ = fs::remove_file(format!("{dir}/{}", e.name));
             }
-            opendmd_core::fx_psi::set_unconfirmed(kept.into_iter().map(|(c, _)| c).collect());
         }
     }
     // A remote add's part files left by a restart mid-add (the boot's pass
@@ -1189,9 +1129,30 @@ fn compile_one(
             return Done::Resolved;
         }
     };
+    // (A write that failed is no compile: the file goes, a remote add's
+    // `.psr` stays, and the next start tries again.)
     if !put(&psb_path, &bytes) {
-        c.failed += 1;
-        return Done::Resolved;
+        let _ = fs::remove_file(&psb_path);
+        shorts.push(format!("/formulas/{name}"));
+        c.short += 1;
+        return Done::Short { compiled: true };
+    }
+    // Its own output read back and checked before a remote add's program
+    // goes: only then is the panel's compile the one that plays.
+    let back = fs::File::open(&psb_path).ok().and_then(|f| opendmd_core::fx_psi::read_psb(f).ok());
+    let verified = back.as_deref() == Some(&bytes[..])
+        && psi::psb::load_boxed(&bytes, psi::psb::Which::Play).is_ok()
+        && psi::psb::load_boxed(&bytes, psi::psb::Which::Look).is_ok();
+    if !verified {
+        log::warn!("formulas: /formulas/{base}.psb did not read back as written: removed, prepared again at the next start");
+        let _ = fs::remove_file(&psb_path);
+        shorts.push(format!("/formulas/{name}"));
+        c.short += 1;
+        return Done::Short { compiled: true };
+    }
+    let psr_path = format!("{dir}/{base}{}", opendmd_core::synth::REMOTE_EXT);
+    if fs::remove_file(&psr_path).is_ok() {
+        log::info!("formulas: /formulas/{name} added by remote, compiled here: its program is the panel's now");
     }
     stamp(&psb_path, psi_entry);
     drop(_writing);
