@@ -8,8 +8,9 @@ The first time, open **Now** to see what's playing and try **Skip**, then
 open **Playlists** to choose what plays.
 
 On a computer the views are listed down the left side, and on a phone along
-the bottom. They are **Now**, **Library**, **Playlists**, **Formulas**,
-**Create Art** (**Create** on a small phone) and **Settings**.
+the bottom. They are **Now**, **Library**, **Playlists**, **Formulas** and
+**Settings**. Finding art on the web is the OpenDMD website's: the Library's
+**Find art online** opens its [Studio](https://opendmd.dev/studio/#import).
 
 The [demo](https://opendmd.dev/demo/) is the same app running in your
 browser, with a few sample animations.
@@ -92,8 +93,6 @@ category and author, your stars and your tags. From there:
 - **Send to panel** plays it now; afterwards the playlist carries on.
 - **Add to playlist…** puts it in one of your playlists: the one playing
   comes first, or start a new one.
-- **Edit in Create Art** opens it in [Create Art](create-art.md) to
-  change it.
 - **Edit details…** changes its title, platform, category or author. The
   GIF is renamed on the card and every playlist keeps up.
 - **Delete…** removes it from the card and from every playlist, after
@@ -143,12 +142,21 @@ are counted in the bar: "6 selected · 2 not shown". **Done** leaves Select.
 
 ### Adding GIFs
 
-Press **+ Add GIFs** and pick files from your computer or phone. For each
-one, give it a title, a platform, a category (or a new one) and, if you
-like, an author. The app suggests a title from the file name and shows the
-name the GIF will get on the card. Afterwards it offers to add the new GIFs
-to the playlist that's playing. Each GIF is made ready for smooth playback
-as it uploads.
+Press **+ Add ▾**, then **Add GIFs…**, and pick files from your computer or
+phone: GIFs, or pictures such as PNG or JPEG. A picture, or a GIF that
+isn't 128 × 32, is fitted to the panel first: how it fits and which part
+shows, or, for a GIF, **Add as it is** ([Adding your own
+art](create-art.md)). For each one, give it a title, a platform, a category
+(or a new one) and, if you like, an author. The app suggests a title from
+the file name and shows the name the GIF will get on the card. Afterwards
+it offers to add the new GIFs to the playlist that's playing. Each GIF is
+made ready for smooth playback as it uploads.
+
+**+ Add ▾ › Find art online** opens the [Studio](https://opendmd.dev/studio/#import)
+on the OpenDMD website in a new tab, to find game art and GIFs on the web.
+When a search in the Library finds nothing, **Find art online** beside
+"Nothing here matches" takes your words and platform there. Its **Send to
+panel** brings the GIF back here, into Add GIFs.
 
 ### Smooth motion
 

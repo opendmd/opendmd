@@ -79,9 +79,9 @@ already runs it, OpenDMD replaces it.
 
 OpenDMD comes with no GIFs. The DMDoS GIF pack, DMDos GUI v1 + GIFs,
 is in the Software section of [dmdos.net](https://dmdos.net/), and
-[The SD card](card.md) explains setting a card up. You can also make your own with
-[Create Art](create-art.md), or add any 128x32 GIF from the
-[web app](web-app.md).
+[The SD card](card.md) explains setting a card up. You can also add your
+own GIFs and pictures from the [web app](create-art.md), or find art online
+in the [Studio](https://opendmd.dev/studio/#import) on the OpenDMD website.
 
 ## Next
 

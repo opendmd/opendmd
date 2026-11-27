@@ -39,7 +39,7 @@ From a Formula's details:
 
 - **Remix** (a bundled one) or **Edit** (one of yours) opens it in the
   editor.
-- **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
+- **Save as GIF…** makes a GIF of it to add to your card ([Saving as a GIF](#saving-as-a-gif)).
 - **Settings…** opens it in the editor with its settings: its name, its
   controls and whether it can be the panel's look.
 - **Delete…** takes away one of yours.
@@ -197,15 +197,15 @@ KB. Comments cost nothing. The details are in the gallery's
 
 ## Saving as a GIF
 
-**Save as GIF…** draws one loop of the Formula and opens it in [Create
-Art](create-art.md), titled with its name. It saves frames of 20 ms (50
+**Save as GIF…** draws one loop of the Formula as a GIF and opens the
+Library's **Add GIFs** with it, titled with its name, platform FX and
+category Demoscene: change any of them, then press **Add GIF**. With no
+display (the demo), it downloads the GIF. It saves frames of 20 ms (50
 a second), or of 40 ms for a loop longer than about 5 seconds, and at most
 240 frames. A GIF can't hold faster frames, so a `smooth` Formula saves at
 20 ms too. A Formula drawn every 4th refresh (`fps 25`, from before
 `smooth`) saves 40 ms frames.
 
-In Create Art you can add text, trim it or change its speed, then save it
-to your card. It plays on the panel like any other GIF and goes in
-playlists. A Formula with a long loop, or one that follows the clock,
+It plays on the panel like any other GIF and goes in playlists. A Formula with a long loop, or one that follows the clock,
 keeps only those few seconds, as they look when you save. One that goes
 on without repeating keeps its first 10 seconds.

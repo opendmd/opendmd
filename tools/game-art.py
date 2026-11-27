@@ -3,11 +3,13 @@
 # dependencies = ["playwright>=1.45", "pillow"]
 # ///
 """Panel GIFs of a few well-known games' title screens, made the way a user
-makes them: Create Art's Game art search (the art index as the site
-publishes it, opendmd-web/art-index/), a game's title screen from
-libretro-thumbnails (raw.githubusercontent.com, fetched by the page), then
-Save to the card, on tools/mock-device.py over the demo card. For the
-screenshots only (tools/screenshots.py).
+makes them on the website: Create Art's Game art search (the converter the
+site's /create/ mounts, js/studio.js and js/find.js from make web's
+www-dist; the art index as the site publishes it, opendmd-web/art-index/),
+a game's title screen from libretro-thumbnails (raw.githubusercontent.com,
+fetched by the page), then its Save to the card (the converter mounted
+over the panel's app, so it sees a device), on tools/mock-device.py over
+the demo card. For the screenshots only (tools/screenshots.py).
 
     uv run tools/game-art.py [--card target/demo-card] [--out target/game-art]
 
@@ -137,7 +139,7 @@ def main() -> int:
     overlay = Path(tempfile.mkdtemp(prefix="opendmd-game-art-"))
     for c in CATEGORIES:
         (overlay / "gifs" / c).mkdir(parents=True)
-    proc, base = shots.start_mock(a.card, overlay)
+    proc, base = shots.start_mock(a.card, overlay, ROOT / "opendmd-web/www-dist")
     files: list[str] = []
     try:
         with sync_playwright() as pw:
@@ -147,7 +149,17 @@ def main() -> int:
             page.route("**/art-index/v1/*.json", lambda r: r.fulfill(
                 path=str(INDEX / Path(urllib.parse.urlsplit(r.request.url).path).name), content_type="application/json",
                 headers={"Access-Control-Allow-Origin": "*"}))
-            page.goto(base + "/#create")
+            # The panel's app has no Create Art: the site's converter, mounted over it.
+            page.goto(base + "/#library")
+            page.wait_for_selector("#lib-list", timeout=30000)
+            page.evaluate("""async () => {
+                const el = document.createElement('section');
+                el.className = 'view on';
+                for (const v of document.querySelectorAll('#main > .view')) v.classList.remove('on');
+                document.querySelector('#main').append(el);
+                const r = await (await import('./js/studio.js')).mount(el);
+                await r.show();
+            }""")
             page.wait_for_selector("#st-src", timeout=30000)
             for g in GAMES:
                 try:

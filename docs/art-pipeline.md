@@ -3,15 +3,18 @@
 Status: investigation and throwaway prototypes, 2026-09-23. The first
 milestone below has since landed as "Make art" in Library (2026-09-24:
 `opendmd-art-web/`, `www/js/studio.js`, `tools/art-index.py`; see
-[`web-app.md`](web-app.md#create-art), then called "Make art"). On 2026-09-30 it moved out of the sheet into a view of its own
+`web-app.md`, then called "Make art"). On 2026-09-30 it moved out of the sheet into a view of its own
 (the navigation's **Make art**, and a primary button in the Library), and a
 Library GIF can be opened in it ("Edit in Make art"). Later the same day
 it learned animated GIFs — every frame through the Frame and Look steps, a
 timeline, a text overlay: see §6 at the end. On 2026-10-12 the view was
 renamed **Create Art** and took over finding art: its first step, Find,
 holds Game art, GifCities and your own file or address (the Library lost
-its web sources and keeps only what is on the player; see
-[`web-app.md`](web-app.md#create-art)). The rest of this document is
+its web sources and keeps only what is on the player). On 2026-11-27 the
+view left the panel's app: finding art is the website's Studio's, the
+converter (`js/studio.js`, `js/find.js`) is the site's `/create/` page's,
+and the panel's Add GIFs keeps a fitting step (`js/fit.js`; see
+[`web-app.md`](web-app.md#add-gifs-and-finding-art-online)). The rest of this document is
 as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.

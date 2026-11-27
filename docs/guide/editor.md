@@ -164,7 +164,7 @@ In your web app, the buttons under the code are these.
   moves on. It is there when the web app is your display's own.
 - **Add to playlist…** puts it in one of your playlists.
 - **Set as the panel's look** keeps it over every GIF.
-- **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
+- **Save as GIF…** makes a GIF of it to add to your card ([Saving as a GIF](formulas.md#saving-as-a-gif)).
 - **Copy code** puts the Formula's text on the clipboard.
 - **Submit to the gallery…** shares it. See [Formulas](formulas.md#sharing).
 
