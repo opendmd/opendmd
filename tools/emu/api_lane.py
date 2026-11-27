@@ -18,6 +18,10 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
+  in order    shuffle off (dwell 60 s), skips go in playlist order; two uploaded GIFs put at
+              the head of filelist.txt (the playlist rebuilt): the next GIF is the successor of
+              the one playing (`resume: … after the last`), never the first entry; the list put
+              back (two gone before the position): its successor again; shuffle and dwell back
   look        (--look, --look-psb) a card Formula as look_formula: drawn; its .psb written
               anew (a bad one, then the real one) rebuilds the look at once (formula_look.error
               comes, then goes); its .psi deleted clears look_formula and the look
@@ -562,6 +566,12 @@ class Lane:
                 self.play(emu, api)
                 self.governor(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "inorder":
+                # (A diagnostic shortcut: the uploads, then in-order playback across rebuilds.)
+                self.dwell_set = int(api.json("GET", "/api/config")[1]["dwell_max"])
+                self.files(api)
+                self.in_order(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "look":
                 # (A diagnostic shortcut: the look's Formula alone, then stop.)
                 self.look(emu, api)
@@ -591,6 +601,7 @@ class Lane:
             self.long_request(api)
             self.files(api)
             self.play(emu, api)
+            self.in_order(emu, api)
             if getattr(self.a, "look_psb", None):
                 self.look(emu, api)
             if getattr(self.a, "long_psb", None):
@@ -878,6 +889,55 @@ class Lane:
         self.expect(r.get("paused") is False, "pause", f"resume answered {r}")
         self.wait_status(api, lambda s: s.get("paused") is False, 30, "playing again")
         self.ok("play", f"an uploaded GIF (from the original), a Formula by psb (frame {fms.get('frame_ms')} ms, jit {fms.get('jit')}), a Formula saved to the card (.psi and .psb, read back) by its path; a missing file 404, a relative path 400; skip; pause and resume")
+
+    def in_order(self, emu, api):
+        """IN_ORDER: with shuffle off a rebuild of the playlist (here an upload into it) goes on
+        after the GIF that was playing (`opendmd_core::resume`), not from the first entry; the
+        lookup is the mark's index and a few either side (`resume: … N read`)."""
+        resumed = re.compile(r"resume: in order at entry (\d+) \((after the last|the last gone: its place), (\d+) read in (\d+) us\)")
+        _, cfg = api.json("GET", "/api/config")
+        keep = {k: cfg[k] for k in ("shuffle", "dwell_min", "dwell_max")}
+        _, r = api.json("PUT", "/api/config", {"shuffle": False, "dwell_min": 60, "dwell_max": 60}, timeout=120)
+        self.expect(r.get("ok") is True, "in order", f"PUT shuffle off answered {r}")
+        listed = [l for l in api.call("GET", "/filelist.txt")[1].decode().split("\n") if l]
+        self.expect(len(listed) > 6, "in order", f"filelist.txt has {len(listed)} entries")
+        on = lambda s: (s.get("now_playing") or {}).get("path")
+        st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and on(s) in listed, 120, "a playlist entry playing in order")
+
+        def skip(st):
+            before = st["now_playing"]["ordinal"]
+            api.json("POST", "/api/skip")
+            return self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != before and on(s) in listed, 60, "a skip in order")
+
+        # Off the first entries, and the skips in order.
+        st = skip(st)
+        while listed.index(on(st)) < 2:
+            st = skip(st)
+        a = listed.index(on(st))
+        st = skip(st)
+        self.expect(on(st) == listed[(a + 1) % len(listed)], "in order", f"a skip from {listed[a]} went to {on(st)}, not {listed[(a + 1) % len(listed)]}")
+
+        def rebuilt(text, n, what):
+            at = listed.index(on(api.status()))
+            mark = emu.mark()
+            api.call("PUT", "/api/files/filelist.txt", text.encode(), timeout=120)
+            st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and s.get("entries") == n
+                                  and on(s) and on(s) != listed[at], 120, f"the next GIF after {what}")
+            want = listed[(at + 1) % len(listed)]
+            self.expect(on(st) == want, "in order", f"after {what} playing {on(st)}, wanted {want} (the one after {listed[at]}); the first entry is {listed[0]}")
+            i, m = emu.wait_for(resumed, 30, mark, "the `resume:` line")
+            self.expect(m[2] == "after the last" and listed[at] == text.split("\n")[int(m[1]) - 1], "in order", f"after {what}: {emu.lines[i][:200]}")
+            return at, int(m[3]), int(m[4])
+
+        new = ["/gifs/EmuApi/emu-a.gif", "/gifs/EmuApi/emu-b.gif"]
+        self.expect(not set(new) & set(listed), "in order", f"the uploads {new} are in filelist.txt already")
+        at1, reads1, us1 = rebuilt("".join(p + "\n" for p in new + listed), len(listed) + 2, "two GIFs put at the head of the list")
+        at2, reads2, us2 = rebuilt("".join(p + "\n" for p in listed), len(listed), "the list put back")
+        _, r = api.json("PUT", "/api/config", keep, timeout=120)
+        self.expect(r.get("ok") is True, "in order", f"PUT {keep} answered {r}")
+        self.ok("in order", f"shuffle off: skips in order; two GIFs put at the head of filelist.txt ({len(listed)} entries) at entry {at1}: "
+                f"the next is its successor ({reads1} entries read, {us1} us emulated); the list put back at entry {at2}: its successor again "
+                f"({reads2} read, {us2} us); {keep} back")
 
     def look(self, emu, api):
         """The look's own Formula saved anew and deleted (formula_look::file_changed)."""
