@@ -298,15 +298,17 @@ export async function removeGif(path, name) {
 
 // Many at once, in order, the toast saying how far it got: "Moved 3 GIFs",
 // or "Moved 1 of 3: “X” couldn't be moved (why)" when one fails (those
-// done stay done, their references rewritten).
+// done stay done, their references rewritten). -> {done, left}: `left` the
+// paths not done (the one that failed and those after it), null when
+// cancelled.
 async function batch(pairs, verb, done) {
-  if (pairs.length > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${pairs.length.toLocaleString()} GIFs, one at a time; the panel may pause for a moment now and then.`)) return [];
+  if (pairs.length > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${pairs.length.toLocaleString()} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
   toast(`${verb === 'Deleted' ? 'Deleting' : verb === 'Moved' ? 'Moving' : 'Renaming'} ${pairs.length.toLocaleString()} GIFs…`);
   const r = await (await refs()).relink(pairs);
   const n = r.done.length.toLocaleString();
   if (r.failed) toast(`${verb} ${n} of ${pairs.length.toLocaleString()}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${verb === 'Deleted' ? 'deleted' : 'moved'} (${r.failed.error.message})`, 'bad');
   else toast(`${verb} ${n} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
-  return r.done;
+  return { done: r.done, left: r.failed ? pairs.slice(r.done.length).map((p) => p.from) : [] };
 }
 
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
@@ -329,18 +331,21 @@ async function names(m, paths, opts, fields) {
   return out;
 }
 
+// The bulk actions below resolve to batch()'s {done, left}, null when
+// nothing was done (cancelled, or refused before the first).
+
 // Move to folder…: a folder of the card's, or a new one.
 export async function bulkMove(paths, opts) {
   const m = await art();
   const sel = h('select', { id: 'bm-folder' }, opts.categories.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
   const ok = await sheet(`Move ${paths.length.toLocaleString()} GIFs`, 'Into which folder? A name taken there gets the next free number.', h('label.stack', 'Folder', sel), 'Move');
-  if (!ok) return [];
+  if (!ok) return null;
   let c = sel.value;
   if (c === '\n') c = (prompt('Name of the new folder') || '').trim();
-  if (!c || /[/"*:<>?\\|]/.test(c)) { if (c) toast(WHY.category, 'bad'); return []; }
+  if (!c || /[/"*:<>?\\|]/.test(c)) { if (c) toast(WHY.category, 'bad'); return null; }
   const plan = (await names(m, paths, { ...opts, categories: opts.categories }, (f) => (f.category === c ? f : { ...f, category: c }))).filter((x) => x.to);
   const bad = plan.find((x) => x.why);
-  if (bad) { toast(bad.why, 'bad'); return []; }
+  if (bad) { toast(bad.why, 'bad'); return null; }
   return batch(plan, 'Moved', ` to ${niceName(c)}`);
 }
 
@@ -380,12 +385,16 @@ export async function bulkRename(paths, opts) {
   plat.onchange = refresh;
   document.body.append(el);
   title.focus();
-  if (!(await result)) return [];
+  if (!(await result)) return null;
   return batch(plan.filter((x) => x.to), 'Renamed');
 }
 
+// Delete…: the confirm names what goes (a few titles, how many more, the
+// folders), never only a count.
 export async function bulkDelete(paths) {
-  if (!confirm(`Delete ${paths.length.toLocaleString()} GIFs from the card? They are taken out of every playlist too. This can’t be undone.`)) return [];
+  const n = paths.length, few = paths.slice(0, 5).map((p) => `“${label(app.wasm.parsePath(p))}”`).join(', ');
+  const dirs = [...new Set(paths.map((p) => niceName(p.split('/')[2])))], where = dirs.length > 4 ? `${dirs.slice(0, 4).join(', ')} and ${dirs.length - 4} more folders` : dirs.join(', ');
+  if (!confirm(`Delete ${n.toLocaleString()} GIF${n === 1 ? '' : 's'} from the card?\n\n${few}${n > 5 ? ` and ${(n - 5).toLocaleString()} more` : ''}\nFrom ${dirs.length === 1 ? 'the folder' : 'the folders'} ${where}.\n\n${n === 1 ? 'It is' : 'They are'} taken out of every playlist too. This can’t be undone.`)) return null;
   return batch(paths.map((from) => ({ from, to: null })), 'Deleted');
 }
 

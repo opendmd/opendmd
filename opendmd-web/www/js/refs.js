@@ -6,8 +6,10 @@
 // then, for those done: every playlist's lines and favourites (one read and
 // at most one write each, however many GIFs), the user's tags
 // (/sets/.tags), Smooth motion's list for a deleted GIF, the smart
-// playlists, the editor's draft, the selection, thumbnails and folder
-// listings, and a folder left empty goes.
+// playlists, the editor's draft, thumbnails and folder listings, and a
+// folder left empty goes. A GIF done leaves the Library's selection under
+// both names (never kept selected where it went, out of sight: the next
+// bulk action would take it too); those not reached stay, to try again.
 
 import { app, setValue } from './state.js';
 import { fileFor } from './overrides.js';
@@ -98,7 +100,7 @@ export async function relink(pairs, step) {
   // What the app holds by path follows too.
   const d = app.draft;
   d.paths = d.paths.map(to).filter(Boolean);
-  for (const p of done) if (app.selection.delete(p.from) && p.to) app.selection.add(p.to);
+  for (const p of done) { app.selection.delete(p.from); if (p.to) app.selection.delete(p.to); }
   const th = await import('./thumbs.js').catch(() => null), dirs = new Map();
   for (const p of done) {
     th?.forget(p.from);
