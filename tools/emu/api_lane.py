@@ -891,13 +891,14 @@ class Lane:
         self.ok("play", f"an uploaded GIF (from the original), a Formula by psb (frame {fms.get('frame_ms')} ms, jit {fms.get('jit')}), a Formula saved to the card (.psi and .psb, read back) by its path; a missing file 404, a relative path 400; skip; pause and resume")
 
     def in_order(self, emu, api):
-        """IN_ORDER: with shuffle off a rebuild of the playlist (here an upload into it) goes on
-        after the GIF that was playing (`opendmd_core::resume`), not from the first entry; the
-        lookup is the mark's index and a few either side (`resume: … N read`)."""
-        resumed = re.compile(r"resume: in order at entry (\d+) \((after the last|the last gone: its place), (\d+) read in (\d+) us\)")
+        """IN_ORDER: with shuffle off a rebuild of the playlist (an upload into it, an entry
+        removed, another playlist and back) goes on after the GIF that was playing
+        (`opendmd_core::resume`), not from the first entry; a rebuild within 3 s of a start plays
+        that GIF again; the lookup is the mark's index and a few either side (`resume: … N read`)."""
+        resumed = re.compile(r"resume: in order at entry (\d+) \((.+), (\d+) read in (\d+) us\)")
         _, cfg = api.json("GET", "/api/config")
-        keep = {k: cfg[k] for k in ("shuffle", "dwell_min", "dwell_max")}
-        _, r = api.json("PUT", "/api/config", {"shuffle": False, "dwell_min": 60, "dwell_max": 60}, timeout=120)
+        keep = {k: cfg[k] for k in ("shuffle", "dwell_min", "dwell_max", "set")}
+        _, r = api.json("PUT", "/api/config", {"shuffle": False, "dwell_min": 60, "dwell_max": 60, "set": ""}, timeout=120)
         self.expect(r.get("ok") is True, "in order", f"PUT shuffle off answered {r}")
         listed = [l for l in api.call("GET", "/filelist.txt")[1].decode().split("\n") if l]
         self.expect(len(listed) > 6, "in order", f"filelist.txt has {len(listed)} entries")
@@ -917,27 +918,62 @@ class Lane:
         st = skip(st)
         self.expect(on(st) == listed[(a + 1) % len(listed)], "in order", f"a skip from {listed[a]} went to {on(st)}, not {listed[(a + 1) % len(listed)]}")
 
-        def rebuilt(text, n, what):
-            at = listed.index(on(api.status()))
+        def settled():
+            # Up past resume::BRIEF_MS (3 s), so a rebuild moves on rather than replaying it.
+            return self.wait_status(api, lambda s: on(s) in listed and s["now_playing"].get("elapsed_ms", 0) >= 3500, 60, "the GIF up 3.5 s")
+
+        def rebuilt(change, n, what, how, want):
+            """`change()` rebuilds the playlist; `want(at)`: the listed index that must play next."""
+            at = listed.index(on(settled()))
             mark = emu.mark()
-            api.call("PUT", "/api/files/filelist.txt", text.encode(), timeout=120)
-            st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and s.get("entries") == n
-                                  and on(s) and on(s) != listed[at], 120, f"the next GIF after {what}")
-            want = listed[(at + 1) % len(listed)]
-            self.expect(on(st) == want, "in order", f"after {what} playing {on(st)}, wanted {want} (the one after {listed[at]}); the first entry is {listed[0]}")
-            i, m = emu.wait_for(resumed, 30, mark, "the `resume:` line")
-            self.expect(m[2] == "after the last" and listed[at] == text.split("\n")[int(m[1]) - 1], "in order", f"after {what}: {emu.lines[i][:200]}")
+            change()
+            i, m = emu.wait_for(resumed, 120, mark, f"the `resume:` line after {what}")
+            st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and s.get("entries") == n and on(s)
+                                  and (on(s) != listed[at] or want(at) == at), 120, f"the next GIF after {what}")
+            w = listed[want(at) % len(listed)]
+            self.expect(on(st) == w, "in order", f"after {what} playing {on(st)}, wanted {w} (from {listed[at]}); the first entry is {listed[0]}")
+            self.expect(m[2] == how, "in order", f"after {what}: {emu.lines[i][:200]}")
             return at, int(m[3]), int(m[4])
+
+        def put_list(paths):
+            return lambda: api.call("PUT", "/api/files/filelist.txt", "".join(p + "\n" for p in paths).encode(), timeout=120)
 
         new = ["/gifs/EmuApi/emu-a.gif", "/gifs/EmuApi/emu-b.gif"]
         self.expect(not set(new) & set(listed), "in order", f"the uploads {new} are in filelist.txt already")
-        at1, reads1, us1 = rebuilt("".join(p + "\n" for p in new + listed), len(listed) + 2, "two GIFs put at the head of the list")
-        at2, reads2, us2 = rebuilt("".join(p + "\n" for p in listed), len(listed), "the list put back")
+        succ = lambda at: at + 1
+        at1, reads1, us1 = rebuilt(put_list(new + listed), len(listed) + 2, "two GIFs put at the head of the list", "after the last", succ)
+        at2, reads2, us2 = rebuilt(put_list(listed), len(listed), "the list put back", "after the last", succ)
+        # The entry playing removed: not found, its place (which its successor moved into).
+        at3 = listed.index(on(settled()))
+        without = listed[:at3] + listed[at3 + 1:]
+        _, reads3, _ = rebuilt(put_list(without), len(listed) - 1, "the GIF playing removed", "the last gone: its place", succ)
+        # Put back at once: the successor had only just started, so it plays again.
+        at4 = listed.index(on(api.status()))
+        mark = emu.mark()
+        put_list(listed)()
+        i, m = emu.wait_for(resumed, 120, mark, "the `resume:` line after a rebuild right after a start")
+        self.expect(m[2] == "the last again, it was up briefly", "in order", f"a rebuild right after a start: {emu.lines[i][:200]}")
+        st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and s.get("entries") == len(listed) and on(s) in listed, 120, "the GIF again")
+        self.expect(on(st) == listed[at4], "in order", f"a rebuild {listed[at4]} had just started: playing {on(st)}")
+        # Another playlist and back: the first goes on after the GIF it was cut at.
+        at5 = listed.index(on(settled()))
+        mark = emu.mark()
+        _, r = api.json("PUT", "/api/config", {"set": "filelist.hall"}, timeout=120)
+        self.expect(r.get("ok") is True, "in order", f"PUT set filelist.hall answered {r}")
+        self.wait_status(api, lambda s: (s.get("manifest") or "").endswith("filelist.hall") and s.get("index_state") == "ready"
+                         and on(s) and on(s) != listed[at5], 120, "Halloween playing")
+        _, r = api.json("PUT", "/api/config", {"set": ""}, timeout=120)
+        self.expect(r.get("ok") is True, "in order", f"PUT set back answered {r}")
+        st = self.wait_status(api, lambda s: (s.get("manifest") or "").endswith("filelist.txt") and s.get("index_state") == "ready"
+                              and on(s) in listed, 120, "All files again")
+        self.expect(on(st) == listed[at5 + 1], "in order", f"back from Halloween playing {on(st)}, wanted {listed[at5 + 1]} (cut at {listed[at5]})")
+        self.expect(any(mm[2] == "after the last" for _, mm in emu.find(resumed, mark)), "in order", "no `after the last` resume coming back")
         _, r = api.json("PUT", "/api/config", keep, timeout=120)
         self.expect(r.get("ok") is True, "in order", f"PUT {keep} answered {r}")
         self.ok("in order", f"shuffle off: skips in order; two GIFs put at the head of filelist.txt ({len(listed)} entries) at entry {at1}: "
                 f"the next is its successor ({reads1} entries read, {us1} us emulated); the list put back at entry {at2}: its successor again "
-                f"({reads2} read, {us2} us); {keep} back")
+                f"({reads2} read, {us2} us); the GIF playing removed: its successor ({reads3} read); put back at once: that one again "
+                f"(up briefly); Halloween and back: on after entry {at5}; {keep} back")
 
     def look(self, emu, api):
         """The look's own Formula saved anew and deleted (formula_look::file_changed)."""

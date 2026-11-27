@@ -243,7 +243,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom", "wifi-soak", "outage"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe", "oom", "wifi-soak", "outage", "resume"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -313,7 +313,7 @@ def main():
         return api(a, sim, rom, want_sha)
     if a.mode == "offline":
         return offline(a, sim, rom, want_sha)
-    if a.mode in ("oom", "wifi-soak", "outage"):
+    if a.mode in ("oom", "wifi-soak", "outage", "resume"):
         return oom(a, sim, rom, want_sha)
     if a.mode == "power-safe":
         if a.chip != "s3":
@@ -789,6 +789,9 @@ def oom(a, sim, rom, want_sha):
     elif a.mode == "outage":
         import outage_lane as lane
         sub, tag = "outage", "EMU_OUTAGE"
+    elif a.mode == "resume":
+        import resume_lane as lane
+        sub, tag = "resume", "EMU_RESUME"
     else:
         import wifi_soak_lane as lane
         sub, tag = "wifisoak", "EMU_WIFI_SOAK"
