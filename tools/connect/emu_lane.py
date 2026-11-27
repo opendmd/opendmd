@@ -415,6 +415,8 @@ class Lane:
 
             async def cmd(c, a_=None, ctl=None, timeout=120):
                 ctl = ctl or a
+                if c == "play":
+                    self._play_mark = self.emu.mark()
                 f = ctl.frame(c, a_)
                 await ctl.send(f)
                 n = odc.loads(f[odc.COMMAND_HEAD:])["n"]
@@ -1554,7 +1556,13 @@ class Lane:
         return ((await self.status()).get("now_playing") or {}).get("ordinal") != o0
 
     async def _playing(self, path):
-        return ((await self.status()).get("now_playing") or {}).get("path") == path
+        # On screen now, or opened since this lane last looked (the console: a
+        # short play can be over between two status reads when the emulator
+        # runs ahead of the wall clock).
+        if ((await self.status()).get("now_playing") or {}).get("path") == path:
+            return True
+        start = getattr(self, "_play_mark", 0)
+        return bool(self.emu.find(re.compile(r"\] " + re.escape(path) + r" <- "), start))
 
     async def _not_playing(self, path):
         p = ((await self.status()).get("now_playing") or {}).get("path")
