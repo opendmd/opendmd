@@ -1,0 +1,4 @@
+name "Remote look"
+-- a look added by remote in the emulator lane (emu-connect)
+look screen 40
+gray(frac(x + t / 4))

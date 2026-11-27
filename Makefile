@@ -1402,6 +1402,7 @@ emu-connect-psb:
 	@mkdir -p $(EMU_CONNECT_DIR)/psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(WEB)/formulas/rift-patrol.psi) -o $(EMU_CONNECT_DIR)/psb/rift-patrol.psb
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/connect/lane-look.psi) -o $(EMU_CONNECT_DIR)/psb/lane-look.psb
 emu-connect: emu-build emu-card emu-connect-psb
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)

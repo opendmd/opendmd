@@ -1,14 +1,15 @@
 //! A Formula added by a remote controller (`formula-add`, `formula-part`;
 //! protocol 5.7): the panel's side, without the card. The arguments' rules,
 //! one add at a time with its two SHA-256s and its next offset, resumes,
-//! the day's quota. The firmware writes the bytes, checks the compiled
-//! program (`psb::verify`) and lands the files (`firmware/src/connect/fadd.rs`).
+//! the day's tally (kept on the card by the firmware), the add's own rate.
+//! The firmware writes the bytes, checks the compiled program
+//! (`psb::verify`) and lands the files (`firmware/src/connect/fadd.rs`).
 //!
 //! This is the one place a remote controller hands the panel a program
-//! (every other path refuses inline Formulas and `~sent`): the program is
-//! checked like any program from the network and, until the panel's own
-//! compiler has made it again from the source, drawn only by the VM, never
-//! the JIT (`fx_psi::unconfirmed`).
+//! (every other path refuses inline Formulas and `~sent`): it lands as
+//! `<stem>.psr`, never `.psb`, and whatever is read from a `.psr` is drawn
+//! by the VM only (`fx_psi::card_program`), until the panel's own compiler
+//! has written `<stem>.psb` from the source and removed the `.psr`.
 
 use std::time::Duration;
 
@@ -32,10 +33,15 @@ pub const MAX_PSB: u32 = 8 * 1024;
 pub const MAX_PART: usize = 384;
 /// The name the page shows, at most (characters).
 pub const MAX_NAME: usize = 60;
-/// Adds a rolling day may start, and their bytes.
-pub const QUOTA_ADDS: usize = 16;
+/// Adds a day may start, and their bytes ([`Tally`]).
+pub const QUOTA_ADDS: u32 = 16;
 pub const QUOTA_BYTES: u64 = 256 * 1024;
-pub const DAY: Duration = Duration::from_secs(24 * 3600);
+/// Formulas the card may hold for an add to be taken (sources counted in the
+/// add's own directory pass).
+pub const MAX_FORMULAS: usize = 128;
+/// One `formula-add` a panel takes in this long (its own rate: a refused or
+/// over-quota key cannot make the panel read the card four times a second).
+pub const ADD_EVERY: Duration = Duration::from_secs(2);
 /// An add with no progress for this long is dropped (its part files too).
 pub const STALE: Duration = Duration::from_secs(600);
 
@@ -208,17 +214,110 @@ pub struct Progress {
     pub complete: bool,
 }
 
-/// The panel's adds: one held at a time, the day's quota.
+/// The day's adds: kept on the card (the firmware's `/formulas/.add-day.*`,
+/// two slots written in turn) so a restart does not reset it. `day`: the
+/// calendar day (Unix days) of the panel's clock when it had one, else
+/// `None`. It starts again only on a later day; a tally made with no clock
+/// is carried into the first day a clock shows, and with no clock at all it
+/// never starts again (adds stop at the quota until a clock shows a later
+/// day). Every `formula-add` that gets past the rate is counted, before the
+/// card is read for it (a refused one too): the card is never read for free.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tally {
+    /// Written in turn: the higher one is the newer slot.
+    pub seq: u64,
+    pub day: Option<u64>,
+    pub adds: u32,
+    pub bytes: u64,
+}
+
+impl Tally {
+    /// A full day: what anything unreadable counts as.
+    pub const FULL: Tally = Tally { seq: 0, day: None, adds: QUOTA_ADDS, bytes: QUOTA_BYTES };
+
+    /// Its line on the card: `<seq> <day or -> <adds> <bytes>`.
+    pub fn text(&self) -> String {
+        format!("{} {} {} {}\n", self.seq, self.day.map_or("-".to_string(), |d| d.to_string()), self.adds, self.bytes)
+    }
+
+    /// Read back. Only a missing file is a fresh day (the caller's): an
+    /// empty, torn or unreadable one is a full day.
+    pub fn parse(t: &str) -> Tally {
+        let mut w = t.split_whitespace();
+        let (Some(q), Some(d), Some(a), Some(b), None) = (w.next(), w.next(), w.next(), w.next(), w.next()) else {
+            return Tally::FULL;
+        };
+        let day = match d {
+            "-" => None,
+            d => match d.parse() {
+                Ok(d) => Some(d),
+                Err(_) => return Tally::FULL,
+            },
+        };
+        match (q.parse(), a.parse(), b.parse()) {
+            (Ok(seq), Ok(adds), Ok(bytes)) => Tally { seq, day, adds, bytes },
+            _ => Tally::FULL,
+        }
+    }
+
+    /// The tally from the card's two slots (`None`: that slot's file is
+    /// missing). Both missing: a fresh day; either unreadable: a full day;
+    /// else the newer.
+    pub fn from_slots(a: Option<&str>, b: Option<&str>) -> Tally {
+        match (a.map(Tally::parse), b.map(Tally::parse)) {
+            (None, None) => Tally::default(),
+            (Some(t), None) | (None, Some(t)) => t,
+            (Some(x), Some(y)) if x == Tally::FULL || y == Tally::FULL => Tally::FULL,
+            (Some(x), Some(y)) => if x.seq >= y.seq { x } else { y },
+        }
+    }
+
+    /// As of `today` (`None`: no clock): only a later day starts it again;
+    /// a tally with no day is carried into the first one a clock shows.
+    fn roll(&mut self, today: Option<u64>) {
+        match (self.day, today) {
+            (Some(d), Some(t)) if t > d => {
+                *self = Tally { seq: self.seq, day: Some(t), adds: 0, bytes: 0 };
+            }
+            (None, Some(t)) => self.day = Some(t),
+            _ => {}
+        }
+    }
+
+    fn room(&self, bytes: u64) -> bool {
+        self.adds < QUOTA_ADDS && self.bytes.saturating_add(bytes) <= QUOTA_BYTES
+    }
+
+    fn charge(&mut self, adds: u32, bytes: u64) {
+        self.adds = self.adds.saturating_add(adds);
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.seq = self.seq.saturating_add(1);
+    }
+}
+
+/// What a `formula-add` may do, before the card is read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pre {
+    /// The same add signed again: carry on from `next` (`next == total`:
+    /// all the bytes are in, the checks are to be tried again).
+    Resume { next: u32 },
+    /// Already landed: its `done` again.
+    Landed { stem: String },
+    /// A new add: the card may be read for its target.
+    New,
+}
+
+/// The panel's adds: one held at a time, the day's tally, the add's rate.
 #[derive(Debug, Default)]
 pub struct Adds {
     pub held: Option<Held>,
-    /// The day's accepted adds: (when, bytes).
-    day: Vec<(Duration, u64)>,
+    pub tally: Tally,
+    last_add: Option<Duration>,
 }
 
 impl Adds {
     /// The held add, if it is not stale at `now` (else it is dropped and
-    /// its id returned: its part files to remove).
+    /// its id returned: its part files to remove now).
     pub fn expire(&mut self, now: Duration) -> Option<u32> {
         if self.held.as_ref().is_some_and(|h| now.saturating_sub(h.at) >= STALE) {
             return self.held.take().map(|h| h.args.id);
@@ -226,37 +325,55 @@ impl Adds {
         None
     }
 
-    /// May `k` start `args` now? `target`: where the firmware will land it
-    /// (`None`: the args' stem). Quota is charged here, once per add (a
-    /// resume or a landed add again is free).
-    pub fn start(&mut self, k: KeyId, args: AddArgs, target: Option<String>, now: Duration) -> Result<Start, Refusal> {
-        self.expire(now);
-        let mut dropped = None;
+    /// Before anything is read from the card: the add's own rate, the same
+    /// add again, another key's add under way, the day's tally.
+    pub fn pre(&mut self, k: KeyId, args: &AddArgs, now: Duration, today: Option<u64>) -> Result<Pre, Refusal> {
+        let rated = self.last_add.is_some_and(|t| now.saturating_sub(t) < ADD_EVERY);
         if let Some(h) = &mut self.held {
-            if h.k == k && h.args == args {
+            if h.k == k && &h.args == args && now.saturating_sub(h.at) < STALE {
+                // (Its checks tried again, with all the bytes in: rated too.)
+                let whole = !h.landed && h.next == h.args.total();
+                if whole && rated {
+                    return Err(Refusal::Rate);
+                }
+                if whole {
+                    self.last_add = Some(now);
+                }
                 h.at = now;
-                return Ok(if h.landed { Start::Landed { stem: h.target.clone() } } else { Start::Resume { next: h.next } });
+                return Ok(if h.landed { Pre::Landed { stem: h.target.clone() } } else { Pre::Resume { next: h.next } });
             }
-            if h.k != k {
-                return Err(Refusal::Busy);
-            }
-            dropped = Some(h.args.id);
         }
-        self.day.retain(|&(t, _)| now.saturating_sub(t) < DAY);
-        let bytes: u64 = self.day.iter().map(|&(_, b)| b).sum();
-        if self.day.len() >= QUOTA_ADDS || bytes + u64::from(args.total()) > QUOTA_BYTES {
+        if rated {
+            return Err(Refusal::Rate);
+        }
+        self.last_add = Some(now);
+        // (A landed add holds nothing; a stalled one of another key does
+        // until it is stale.)
+        if self.held.as_ref().is_some_and(|h| h.k != k && !h.landed && now.saturating_sub(h.at) < STALE) {
+            return Err(Refusal::Busy);
+        }
+        self.tally.roll(today);
+        if !self.tally.room(u64::from(args.total())) {
             return Err(Refusal::Quota);
         }
-        self.day.push((now, u64::from(args.total())));
-        let target = target.unwrap_or_else(|| args.stem.clone());
+        // Counted now, before the card is read (a refusal after it too); the
+        // bytes when it begins.
+        self.tally.charge(1, 0);
+        Ok(Pre::New)
+    }
+
+    /// The card said where it lands: held, charged. `Some(id)`: an earlier
+    /// add given up for it, its part files to remove.
+    pub fn begin(&mut self, k: KeyId, args: AddArgs, target: String, now: Duration) -> Option<u32> {
+        let dropped = self.held.take().filter(|h| !h.landed).map(|h| h.args.id);
+        self.tally.charge(0, u64::from(args.total()));
         self.held = Some(Held { k, args, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, landed: false });
-        Ok(Start::Fresh { dropped })
+        dropped
     }
 
     /// A part from `k`: strictly at `next`, inside the stream.
     pub fn part(&mut self, k: KeyId, id: u32, off: u32, data: &[u8], now: Duration) -> Result<Progress, Refusal> {
-        self.expire(now);
-        let h = self.held.as_mut().filter(|h| h.args.id == id && !h.landed).ok_or(Refusal::BadArg)?;
+        let h = self.held.as_mut().filter(|h| h.args.id == id && !h.landed && now.saturating_sub(h.at) < STALE).ok_or(Refusal::BadArg)?;
         if h.k != k {
             return Err(Refusal::NotAllowed);
         }
@@ -292,13 +409,12 @@ impl Adds {
         Ok(Progress { runs, next: b, complete })
     }
 
-    /// The held add's bytes are in and checked, its checks may be tried:
-    /// the add, if it is `k`'s `id` with all its bytes.
+    /// The held add, if it is `k`'s `id` with all its bytes in.
     pub fn whole(&self, k: &KeyId, id: u32) -> Option<&Held> {
         self.held.as_ref().filter(|h| &h.k == k && h.args.id == id && h.next == h.args.total() && !h.landed)
     }
 
-    /// It landed as `stem` (kept for a lost `done`).
+    /// It landed as `stem` (kept for a lost `done`; it holds nothing).
     pub fn landed(&mut self, stem: &str, now: Duration) {
         if let Some(h) = &mut self.held {
             h.landed = true;
@@ -312,7 +428,7 @@ impl Adds {
         self.held.take().map(|h| h.args.id)
     }
 
-    /// `k` was removed: its add goes.
+    /// `k` was removed (remotely or on the LAN): its add goes.
     pub fn forget_key(&mut self, k: &KeyId) -> Option<u32> {
         if self.held.as_ref().is_some_and(|h| &h.k == k) {
             return self.drop_held();
@@ -382,12 +498,22 @@ mod tests {
         assert!(stem_choices(&"r".repeat(40)).all(|s| s.len() <= MAX_STEM));
     }
 
+    /// `pre` then `begin`, as the firmware does once the card named a target.
+    fn start(adds: &mut Adds, k: KeyId, a: AddArgs, now: Duration, today: Option<u64>) -> Result<Pre, Refusal> {
+        let p = adds.pre(k, &a, now, today)?;
+        if p == Pre::New {
+            let stem = a.stem.clone();
+            adds.begin(k, a, stem, now);
+        }
+        Ok(p)
+    }
+
     #[test]
     fn a_stream_split_across_its_two_files() {
         let src = vec![b's'; 700];
         let psb = vec![b'p'; 300];
         let mut adds = Adds::default();
-        assert_eq!(adds.start(K, args(&src, &psb, "x"), None, t(0)), Ok(Start::Fresh { dropped: None }));
+        assert_eq!(start(&mut adds, K, args(&src, &psb, "x"), t(0), None), Ok(Pre::New));
         let all: Vec<u8> = [src.clone(), psb.clone()].concat();
         let p = adds.part(K, 7, 0, &all[..384], t(1)).unwrap();
         assert_eq!(p.runs, vec![(Part::Source, 0, 0..384)]);
@@ -404,67 +530,126 @@ mod tests {
         let psb = vec![b'p'; 100];
         let all: Vec<u8> = [src.clone(), psb.clone()].concat();
         let mut adds = Adds::default();
-        adds.start(K, args(&src, &psb, "x"), None, t(0)).unwrap();
-        // Out of order, past the end, another key, no such add.
+        start(&mut adds, K, args(&src, &psb, "x"), t(0), None).unwrap();
         assert_eq!(adds.part(K, 7, 10, &all[10..20], t(1)), Err(Refusal::BadArg));
         assert_eq!(adds.part(K2, 7, 0, &all[..10], t(1)), Err(Refusal::NotAllowed));
         assert_eq!(adds.part(K, 8, 0, &all[..10], t(1)), Err(Refusal::BadArg));
-        adds.part(K, 7, 0, &all[..480], t(1)).unwrap();
+        adds.part(K, 7, 0, &all[..384], t(1)).unwrap();
         // The same part again (a replay from an older session, past the
         // counter): not at `next`, refused, nothing written twice.
-        assert_eq!(adds.part(K, 7, 0, &all[..480], t(2)), Err(Refusal::BadArg));
-        // Bytes that miss the signed hash: refused at the end, the add gone.
-        let mut wrong = all[480..].to_vec();
+        assert_eq!(adds.part(K, 7, 0, &all[..384], t(2)), Err(Refusal::BadArg));
+        let mut wrong = all[384..].to_vec();
         wrong[0] ^= 1;
-        assert_eq!(adds.part(K, 7, 480, &wrong, t(3)), Err(Refusal::BadArg));
+        assert_eq!(adds.part(K, 7, 384, &wrong, t(3)), Err(Refusal::BadArg));
         assert!(adds.held.is_none());
     }
 
     #[test]
-    fn resume_landed_busy_replace() {
+    fn resume_landed_busy_replace_rate() {
         let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
         let a = args(&src, &psb, "x");
         let mut adds = Adds::default();
-        adds.start(K, a.clone(), None, t(0)).unwrap();
+        start(&mut adds, K, a.clone(), t(0), None).unwrap();
         adds.part(K, 7, 0, &src[..5], t(1)).unwrap();
-        // Signed again (a new session): from where it was, not charged.
-        assert_eq!(adds.start(K, a.clone(), None, t(2)), Ok(Start::Resume { next: 5 }));
+        // Signed again (a new session): from where it was, never rated.
+        assert_eq!(start(&mut adds, K, a.clone(), t(1), None), Ok(Pre::Resume { next: 5 }));
+        // The add's own rate: another add within 2 s.
+        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(1), None), Err(Refusal::Rate));
         // Another key while it is held: busy.
-        assert_eq!(adds.start(K2, args(&src, &psb, "y"), None, t(3)), Err(Refusal::Busy));
+        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(3), None), Err(Refusal::Busy));
         // The same key's other add replaces it.
         let mut b = a.clone();
         b.id = 9;
-        assert_eq!(adds.start(K, b.clone(), None, t(4)), Ok(Start::Fresh { dropped: Some(7) }));
-        adds.landed("x-2", t(5));
-        assert_eq!(adds.start(K, b, None, t(6)), Ok(Start::Landed { stem: "x-2".into() }));
-        // Stale after 10 minutes: another key may start.
-        assert_eq!(adds.start(K2, args(&src, &psb, "y"), None, t(6 + 600)), Ok(Start::Fresh { dropped: None }));
+        assert_eq!(adds.pre(K, &b, t(6), None), Ok(Pre::New));
+        assert_eq!(adds.begin(K, b.clone(), "x".into(), t(6)), Some(7));
+        adds.landed("x-2", t(7));
+        assert_eq!(start(&mut adds, K, b, t(8), None), Ok(Pre::Landed { stem: "x-2".into() }));
+        // A landed add holds nothing: another key may start at once.
+        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(11), None), Ok(Pre::New));
+        // A stalled one goes after 10 minutes.
+        assert_eq!(adds.expire(t(11 + 600)), Some(7));
+        assert!(adds.forget_key(&K2).is_none());
     }
 
     #[test]
-    fn quota_and_its_day() {
+    fn red_forget_and_expiry() {
+        let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
+        let mut adds = Adds::default();
+        start(&mut adds, K, args(&src, &psb, "x"), t(0), None).unwrap();
+        assert_eq!(adds.forget_key(&K), Some(7), "the key removed: its add goes");
+        start(&mut adds, K, args(&src, &psb, "x"), t(10), None).unwrap();
+        assert_eq!(adds.part(K, 7, 0, &src[..5], t(10 + 600)), Err(Refusal::BadArg), "a stale add takes no part");
+    }
+
+    #[test]
+    fn the_tally_and_its_day() {
         let (src, psb) = (vec![1u8; 100], vec![2u8; 100]);
         let mut adds = Adds::default();
-        for i in 0..QUOTA_ADDS as u32 {
+        let mut now = 0;
+        let mut go = |adds: &mut Adds, id: u32, today| {
+            now += 3;
             let mut a = args(&src, &psb, "x");
-            a.id = i + 1;
-            assert!(matches!(adds.start(K, a, None, t(u64::from(i))), Ok(Start::Fresh { .. })), "{i}");
+            a.id = id;
+            start(adds, K, a, t(now), today)
+        };
+        for i in 0..QUOTA_ADDS {
+            assert_eq!(go(&mut adds, i + 1, Some(20000)), Ok(Pre::New), "{i}");
         }
-        let mut a = args(&src, &psb, "x");
-        a.id = 99;
-        assert_eq!(adds.start(K, a.clone(), None, t(100)), Err(Refusal::Quota), "the 17th in a day");
-        // The day rolls over: the first add's day is up a day after it.
-        assert!(matches!(adds.start(K, a.clone(), None, t(24 * 3600)), Ok(Start::Fresh { .. })), "a day after the first");
-        let mut c = a;
-        c.id = 100;
-        assert_eq!(adds.start(K, c, None, t(24 * 3600)), Err(Refusal::Quota), "the second's day is not up yet");
+        assert_eq!(go(&mut adds, 99, Some(20000)), Err(Refusal::Quota), "the 17th of the day");
+        // A restart: the tally comes back from the card, still full.
+        let kept = Tally::from_slots(Some(&adds.tally.text()), None);
+        assert_eq!(kept, adds.tally);
+        let mut again = Adds { tally: kept, ..Adds::default() };
+        assert_eq!(go(&mut again, 100, Some(20000)), Err(Refusal::Quota), "a restart does not reset it");
+        assert_eq!(go(&mut again, 101, None), Err(Refusal::Quota), "no clock: no new day");
+        assert_eq!(go(&mut again, 102, Some(19999)), Err(Refusal::Quota), "an earlier day starts nothing");
+        assert_eq!(go(&mut again, 103, Some(20001)), Ok(Pre::New), "a later day");
+        // A tally made with no clock is carried into the first clocked day.
+        let mut nc = Adds::default();
+        for i in 0..QUOTA_ADDS {
+            assert_eq!(go(&mut nc, 200 + i, None), Ok(Pre::New));
+        }
+        assert_eq!(go(&mut nc, 300, Some(20005)), Err(Refusal::Quota), "the clock set: the same day's 16, not 16 more");
+        // Only a missing file is a fresh day; empty, torn, garbled or crafted ones are full.
+        assert_eq!(Tally::from_slots(None, None), Tally::default());
+        for bad in ["", " ", "x", "1 2", "1 2 3", "1 2 3 4 5", "1 20001 a 3", "1 z 1 1", "-1 1 1 1"] {
+            assert_eq!(Tally::from_slots(Some(bad), None), Tally::FULL, "{bad:?}");
+            assert_eq!(Tally::from_slots(Some(&Tally::default().text()), Some(bad)), Tally::FULL, "{bad:?} in the other slot");
+        }
+        // Two slots: the newer wins.
+        let older = Tally { seq: 4, day: Some(1), adds: 3, bytes: 10 };
+        let newer = Tally { seq: 5, day: Some(1), adds: 4, bytes: 20 };
+        assert_eq!(Tally::from_slots(Some(&older.text()), Some(&newer.text())), newer);
+        assert_eq!(Tally::from_slots(Some(&newer.text()), Some(&older.text())), newer);
+        // A crafted file cannot wrap the bytes.
+        let mut huge = Adds { tally: Tally { seq: 1, day: Some(1), adds: 0, bytes: u64::MAX - 1 }, ..Adds::default() };
+        assert_eq!(go(&mut huge, 400, Some(1)), Err(Refusal::Quota));
+        // Every add past the rate is counted before the card is read: 16 refusals use the day up.
+        let mut r = Adds::default();
+        for i in 0..QUOTA_ADDS {
+            assert_eq!(r.pre(K, &AddArgs { id: 500 + i, ..args(&src, &psb, "x") }, t(1000 + u64::from(i) * 3), Some(1)), Ok(Pre::New));
+        }
+        assert_eq!(r.pre(K, &AddArgs { id: 600, ..args(&src, &psb, "x") }, t(2000), Some(1)), Err(Refusal::Quota));
         // Bytes: 256 KB a day.
         let mut adds = Adds::default();
         let big = AddArgs { src_size: MAX_SOURCE, psb_size: MAX_PSB, ..args(&src, &psb, "x") };
-        let mut n = 0;
-        while adds.start(K, AddArgs { id: n + 1, ..big.clone() }, None, t(u64::from(n))).is_ok() {
+        let mut n = 0u32;
+        while start(&mut adds, K, AddArgs { id: n + 1, ..big.clone() }, t(u64::from(n) * 3), Some(1)).is_ok() {
             n += 1;
         }
         assert_eq!(u64::from(n) * u64::from(big.total()), QUOTA_BYTES - QUOTA_BYTES % u64::from(big.total()));
+    }
+
+    /// A whole add's checks tried again: one in 2 s, as a new add.
+    #[test]
+    fn whole_retries_are_rated() {
+        let (src, psb) = (vec![1u8; 4], vec![2u8; 6]);
+        let a = args(&src, &psb, "x");
+        let mut adds = Adds::default();
+        start(&mut adds, K, a.clone(), t(0), None).unwrap();
+        adds.part(K, 7, 0, &[src.clone(), psb.clone()].concat(), t(1)).unwrap();
+        assert_eq!(adds.pre(K, &a, t(3), None), Ok(Pre::Resume { next: 10 }));
+        assert_eq!(adds.pre(K, &a, t(3), None), Err(Refusal::Rate), "again at once");
+        assert_eq!(adds.pre(K, &a, t(6), None), Ok(Pre::Resume { next: 10 }));
     }
 }

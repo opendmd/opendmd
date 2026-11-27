@@ -1,30 +1,39 @@
 //! A Formula added by a remote controller (`formula-add`, `formula-part`;
-//! protocol 5.7): the card's half of `opendmd_core::connect::fadd`.
+//! protocol 5.7): the card's half of `opendmd_core::connect::fadd`. Built
+//! only with `connect-formula-add` (test images: never a release).
 //!
-//! - **Start:** the stem, or the next free `-2` … `-9`: a stem is free when
-//!   neither its `.psi` nor its `.psb` opens (an open each, never a stat);
-//!   a taken stem whose `.psi` has the signed source's SHA-256 is the same
-//!   Formula already there: `done` with nothing written. The bytes go to
-//!   `/formulas/.add-<id>.psi.part` and `.add-<id>.psb.part` (dot names:
-//!   never listed or played; removed at boot).
+//! - **Before any card read:** the add's own rate, the same add signed
+//!   again (no card read at all), another key's add under way, the day's
+//!   tally (`/formulas/.add-day`, kept across restarts), a LAN transfer or
+//!   update under way (`busy`).
+//! - **One directory pass** (no lookup per name): the Formulas on the card
+//!   (at most [`fadd::MAX_FORMULAS`] sources, else `quota`) and the taken
+//!   stems (a `.psi`, `.psb` or `.psr`); where it lands is the stem or the
+//!   next free `-2` … `-9`. A taken stem whose `.psi` has the signed
+//!   source's length is hashed, and if it is the signed source it is the
+//!   same Formula: `done`, nothing written.
+//! - **The bytes** go to `/formulas/.add-<id>.psi.part` and `.psr.part`
+//!   (dot names: never listed or played; gone when the add is dropped or
+//!   stale, and at boot).
 //! - **The last part:** both hashes (the core's), the source UTF-8 with no
-//!   NUL, the compiled file `PSB` + this player's ABI, and every program in
-//!   it loaded and checked by `psb::load_boxed` (`psb::verify`), behind a
-//!   heap gate (the bytes, one program and 20 KB for the rest; below it, or
-//!   a load short of heap, `busy`, the bytes kept for the same
-//!   `formula-add` signed again).
-//! - **Landing, never overwriting:** the `.psb` part renamed to
-//!   `<stem>.psb` and the `.psi` part to `<stem>.psi` (a rename fails onto
-//!   a name that exists), the `.psb` dated 1980 (older than any source: the
-//!   next start finds it stale), and the Formula noted as added by remote
-//!   (`card_formulas::note_remote`): on the VM only, never the JIT, until
-//!   the next start's pass compiles its source here.
+//!   NUL, the program `PSB` + this ABI and every program in it loaded and
+//!   checked (`psb::verify`), behind a heap gate (the bytes, one program, 20
+//!   KB for the rest; below it, or a load short of heap, `busy`: the same
+//!   `formula-add` signed again tries again).
+//! - **Landing, fail closed:** the program renamed to `<stem>.psr` first,
+//!   then the source to `<stem>.psi` (a rename never replaces a file). It is
+//!   never a `.psb`: whatever is read from a `.psr` plays on the VM only
+//!   (`fx_psi::card_program`), until the panel's own compiler writes the
+//!   `.psb` from the source and removes the `.psr` (`card_formulas`). A
+//!   restart between the two renames leaves a `.psr` with no source, which
+//!   the next pass removes; a failed second rename removes the first.
 
 use super::client::{core_now, Client};
 use crate::config;
-use opendmd_core::connect::fadd::{self, AddArgs, Part, Start};
+use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Tally};
 use opendmd_core::connect::keys::KeyId;
 use opendmd_core::connect::proto::Refusal;
+use opendmd_core::synth::REMOTE_EXT;
 use std::io::{Read, Write};
 
 type Done = Result<Option<String>, Refusal>;
@@ -33,8 +42,13 @@ fn dir() -> String {
     format!("{}/formulas", config::SD_MOUNT)
 }
 
+/// The day's tally's two slots, written in turn (the newer, by its seq,
+/// counts): a restart mid-write leaves the other whole (the torn one reads
+/// as a full day).
+const TALLY_SLOTS: [&str; 2] = [".add-day.a", ".add-day.b"];
+
 fn part_path(id: u32, p: Part) -> String {
-    format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psb" })
+    format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psr" })
 }
 
 fn remove_parts(id: u32) {
@@ -42,24 +56,98 @@ fn remove_parts(id: u32) {
     let _ = std::fs::remove_file(part_path(id, Part::Psb));
 }
 
+/// A LAN transfer (an upload, a stream, an update's) shares the card.
+fn lan_busy() -> bool {
+    crate::cache_builder::transfer_in_flight() || crate::stream::uploads() > 0
+}
+
+/// Today by the panel's clock (Unix days), when it has one.
+fn today() -> Option<u64> {
+    crate::clock::unix_valid().and_then(|t| u64::try_from(t).ok()).map(|t| t / 86_400)
+}
+
+/// The tally as the card keeps it: both slots missing, a fresh day; one
+/// unreadable (or the card failing), a full day; else the newer.
+pub(super) fn load_tally() -> Tally {
+    let slot = |n: &str| match std::fs::read_to_string(format!("{}/{n}", dir())) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    };
+    match (slot(TALLY_SLOTS[0]), slot(TALLY_SLOTS[1])) {
+        (Ok(a), Ok(b)) => Tally::from_slots(a.as_deref(), b.as_deref()),
+        _ => Tally::FULL,
+    }
+}
+
+/// Into the slot its seq names (the other one keeps the last tally whole).
+fn save_tally(t: &Tally) -> bool {
+    let _ = std::fs::create_dir_all(dir());
+    std::fs::write(format!("{}/{}", dir(), TALLY_SLOTS[(t.seq % 2) as usize]), t.text()).is_ok()
+}
+
+/// The add's directory pass: the stems taken (lower case) and how many
+/// Formulas there are, with each taken `.psi`'s size.
+fn scan() -> Option<(Vec<(String, u32)>, usize)> {
+    use esp_idf_sys as sys;
+    let path = std::ffi::CString::new("0:/formulas").ok()?;
+    let mut taken = Vec::new();
+    let mut sources = 0usize;
+    // SAFETY: plain data FatFs fills, the directory closed before return.
+    unsafe {
+        let mut d: sys::FF_DIR = std::mem::zeroed();
+        let r = sys::f_opendir(&mut d, path.as_ptr());
+        if r == sys::FRESULT_FR_NO_PATH {
+            return Some((taken, 0));
+        }
+        if r != sys::FRESULT_FR_OK {
+            return None;
+        }
+        let mut fi: sys::FILINFO = std::mem::zeroed();
+        while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
+            let Ok(name) = std::ffi::CStr::from_ptr(fi.fname.as_ptr()).to_str() else { continue };
+            let l = name.to_ascii_lowercase();
+            for ext in [".psi", ".psb", REMOTE_EXT] {
+                if let Some(st) = l.strip_suffix(ext) {
+                    // (Only a `.psi`'s size matters: 0 for the others.)
+                    taken.push((st.to_string(), if ext == ".psi" { fi.fsize as u32 } else { u32::MAX }));
+                    if ext == ".psi" {
+                        sources += 1;
+                    }
+                }
+            }
+            // (Bounded: past the cap the add is refused anyway.)
+            if taken.len() > 3 * fadd::MAX_FORMULAS + 64 {
+                break;
+            }
+        }
+        sys::f_closedir(&mut d);
+    }
+    Some((taken, sources))
+}
+
 /// Where `args` lands: `Ok(Err(stem))` the same source is there already
 /// (done, nothing written); `Ok(Ok(stem))` a free stem.
 fn target(args: &AddArgs) -> Result<Result<String, String>, Refusal> {
-    let d = dir();
+    let (taken, sources) = scan().ok_or(Refusal::Busy)?;
+    if sources >= fadd::MAX_FORMULAS {
+        return Err(Refusal::Quota);
+    }
+    log::info!("formula-add: looked on the card for {}", args.stem);
+    // (At most one file hashed: the first taken stem whose source has the
+    // signed length. Others are taken, and passed.)
+    let mut hashed = false;
     for stem in fadd::stem_choices(&args.stem) {
-        match std::fs::File::open(format!("{d}/{stem}.psi")) {
-            Ok(f) => {
-                if fadd::sha256_of(f).ok() == Some(args.src_sha256) {
-                    return Ok(Err(stem));
-                }
+        let here: Vec<u32> = taken.iter().filter(|(s, _)| *s == stem).map(|&(_, n)| n).collect();
+        if here.is_empty() {
+            return Ok(Ok(stem));
+        }
+        if !hashed && here.contains(&args.src_size) {
+            hashed = true;
+            let f = std::fs::File::open(format!("{}/{stem}.psi", dir())).map_err(|_| Refusal::Busy)?;
+            if fadd::sha256_of(f).ok() == Some(args.src_sha256) {
+                return Ok(Err(stem));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // (A compiled file with no source is taken too.)
-                if std::fs::File::open(format!("{d}/{stem}.psb")).is_err() {
-                    return Ok(Ok(stem));
-                }
-            }
-            Err(_) => return Err(Refusal::Busy),
         }
     }
     Err(Refusal::Quota)
@@ -98,9 +186,9 @@ fn source_ok(path: &str) -> bool {
     }
 }
 
-/// The compiled part: this player's format, every program in it loaded
-/// and checked as anything from the network is (`psb::verify`). `Err`:
-/// the heap had no room for a program (try again), not a refusal.
+/// The program: this player's format, every program in it loaded and
+/// checked as anything from the network is (`psb::verify`). `Err`: the
+/// heap had no room for a program (try again), not a refusal.
 fn psb_ok(psb: &[u8]) -> Result<bool, ()> {
     use opendmd_core::psi::psb::{load_boxed, Which, ABI, NO_HEAP};
     if psb.len() < 6 || &psb[..3] != b"PSB" || psb[3] != ABI {
@@ -116,60 +204,77 @@ fn psb_ok(psb: &[u8]) -> Result<bool, ()> {
     Ok(true)
 }
 
-/// The heap a check needs: the compiled bytes, one program (its box is
-/// ~10.5 KB at most) in one block, and what CPU0's other card work leaves
-/// for the player and the network (`card_formulas`' 20 KB).
+/// The heap a check needs: the bytes, one program (its box is ~10.5 KB at
+/// most) in one block, and what CPU0's other card work leaves for the
+/// player and the network (`card_formulas`' 20 KB).
 fn room(psb_size: usize) -> bool {
-    crate::state::free_heap() as usize >= psb_size + 12 * 1024 + 20 * 1024 && crate::state::largest_free_block() >= 12 * 1024
+    crate::state::free_heap() as usize >= psb_size + CHECK_STACK + 12 * 1024 + 20 * 1024 && crate::state::largest_free_block() >= 12 * 1024
 }
 
+/// The checks' task's stack (the program loads and the source's pass).
+const CHECK_STACK: usize = 8 * 1024;
+
 impl Client {
+    /// A turn's housekeeping: a stale add's part files go now.
+    pub(super) fn formula_tick(&mut self) {
+        if let Some(id) = self.adds.expire(core_now()) {
+            log::info!("formula-add: an add left 10 minutes without progress: dropped");
+            remove_parts(id);
+        }
+    }
+
     #[optimize(size)]
     #[inline(never)]
     pub(super) fn formula_add(&mut self, k: KeyId, args: AddArgs) -> Done {
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
-        if crate::cache_builder::transfer_in_flight() {
+        if lan_busy() {
             return Err(Refusal::Busy);
         }
-        let now = core_now();
-        if let Some(old) = self.adds.expire(now) {
-            remove_parts(old);
+        self.formula_tick();
+        if !self.tally_loaded {
+            self.adds.tally = load_tally();
+            self.tally_loaded = true;
         }
-        // The same add signed again: no new target looked for.
-        let again = self.adds.held.as_ref().is_some_and(|h| h.k == k && h.args == args);
-        let dest = if again {
-            None
-        } else {
-            match target(&args)? {
-                Err(stem) => return Ok(done(&stem)),
-                Ok(stem) => Some(stem),
-            }
-        };
+        let now = core_now();
         let id = args.id;
-        match self.adds.start(k, args, dest, now)? {
-            Start::Landed { stem } => Ok(done(&stem)),
-            Start::Resume { next } => {
+        match self.adds.pre(k, &args, now, today())? {
+            Pre::Landed { stem } => return Ok(done(&stem)),
+            Pre::Resume { next } => {
                 if self.adds.whole(&k, id).is_some() {
                     return self.formula_land(k, id);
                 }
-                Ok(Some(format!(r#"{{"next":{next}}}"#)))
+                return Ok(Some(format!(r#"{{"next":{next}}}"#)));
             }
-            Start::Fresh { dropped } => {
-                if let Some(old) = dropped {
-                    remove_parts(old);
-                }
-                for p in [Part::Source, Part::Psb] {
-                    if std::fs::File::create(part_path(id, p)).is_err() {
-                        self.adds.drop_held();
-                        remove_parts(id);
-                        return Err(Refusal::Busy);
-                    }
-                }
-                Ok(Some(r#"{"next":0}"#.into()))
+            Pre::New => {}
+        }
+        // The attempt counted before the card is read for it (fails closed:
+        // no tally kept, no add).
+        if !save_tally(&self.adds.tally) {
+            return Err(Refusal::NoCard);
+        }
+        let stem = match target(&args)? {
+            Err(stem) => return Ok(done(&stem)),
+            Ok(stem) => stem,
+        };
+        if let Some(old) = self.adds.begin(k, args, stem, now) {
+            remove_parts(old);
+        }
+        // Its bytes on the tally (fails closed: no part file without it).
+        if !save_tally(&self.adds.tally) {
+            self.adds.drop_held();
+            return Err(Refusal::NoCard);
+        }
+        let _busy = crate::cache_builder::busy();
+        for p in [Part::Source, Part::Psb] {
+            if std::fs::File::create(part_path(id, p)).is_err() {
+                self.adds.drop_held();
+                remove_parts(id);
+                return Err(Refusal::Busy);
             }
         }
+        Ok(Some(r#"{"next":0}"#.into()))
     }
 
     #[optimize(size)]
@@ -178,21 +283,28 @@ impl Client {
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
+        // (A LAN transfer goes first: the part is sent again.)
+        if lan_busy() {
+            return Err(Refusal::Busy);
+        }
+        self.formula_tick();
         let p = match self.adds.part(k, id, off, &data, core_now()) {
             Ok(p) => p,
-            // (Bytes that missed a signed hash: the add is gone, its parts too.)
             Err(Refusal::BadArg) if self.adds.held.is_none() => {
                 remove_parts(id);
                 return Err(Refusal::BadArg);
             }
             Err(e) => return Err(e),
         };
-        for (which, _, range) in &p.runs {
-            let w = std::fs::OpenOptions::new().append(true).open(part_path(id, *which)).and_then(|mut f| f.write_all(&data[range.clone()]));
-            if w.is_err() {
-                self.adds.drop_held();
-                remove_parts(id);
-                return Err(Refusal::Busy);
+        {
+            let _busy = crate::cache_builder::busy();
+            for (which, _, range) in &p.runs {
+                let w = std::fs::OpenOptions::new().append(true).open(part_path(id, *which)).and_then(|mut f| f.write_all(&data[range.clone()]));
+                if w.is_err() {
+                    self.adds.drop_held();
+                    remove_parts(id);
+                    return Err(Refusal::Busy);
+                }
             }
         }
         if p.complete {
@@ -209,71 +321,64 @@ impl Client {
             return Err(Refusal::BadArg);
         };
         let (stem, psb_size) = (h.target.clone(), h.args.psb_size as usize);
-        if !room(psb_size) {
-            // Kept: the same formula-add signed again tries the checks again.
+        if lan_busy() || !room(psb_size) {
+            // Kept: the same formula-add signed again tries again.
             return Err(Refusal::Busy);
         }
+        // The card is this add's from its first read to its last rename.
+        let _busy = crate::cache_builder::busy();
         let mut psb = Vec::new();
         let read = psb.try_reserve_exact(psb_size).is_ok()
             && std::fs::File::open(part_path(id, Part::Psb)).and_then(|f| f.take(psb_size as u64 + 1).read_to_end(&mut psb)).is_ok();
         if !read {
             return Err(Refusal::Busy);
         }
-        let checked = if psb.len() == psb_size && source_ok(&part_path(id, Part::Source)) { psb_ok(&psb) } else { Ok(false) };
+        // The checks (the source's pass, the program's loads) on a task of
+        // their own: not on the network worker's stack (a few KB left).
+        let src_path = part_path(id, Part::Source);
+        let run = crate::psi_stack::run_with_prio(CHECK_STACK, Some(1), move || {
+            if psb.len() == psb_size && source_ok(&src_path) { psb_ok(&psb) } else { Ok(false) }
+        });
+        let Some((checked, left)) = run else {
+            // (No task to check on: the heap. Kept, tried again.)
+            return Err(Refusal::Busy);
+        };
+        log::info!("formula-add: checked on a task of its own ({left} B of its stack left)");
         if checked.is_err() {
             return Err(Refusal::Busy);
         }
         if checked != Ok(true) {
-            log::warn!("formula-add: a Formula added by remote refused: not one this panel can play");
+            log::warn!("formula-add: refused: not a Formula this panel can play");
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::BadArg);
         }
-        let crc = opendmd_core::settings_file::crc32(&psb);
-        drop(psb);
         let d = dir();
-        let (psb_to, psi_to) = (format!("{d}/{stem}.psb"), format!("{d}/{stem}.psi"));
-        // (std's rename onto a name that exists fails on FAT: never an overwrite.)
-        if std::fs::rename(part_path(id, Part::Psb), &psb_to).is_err() {
+        let (psr_to, psi_to) = (format!("{d}/{stem}{REMOTE_EXT}"), format!("{d}/{stem}.psi"));
+        // The program first, as a `.psr` (VM only), then its source; a rename
+        // never replaces a file. Either step failing leaves nothing that plays
+        // on the JIT, and nothing at all from this add.
+        if std::fs::rename(part_path(id, Part::Psb), &psr_to).is_err() {
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::Busy);
         }
         if std::fs::rename(part_path(id, Part::Source), &psi_to).is_err() {
-            let _ = std::fs::remove_file(&psb_to);
+            let _ = std::fs::remove_file(&psr_to);
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::Busy);
         }
-        old_date(&psb_to);
-        if let Err(e) = crate::card_formulas::note_remote(&stem, crc) {
-            log::warn!("formula-add: noting a Formula added by remote failed ({e}); it stays on the VM until a restart compiles it");
-        }
-        log::info!("formula-add: a Formula added by remote landed as /formulas/{stem}.psi (on the VM until compiled here)");
+        crate::fatidx::note_written(&psi_to);
+        log::info!("formula-add: landed as /formulas/{stem}.psi, its program a .psr (on the VM until compiled here)");
         self.adds.landed(&stem, core_now());
         Ok(done(&stem))
     }
 
-    /// `k` was removed: its add goes.
+    /// `k` was removed (remotely or on the LAN): its add goes, part files too.
     pub(super) fn formula_forget(&mut self, k: &KeyId) {
         if let Some(id) = self.adds.forget_key(k) {
             remove_parts(id);
         }
-    }
-}
-
-/// Date `path` 1980-01-01 (FAT's first day): older than any source.
-fn old_date(path: &str) {
-    use esp_idf_sys as sys;
-    let card = path.strip_prefix(config::SD_MOUNT).unwrap_or(path);
-    let Ok(c) = std::ffi::CString::new(format!("0:{card}")) else {
-        return;
-    };
-    // SAFETY: a zeroed FILINFO with the date fields set; a NUL-terminated path.
-    unsafe {
-        let mut fi: sys::FILINFO = std::mem::zeroed();
-        fi.fdate = (1 << 5) | 1;
-        fi.ftime = 0;
-        sys::f_utime(c.as_ptr(), &fi);
     }
 }

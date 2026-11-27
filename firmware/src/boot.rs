@@ -77,7 +77,7 @@ pub enum Event {
 
 /// A card Formula's compiled bytes, or why they could not be read.
 #[cfg(feature = "psi")]
-pub type CardPsb = Result<Vec<u8>, opendmd_core::psi::Error>;
+pub type CardPsb = Result<opendmd_core::fx_psi::CardProgram, opendmd_core::psi::Error>;
 
 /// The playlist's catalog as `open_catalog` returns it.
 pub type Built = anyhow::Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)>;
@@ -393,10 +393,6 @@ fn run(task: BootTask) {
         #[cfg(feature = "psi")]
         {
             let mut sent = false;
-            // Programs a remote controller delivered and this panel has not
-            // compiled itself: on the VM only, from before the first plays.
-            #[cfg(feature = "connect-formula-add")]
-            crate::card_formulas::load_unconfirmed();
             if snapshot.boot_show != opendmd_core::boot::ShowLength::Off {
                 let file = opendmd_core::synth::formula_file(&snapshot.boot_formula);
                 if file.is_some() || snapshot.boot_formula != nvs_boot {

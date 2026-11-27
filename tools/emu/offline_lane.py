@@ -62,7 +62,7 @@ NETWORK_OFF = re.compile(r'network off \("network": "off" in the settings\)')
 WORKER_OFF = re.compile(r"\[net\] network off: no WiFi this boot")
 PREPARED = re.compile(r"formulas: /formulas/(\S+)\.psi prepared for the panel \(([^)]*)\): (\d+) B in (\d+) ms; heap (\d+) B free before, (\d+) B at the lowest; compile stack (\d+) B left")
 SUMMARY = re.compile(r"formulas: (\d+) on the card: (\d+) ready, (\d+) prepared now, (\d+) do not compile, (\d+) short of memory")
-HEARTBEAT = re.compile(r"heartbeat: heap (\d+) B free \(floor (\d+) B.*wifi off")
+HEARTBEAT = re.compile(r"heartbeat: heap (\d+) B free \((?:largest \d+ B, )?floor (\d+) B.*wifi off")
 
 
 def frame_wifi(ssid: str, psk: str) -> bytes:
@@ -179,6 +179,13 @@ class Lane:
         # playlist with no start-up show: skipped until it is ready, then
         # played.
         files["/formulas/zlate.psi"] = (FIXTURES / "ramp.psi").read_bytes()
+        # A release and remote adds' programs (`.psr`, made only by a build with
+        # connect-formula-add): one with its source, one with none. A release
+        # plays a `.psr` on the VM and removes one only with its `.psi` (a LAN
+        # delete): the pass compiles the first's source and leaves both.
+        files["/formulas/rampr.psi"] = (FIXTURES / "ramp.psi").read_bytes()
+        files["/formulas/rampr.psr"] = (Path(self.a.host_psb) / "ramp.psb").read_bytes()
+        files["/formulas/orphan.psr"] = (Path(self.a.host_psb) / "ramp.psb").read_bytes()
         files["/filelist.txt"] = (
             "/formulas/zlate.psi\n/formulas/cut.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
             "/formulas/tick.psi\n/formulas/stale.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_02.gif\n"
@@ -355,6 +362,12 @@ class Lane:
             a, b = (got_dir / f"{stem}.psb").read_bytes(), (host / f"{stem}.psb").read_bytes()
             if a != b:
                 raise LaneFail(f"/formulas/{stem}.psb compiled on the display ({len(a)} B) differs from the host's psi build ({len(b)} B)")
+        for name in ("rampr.psr", "orphan.psr", "rampr.psb"):
+            r = subprocess.run(["mcopy", "-n", "-i", str(out), f"::/formulas/{name}", str(got_dir / name)],
+                               env={"MTOOLS_SKIP_CHECK": "1", "PATH": "/usr/bin:/bin"}, capture_output=True)
+            if r.returncode != 0:
+                raise LaneFail(f"/formulas/{name} is not on the card after the pass (a release keeps a .psr, and compiles its source)")
+        self.ok("remote programs kept", "a release leaves .psr files (rampr.psr beside its compiled .psb, orphan.psr with no source)")
         mark = (got_dir / "broken.psb").read_bytes()
         if len(mark) != 12 or mark[:4] != b"PSB\0":
             raise LaneFail(f"broken.psb is not the mark ({mark[:16]!r})")

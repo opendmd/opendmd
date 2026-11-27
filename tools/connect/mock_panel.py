@@ -127,7 +127,7 @@ class Panel:
             if h["next"] == a["src_size"] + a["psb_size"]:
                 return self.land()
             return {"next": h["next"]}
-        if h and h["k"] != k and time.monotonic() - h["at"] < 600:
+        if h and h["k"] != k and not h.get("landed") and time.monotonic() - h["at"] < 600:
             raise odc.Bad("busy")
         target = None
         for st in [a["stem"]] + [f"{a['stem'][:38]}-{i}" for i in range(2, 10)]:

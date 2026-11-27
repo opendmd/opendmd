@@ -26,6 +26,7 @@ MARKERS=(
   "emu-ballast" "ballast: "
   "emu-crash-test" "emu-crash-test: "
   "connect-formula-add" "formula-add: "
+  "the card-failure hooks (bench, connect-test)" "card mount(s) will fail on purpose"
 )
 
 fail() {

@@ -422,6 +422,8 @@ class Lane:
                 n = odc.loads(f[odc.COMMAND_HEAD:])["n"]
                 return await ctl.until("ack", lambda m: m.get("n") == n, timeout=timeout)
 
+            self._cmd = cmd
+
             if os.environ.get("EMU_CONNECT_ONLY") == "dns":
                 # A quicker lane for the lookup alone (not the gate's).
                 await self.dns_lookups()
@@ -772,6 +774,7 @@ class Lane:
         # A planned restart: the identity is in NVS, back by itself after the hold.
         regs = self.srv.registered
         self.emu.resets_allowed += 1
+        self._restart_mark = self.emu.mark()
         try:
             await self.http("POST", "/api/reboot")
         except Exception:  # noqa: BLE001
@@ -785,6 +788,7 @@ class Lane:
         cfg = (await self.http("GET", "/api/config"))[1] or {}
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
         await self.remote_add_confirmed()
+        await self.late_mounts()
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
         await self.dns_lookups()
@@ -1392,106 +1396,270 @@ class Lane:
         except urllib.error.HTTPError as e:
             return e.code
 
-    async def remote_add(self, cmd):
-        """`formula-add` (5.7): the gallery's largest Formula, rift-patrol
-        (10.8 KB of source, its host-compiled 4.4 KB .psb), added by remote in
-        parts; it lands, is listed, and plays on the VM only (its kernel never
-        built) until the restart's pass compiles it here (checked after the
-        restart, `remote_add_confirmed`). Red: a compiled file that fails
-        psb::verify (cut short, its hash signed) is refused with nothing
-        landed; the same source again is `done`, nothing written."""
+    # The two stems the lane's adds land under: their FNV-1a keys collide
+    # (the only hash left on the card side: `card_formulas::key`), so a
+    # confirmation by key, if there were one, could not tell them apart.
+    NEVER = "rift-611199"   # the gallery's largest: the classic never compiles it
+    SMALL = "rift-1540232"  # a small one: compiled at the next start
+
+    async def add_formula(self, cmd, src, psb, id_, stem):
+        """One remote add, its parts in turn; a `busy` (the checks waiting for
+        heap) or the add's own `rate` tried again as the page does."""
         import hashlib
+        args = {"id": id_, "stem": stem, "name": "Remote", "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
+                "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+        r = None
+        for _ in range(8):
+            await asyncio.sleep(2.2)  # (one formula-add in 2 s per panel)
+            r = await cmd("formula-add", args)
+            if not (r and r.get("err") in ("rate", "busy")):
+                break
+        off = ((r or {}).get("r") or {}).get("next")
+        stream = src + psb
+        while r and r.get("ok") and off is not None and off < len(stream):
+            await asyncio.sleep(0.3)
+            d = stream[off: off + odc.ADD_MAX_PART]
+            r = await cmd("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
+            off = ((r or {}).get("r") or {}).get("next", len(stream)) if r and r.get("ok") else None
+        for _ in range(6):
+            if not (r and r.get("err") == "busy"):
+                break
+            self.report["remote_add_busy"] = self.report.get("remote_add_busy", 0) + 1
+            await asyncio.sleep(5)
+            r = await cmd("formula-add", args)
+        return r
+
+    async def inject_cmd(self, c, a_=None):
+        """A command signed by the image's test key, put straight onto the
+        panel's socket under its current session (after a restart, where the
+        lane's controller socket is the old session's)."""
+        self._inj_n = getattr(self, "_inj_n", 2 * 10**13) + 1
+        dev = next(iter(self.srv.panels))
+        rec = self.rec()
+        key = test_key()
+        f = odc.sign_command(key, odc.command_body(dev, bytes.fromhex(rec.sess), self._inj_n, c, a_ or {}))
+        return await self.injected_ack(f"{c} put on the panel's socket", f, odc.key_id(bytes(key.verify_key)))
+
+    async def _status_code(self, path):
+        code, _ = await asyncio.to_thread(self._get_bytes, path)
+        return code
+
+    async def remote_add(self, cmd):
+        """`formula-add` (5.7): a program a remote controller delivers lands as
+        `<stem>.psr`, never `.psb`, and plays on the VM only (no kernel built)
+        whatever the panel knows or loses. The gallery's largest, rift-patrol
+        (10,874 B of source, its host-compiled 4,439 B program: a verifying
+        program the panel did not make), under NEVER; the same source again
+        is done with nothing written; a program that fails psb::verify is
+        refused with nothing landed; a small one under SMALL, whose key
+        collides with NEVER's. Across the restart, `remote_add_confirmed`."""
         src = (REPO / "opendmd-web" / "formulas" / "rift-patrol.psi").read_bytes()
         psb = (Path(self.psb_dir) / "rift-patrol.psb").read_bytes()
-
-        async def add(src, psb, id_, stem="rift-patrol"):
-            args = {"id": id_, "stem": stem, "name": "Rift patrol", "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
-                    "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
-            r = await cmd("formula-add", args)
-            off = ((r or {}).get("r") or {}).get("next")
-            stream = src + psb
-            while r and r.get("ok") and off is not None and off < len(stream):
-                await asyncio.sleep(0.3)
-                d = stream[off: off + odc.ADD_MAX_PART]
-                r = await cmd("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
-                off = ((r or {}).get("r") or {}).get("next", len(stream)) if r and r.get("ok") else None
-            # The checks wait for heap: the same add signed again tries them again (as the page does).
-            for _ in range(6):
-                if not (r and r.get("err") == "busy"):
-                    break
-                self.report["remote_add_busy"] = self.report.get("remote_add_busy", 0) + 1
-                await asyncio.sleep(5)
-                r = await cmd("formula-add", args)
-            return r
-
         t0 = time.time()
-        r = await add(src, psb, 21)
-        self.expect(r and (r.get("r") or {}).get("done") is True and r["r"].get("stem") == "rift-patrol",
+        r = await self.add_formula(cmd, src, psb, 21, self.NEVER)
+        self.expect(r and (r.get("r") or {}).get("done") is True and r["r"].get("stem") == self.NEVER,
                     f"formula-add: rift-patrol ({len(src)} + {len(psb)} B) in parts of {odc.ADD_MAX_PART}: landed", f"{json.dumps(r)} in {time.time() - t0:.0f} s")
-        code, got = await asyncio.to_thread(self._get_bytes, "/formulas/rift-patrol.psi")
+        codes = [await self._status_code(f"/formulas/{self.NEVER}{e}") for e in (".psi", ".psr", ".psb")]
+        self.expect(codes == [200, 200, 404], "...as its source and a .psr, never a .psb", f"{codes}")
+        code, got = await asyncio.to_thread(self._get_bytes, f"/formulas/{self.NEVER}.psi")
         self.expect(code == 200 and got == src, "...its source on the card byte for byte", f"{code}")
+        su = ((await self.status()).get("connect") or {}).get("stack_unused")
+        self.report["stack_unused_after_add"] = su
+        self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after an add: >= 1 KB left", f"{su} B")
         await asyncio.sleep(5.5)
         r = await cmd("formulas")
         fr = (r or {}).get("r") or {}
-        self.expect(["rift-patrol", "Rift patrol"] in (fr.get("card") or []) and odc.is_int(fr.get("abi")) and fr.get("psb") is True,
-                    "formulas: the added Formula listed; abi and psb said", json.dumps({k: fr.get(k) for k in ("abi", "psb")}))
-        await asyncio.sleep(1.2)
+        self.expect([self.NEVER, "Rift patrol"] in (fr.get("card") or []) and odc.is_int(fr.get("abi")) and fr.get("psb") is True,
+                    "formulas: the added Formula listed (from its .psr); abi and psb said", json.dumps({k: fr.get(k) for k in ("abi", "psb")}))
+        code, kern, vm = await self._plays(f"/formulas/{self.NEVER}.psi", cmd)
+        self.expect(code and vm and not kern, "the added Formula plays on the VM only: no kernel built for it", f"{kern} kernels, {vm} VM lines")
+        # As the look: a remote look's .psr drawn over everything on the VM only.
+        look_src = (REPO / "tools" / "connect" / "lane-look.psi").read_bytes()
+        r = await self.add_formula(cmd, look_src, (Path(self.psb_dir) / "lane-look.psb").read_bytes(), 25, "remote-look")
+        self.expect(r and (r.get("r") or {}).get("stem") == "remote-look", "formula-add: a look", json.dumps(r))
         mark = self.emu.mark()
-        r = await cmd("play", {"path": "/formulas/rift-patrol.psi"})
-        self.expect(r and r.get("ok"), "play the added Formula: ok", json.dumps(r))
+        code, _ = await self.http("PUT", "/api/config", {"look_formula": "/formulas/remote-look.psi"})
         await asyncio.sleep(12)
-        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
         kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
-        self.expect(vm and not kern, "the added Formula plays on the VM only: no kernel built for it (the JIT's gate refuses it first)", f"{len(vm)} VM lines, {len(kern)} kernels")
-        self.report["remote_add_s"] = round(time.time() - t0, 1)
-        # Red: the same source again: done, nothing written.
-        await asyncio.sleep(1.2)
-        r = await add(src, psb, 22)
-        self.expect(r and (r.get("r") or {}).get("stem") == "rift-patrol" and ((r.get("r") or {}).get("done")), "formula-add of the same source again: done as rift-patrol, nothing written", json.dumps(r))
-        # Red: a compiled file that does not load (cut short; the hash of what is sent signed).
-        await asyncio.sleep(1.2)
-        r = await add(src.replace(b"Rift patrol", b"Rift patrol B", 1), psb[:-40], 23, stem="rift-cut")
-        code, _ = await asyncio.to_thread(self._get_bytes, "/formulas/rift-cut.psi")
-        self.expect(r and r.get("err") == "bad-arg" and code == 404, "red: a compiled file that fails psb::verify: bad-arg, nothing landed", f"{json.dumps(r)}, GET {code}")
-        # A small one too (the offline lane's ramp), which the classic can compile at its next start.
-        await asyncio.sleep(1.2)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        self.expect(code == 200 and vm and not kern, "a remote program as the look (look_formula): on the VM only, no kernel", f"{code}, {len(kern)} kernels, {len(vm)} VM lines")
+        await self.http("PUT", "/api/config", {"look_formula": ""})
+        # (Gone again on the LAN, its .psr with its .psi: the restart's pass
+        # is left the adds it checks.)
+        await asyncio.sleep(2)
+        await self.http("DELETE", "/api/files" + urllib.parse.quote("/formulas/remote-look.psi"))
+        self.expect(await self._status_code("/formulas/remote-look.psr") == 404, "a LAN delete of the look's source takes its .psr", "")
+        r = await self.add_formula(cmd, src, psb, 22, self.NEVER)
+        self.expect(r and (r.get("r") or {}).get("stem") == self.NEVER and (r.get("r") or {}).get("done"), "formula-add of the same source again: done, nothing written", json.dumps(r))
+        r = await self.add_formula(cmd, src.replace(b"Rift patrol", b"Rift patrol B", 1), psb[:-40], 23, "rift-cut")
+        codes = [await self._status_code(f"/formulas/rift-cut{e}") for e in (".psi", ".psr", ".psb")]
+        self.expect(r and r.get("err") == "bad-arg" and codes == [404, 404, 404], "red: a program that fails psb::verify: bad-arg, nothing landed", f"{json.dumps(r)}, {codes}")
         ramp = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes()
-        r = await add(ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 24, stem="remote-ramp")
-        self.expect(r and (r.get("r") or {}).get("stem") == "remote-ramp", "formula-add: a small Formula too", json.dumps(r))
+        r = await self.add_formula(cmd, ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 24, self.SMALL)
+        self.expect(r and (r.get("r") or {}).get("stem") == self.SMALL, "formula-add: a small one, its key colliding with the first's", json.dumps(r))
         await self.http("PUT", "/api/config", {"set": ""})
+        # The add's red cases, then the network worker's stack (the deepest
+        # paths: the nine-hash choice, the failures' logs, a land retried).
+        await self.add_reds(cmd, ramp)
+        su = ((await self.status()).get("connect") or {}).get("stack_unused")
+        self.report["stack_unused_after_add_reds"] = su
+        self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after the add's red cases: >= 1 KB left (the command set's own floor is about the same)", f"{su} B")
 
-    async def _plays(self, path):
-        """Play `path` on the LAN; (kernels built, unconfirmed VM lines) in the 12 s after."""
+    async def add_reds(self, cmd, ramp):
+        """The add's order of checks and its limits: a key removed on the LAN
+        mid-add takes its part files; the 128-Formula cap; and a key over the
+        day's tally refused with no card read at all."""
+        import hashlib
+        rec = self.rec()
+        dev = next(iter(self.srv.panels))
+        # A second key, added remotely, starts an add; removed on the LAN, its parts go.
+        c = nacl.signing.SigningKey(hashlib.sha256(b"emu-lane add red key").digest())
+        cpub = bytes(c.verify_key)
+        r = await cmd("add-controller", {"pub": cpub.hex(), "label": "adder"})
+        self.expect(r and r.get("ok"), "a second key added for the add's red cases", json.dumps(r))
+        await asyncio.sleep(2.5)
+
+        async def as_c(cc, a_):
+            self._c_n = getattr(self, "_c_n", 3 * 10**13) + 1
+            f = odc.sign_command(c, odc.command_body(dev, bytes.fromhex(self.rec().sess), self._c_n, cc, a_))
+            return await self.injected_ack(f"{cc} from the second key", f, odc.key_id(cpub))
+
+        big = ramp.replace(b"Offline ramp", b"Removed mid-add", 1)
+        rp = (Path(self.psb_dir) / "ramp.psb").read_bytes()
+        args = {"id": 41, "stem": "mid-add", "name": "x", "src_size": len(big), "src_sha256": hashlib.sha256(big).hexdigest(),
+                "psb_size": len(rp), "psb_sha256": hashlib.sha256(rp).hexdigest()}
+        r = await as_c("formula-add", args)
+        part = await self._status_code("/formulas/.add-41.psi.part")
+        code, _ = await self.http("DELETE", f"/api/connect/controllers/{odc.key_id(cpub).hex()}")
+        await asyncio.sleep(4)
+        after = await self._status_code("/formulas/.add-41.psi.part")
+        self.expect(r and r.get("ok") and part == 200 and code == 200 and after == 404, "a key removed on the LAN mid-add: its add and part files go",
+                    f"{json.dumps(r)}, part {part} -> {after}, DELETE {code}")
+        # The cap: 128 Formulas on the card, then an add is quota.
+        have = len([1 for _ in range(1)])
+        st = await self.http("GET", "/api/files?dir=" + urllib.parse.quote("/formulas"))
+        rows = st[1] if isinstance(st[1], list) else (st[1] or {}).get("files", []) if isinstance(st[1], dict) else []
+        n_psi = sum(1 for x in rows if str(x.get("name", "")).endswith(".psi"))
+        fill = [f"/formulas/cap{i:03d}.psi" for i in range(max(0, 128 - n_psi))]
+        for p in fill:
+            await asyncio.to_thread(self._put_bytes, p, b'name "Cap"\ngray(x)\n')
+        r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", b"Over the cap", 1), rp, 42, "over-cap")
+        self.expect(r and r.get("err") == "quota", f"the 129th Formula on the card: quota ({n_psi} there, {len(fill)} put)", json.dumps(r))
+        for p in fill:
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(p))
+        _ = have
+        # Over the day's tally: each formula-add counts; past 16, quota with no card read.
         mark = self.emu.mark()
-        code, _ = await self.http("POST", "/api/play", {"path": path})
+        r = None
+        for i in range(20):
+            r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", f"Tally {i}".encode(), 1), rp, 60 + i, f"tally-{i}")
+            if r and r.get("err") == "quota":
+                break
+        looked = self.emu.find(re.compile(r"formula-add: looked on the card for (\S+)"), mark)
+        last = looked[-1][1].group(1) if looked else None
+        self.expect(r and r.get("err") == "quota" and last != f"tally-{i}", f"over the day's tally: quota after {i} more, with no card read for the refused one",
+                    f"{json.dumps(r)}; last looked for {last}")
+        # (A LAN user may start the day again: both slots deleted. The panel's
+        # own copy stays full until its next start reads the card.)
+        for slot in (".add-day.a", ".add-day.b"):
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(f"/formulas/{slot}"))
+        await asyncio.sleep(2.2)
+        r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", b"Still full", 1), rp, 90, "still-full")
+        self.expect(r and r.get("err") == "quota", "...and stays so in RAM until the next start", json.dumps(r))
+        for j in range(i + 1):
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(f"/formulas/tally-{j}.psi"))
+
+    async def _plays(self, path, cmd=None):
+        """Play `path` (by remote with `cmd`, else on the LAN); (ok, kernels
+        built, remote-VM lines) in the 12 s after."""
+        mark = self.emu.mark()
+        if cmd:
+            r = await cmd("play", {"path": path})
+            ok = bool(r and r.get("ok"))
+        else:
+            code, _ = await self.http("POST", "/api/play", {"path": path})
+            ok = code == 200
         await asyncio.sleep(12)
         kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
         vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
-        return code, len(kern), len(vm)
+        return ok, len(kern), len(vm)
 
-    async def remote_add_confirmed(self):
-        """After a restart: the pass compiled the small added Formula here
-        (confirmed: it may use the JIT); the gallery's largest needs more heap
-        to compile than the classic has (~147 KB), so it stays unconfirmed, on
-        the VM only."""
-        conf_rx = re.compile(r"formulas: (\d+) added by remote compiled here: confirmed")
-        short_rx = re.compile(r"formulas: short of memory for /formulas/rift-patrol\.psi \(the least needs (\d+) B free")
-        # (The mount pass tries the large one's compile first: it ends some 2 emulated minutes in.)
+    def pass_checks(self, start=0):
+        """The mount passes' count of compiles checked beside a `.psr`."""
+        return [int(m.group(1)) for _, m in self.emu.find(re.compile(r"formulas: \d+ on the card: .* in \d+ ms; (\d+) checked beside a remote program"), start)]
+
+    async def remote_add_confirmed(self, label="after the restart"):
+        """After a restart: the pass compiled SMALL here (its .psb written and
+        checked, its .psr gone: it may use the JIT); NEVER, which the classic
+        cannot compile (~147 KB), keeps its .psr and stays on the VM, its key
+        colliding with SMALL's notwithstanding. An add timed into that pass
+        keeps its .psr and plays on the VM too."""
+        small_rx = re.compile(r"formulas: /formulas/" + re.escape(self.SMALL) + r"\.psi added by remote, compiled here")
+        short_rx = re.compile(r"formulas: short of memory for /formulas/" + re.escape(self.NEVER) + r"\.psi \(the least needs (\d+) B free")
+        # Into the pass (it tries the large one's compile first, some 2 emulated minutes).
+        ramp = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes().replace(b"Offline ramp", b"Ramp in the pass", 1)
+        cmd = self.inject_cmd
+        during = not self.emu.find(short_rx, self._restart_mark)
+        r = await self.add_formula(cmd, ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 31, "in-the-pass")
+        self.expect(r and (r.get("r") or {}).get("done") and during, f"{label}: an add timed into the boot pass lands", f"{json.dumps(r)}; the pass still running {during}")
+
         async def pass_done():
-            return bool(self.emu.find(conf_rx)) and bool(self.emu.find(short_rx))
+            return bool(self.emu.find(small_rx, self._restart_mark)) and bool(self.emu.find(short_rx, self._restart_mark))
         try:
             await self.wait("the mount pass's verdicts on the remote adds", pass_done, 600, every=3)
         except Fail:
             pass
-        hits, short = self.emu.find(conf_rx), self.emu.find(short_rx)
-        self.expect(bool(hits), "after the restart: the small added Formula compiled here, confirmed", f"{len(hits)}")
-        code, kern, vm = await self._plays("/formulas/remote-ramp.psi")
-        self.expect(code == 200 and kern and not vm, "...and it now may use the JIT (a kernel built)", f"{code}, {kern} kernels, {vm} VM lines")
+        short = self.emu.find(short_rx, self._restart_mark)
+        self.expect(bool(self.emu.find(small_rx, self._restart_mark)), f"{label}: the small one compiled here, its .psr removed", "")
+        first, now = self.pass_checks(0)[:1], self.pass_checks(self._restart_mark)
+        self.expect(first == [0] and now and now[0] == 1, "the first boot's pass (no .psr) checked nothing again; the restart's, the one beside a .psr",
+                    f"first boot {first}, after the restart {now}")
+        codes = [await self._status_code(f"/formulas/{self.SMALL}{e}") for e in (".psr", ".psb")]
+        self.expect(codes == [404, 200], "...a .psb of the panel's own, no .psr", f"{codes}")
+        ok, kern, vm = await self._plays(f"/formulas/{self.SMALL}.psi")
+        self.expect(ok and kern and not vm, "...and it may use the JIT now (a kernel built)", f"{kern} kernels, {vm} VM lines")
         self.report["rift_patrol_compile_need"] = int(short[-1][1].group(1)) if short else None
-        await asyncio.sleep(1.2)
-        code, kern, vm = await self._plays("/formulas/rift-patrol.psi")
-        self.expect(code == 200 and vm and not kern and short, "the largest, which the classic cannot compile (short of memory), stays on the VM only",
-                    f"{code}, {kern} kernels, {vm} VM lines; compile needs {self.report['rift_patrol_compile_need']} B")
+        codes = [await self._status_code(f"/formulas/{self.NEVER}{e}") for e in (".psr", ".psb")]
+        ok, kern, vm = await self._plays(f"/formulas/{self.NEVER}.psi")
+        self.expect(ok and vm and not kern and short and codes == [200, 404], f"{label}: the one the classic cannot compile keeps its .psr and stays on the VM (its key colliding with a confirmed one's)",
+                    f"{kern} kernels, {vm} VM lines, files {codes}; compile needs {self.report['rift_patrol_compile_need']} B")
+        codes = [await self._status_code(f"/formulas/in-the-pass{e}") for e in (".psr", ".psb")]
+        ok, kern, vm = await self._plays("/formulas/in-the-pass.psi")
+        self.expect(ok and ((codes == [200, 404] and vm and not kern) or (codes == [404, 200])), "the add timed into the pass: its .psr and the VM (or, compiled by the panel since, its own .psb)", f"files {codes}, {kern} kernels, {vm} VM lines")
+
+    async def late_mounts(self):
+        """The card mounted late (the boot's second attempt) and after the boot
+        (no card at boot, then the retry loop: as if put in later): the remote
+        program still plays on the VM only, with nothing kept anywhere but its
+        file's name."""
+        # As the start-up show too (read at the card's mount, on each path).
+        code, _ = await self.http("PUT", "/api/config", {"boot_show": "short", "boot_formula": f"/formulas/{self.NEVER}.psi"})
+        self.expect(code == 200, "the remote program as the start-up show (boot_formula)", f"{code}")
+        for label, n in (("a plain restart (the show reads the card in time)", None), ("a late mount (the boot's second attempt)", 1), ("a card mounted after the boot (the retry loop)", 6)):
+            self.emu.resets_allowed += 1
+            self._restart_mark = self.emu.mark()
+            try:
+                await self.http("POST", "/api/reboot" + (f"?sd_fail={n}" if n else ""))
+            except Exception:  # noqa: BLE001
+                pass
+            await self.wait(f"back after the restart ({label})", lambda: self._uptime_below(300), 900, every=3)
+
+            async def mounted():
+                st = await self.status()
+                return (st.get("sd") or {}).get("mounted") is True
+            await self.wait(f"the card mounted ({label})", mounted, 900, every=3)
+            shown = self.emu.find(re.compile(r"boot show: the card's formula read at"), self._restart_mark)
+            if shown:
+                vm0 = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), self._restart_mark)
+                k0 = self.emu.find(re.compile(r"formula: kernel of \d+ B"), self._restart_mark)
+                self.expect(vm0 and not k0, f"{label}: the start-up show of the remote program on the VM only", f"{len(k0)} kernels, {len(vm0)} VM lines")
+            else:
+                # (A card mounted after the show's wait: the show goes on as it
+                # was, the card's Formula from the next start.)
+                self.expect(n is not None, f"{label}: the card came after the show's wait (its Formula from the next start)", "")
+                self.report.setdefault("boot_show_not_taken", []).append(label)
+            ok, kern, vm = await self._plays(f"/formulas/{self.NEVER}.psi")
+            self.expect(ok and vm and not kern, f"{label}: the remote program plays on the VM only", f"{kern} kernels, {vm} VM lines")
 
     async def card_formulas(self, cmd):
         """`formulas`: the built-in Formulas and the card's that can play.
@@ -1506,6 +1674,8 @@ class Lane:
             "/formulas/lane-raw.psi": src,
             "/formulas/lane-old.psi": src, "/formulas/lane-old.psb": psb[:3] + bytes([psb[3] ^ 0x7f]) + psb[4:],
             "/formulas/Lane-Upper.psi": src, "/formulas/Lane-Upper.psb": psb,
+            # A mark beside a remote add's program: the mark wins where it plays, so not listed.
+            "/formulas/lane-mark.psi": src, "/formulas/lane-mark.psb": b"PSB\0" + bytes(8), "/formulas/lane-mark" + ".psr": psb,
         }
         codes = {}
         for path, data in files.items():
@@ -1519,7 +1689,7 @@ class Lane:
             self.expect(r and r.get("ok") and ["starfield", "Starfield"] in builtin and len(builtin) >= 5 and fr.get("more") is False,
                         "formulas: the built-in ones, [stem, name] from their compiled headers", json.dumps(fr)[:400])
             stems = [x[0] for x in card or []]
-            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper"} & set(stems),
+            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper", "lane-mark"} & set(stems),
                         "formulas: the card's that can play, named by their name line; none with no compiled file, another player's, or a stem remote play refuses",
                         json.dumps(card)[:400])
             self.report["formulas_bytes"] = len(json.dumps(fr))
