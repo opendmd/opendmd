@@ -131,10 +131,15 @@ aren't added twice. **More ▾** has:
   its name unless one there has it, when it takes the next number.
 - **Rename…**: a new title, platform or author for all of them, with a
   preview of the names first.
-- **Delete…**: off the card, after asking.
+- **Delete…**: off the card, after asking, with the titles and folders
+  named.
 
 Playlists, favourites, tags and Smooth motion follow the GIFs you move,
-rename or delete. **Tag…** and **Rate…** can be undone from their message. **Done** leaves Select.
+rename or delete. **Tag…** and **Rate…** can be undone from their message.
+Once an action is done the GIFs are unpicked; if a move, rename or delete
+stops partway, the ones it didn't reach stay picked to try again. Picked
+GIFs the list doesn't show (another folder, or not what the search finds)
+are counted in the bar: "6 selected · 2 not shown". **Done** leaves Select.
 
 ### Adding GIFs
 

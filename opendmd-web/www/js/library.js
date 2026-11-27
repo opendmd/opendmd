@@ -42,12 +42,16 @@ export async function mount(el) {
   const addCard = h('div.lib-progress', { id: 'lib-add', hidden: true }, h('div.bar', addBar), h('div.cap', addMsg), addErr);
 
   const selCount = h('b');
+  // Selected but not in the list as it shows now (another folder, closed,
+  // or not what the search finds): the bar says how many.
+  const selOff = h('span.muted', { id: 'lib-sel-off' });
   // Into a playlist picked from a menu; the selection clears once it is in
-  // (and Select ends with a new playlist, off in the editor).
+  // (and Select ends with a new playlist, off in the editor). Every action
+  // on the selection clears it once done (js/refs.js, bulk() below).
   const moreSel = h('button', { id: 'lib-sel-more', 'aria-haspopup': 'menu', onclick: (e) => bulkMenu(e.currentTarget) }, 'More ▾');
   const toSetBtn = h('button.pri', { id: 'lib-to-set', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [...app.selection], (fresh) => { if (fresh) selMode(false); else { app.selection.clear(); sync(); } }) });
   const selbar = h('div.selbar.row', { hidden: true, id: 'lib-selbar' },
-    h('span.grow', selCount, ' selected'),
+    h('span.grow', selCount, ' selected', selOff),
     h('button', { id: 'lib-all', onclick: selectAll }, 'Select all shown'),
     h('button', { id: 'lib-none', onclick: () => { app.selection.clear(); sync(); } }, 'None'),
     toSetBtn, moreSel,
@@ -200,7 +204,16 @@ export async function mount(el) {
     selbar.hidden = !selecting;
     toSetBtn.disabled = moreSel.disabled = !n;
     toSetBtn.textContent = `Add ${n ? n.toLocaleString() + ' ' : ''}to playlist ▾`;
+    unseen();
     tree.refresh();
+  }
+  function unseen() {
+    let k = 0;
+    if (app.selection.size) {
+      const shown = new Set(tree.res.map((x) => x.path));
+      for (const p of app.selection) if (!shown.has(p)) k++;
+    }
+    selOff.textContent = k ? ` · ${k.toLocaleString()} not shown` : '';
   }
 
   // The search, the platforms: the tree filters; counted() shows the result.
@@ -217,6 +230,7 @@ export async function mount(el) {
     count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
     count.classList.toggle('bad', !!st.err);
     stars();
+    unseen();
     // Every folder listed (a search): tags kept for GIFs no longer here.
     if (!st.busy && st.text && !st.bad && tg && lostKey !== (lostKey = `${st.pool}|${app.tags.size}`)) {
       const all = tree.real().flatMap((c) => (tree.items(c) || []).map((x) => x.path));
@@ -245,9 +259,12 @@ export async function mount(el) {
   }
 
   // Select's More ▾: Tag…, Rate… (js/tags.js); Move to folder…, Rename…,
-  // Delete… (js/refs.js).
+  // Delete… (js/refs.js). Each clears the selection once done (a tag or
+  // rating's Undo, later, leaves a new one alone).
   function bulkMenu(btn) {
-    const paths = [...app.selection].filter((p) => p.startsWith('/gifs/')), done = () => { tree.refresh(); };
+    const paths = [...app.selection].filter((p) => p.startsWith('/gifs/'));
+    let once = false;
+    const done = () => { if (once) tree.refresh(); else { once = true; app.selection.clear(); sync(); } };
     if (!paths.length) { toast('select some GIFs first', 'bad'); return; }
     actions(btn, 'lib-bulk', [
       ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
@@ -256,9 +273,16 @@ export async function mount(el) {
       app.device && ['lib-bulk-rename', 'Rename…', () => bulk('bulkRename', paths)],
       app.device && ['lib-bulk-del', 'Delete…', () => bulk('bulkDelete', paths), '.danger']], `${paths.length.toLocaleString()} GIFs`);
   }
+  // Done, the selection clears; stopped halfway, what was not reached (the
+  // GIF that failed and those after it) stays selected, to try again.
   async function bulk(fn, paths) {
-    const done = await (await import('./details.js'))[fn](paths, opts());
-    if (!done.length) return;
+    const r = await (await import('./details.js'))[fn](paths, opts());
+    if (!r) return;
+    // (Only what this batch was given: a GIF ticked while it ran stays.)
+    const left = new Set(r.left);
+    for (const p of paths) if (!left.has(p)) app.selection.delete(p);
+    const { done } = r;
+    if (!done.length) { sync(); return; }
     if (current && done.some((x) => x.from === current.path)) {
       current = null;
       tree.cur = '';

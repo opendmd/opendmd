@@ -1753,6 +1753,7 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     t = wait_tags(overlay, lambda t: all("pair" in t.get(p, "") for p in g))
     check(t.get(g[0]) == "r=4\tt=pair,smoke tag" and t.get(g[1]) == "t=pair", f"tags: Tag… adds it to both, in one write ({t.get(g[0])!r}, {t.get(g[1])!r})")
     page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith('Tagged 2 GIFs'))", timeout=10000)
+    check(page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar"), "tags: Tag… done clears the selection, Select stays on")
     page.fill("#lib-search", "tag:pair")
     wait_counted(page)
     rows = page.eval_on_selector_all("#lib-list .vrow[data-path] .ut", "els => els.map((e) => e.textContent)")
@@ -1760,11 +1761,17 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.click("#toasts .toast:has-text('Tagged 2 GIFs') button")
     t = wait_tags(overlay, lambda t: all("pair" not in t.get(p, "") for p in g))
     check(t.get(g[0]) == "r=4\tt=smoke tag" and g[1] not in t, f"tags: the toast's Undo puts them back ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    # (Picked again: Tag… cleared them.)
+    page.click("#lib-sel-done")
+    page.evaluate("ps => import('./js/state.js').then(m => ps.forEach((p) => m.app.selection.add(p)))", g)
+    page.click("#lib-select")
     page.click("#lib-sel-more")
     page.click("#lib-bulk-rate")
     page.click("#bulk-rate [data-n='2']")
     t = wait_tags(overlay, lambda t: all(t.get(p, "").startswith("r=2") for p in g))
     check(t.get(g[0]) == "r=2\tt=smoke tag" and t.get(g[1]) == "r=2", f"tags: Rate… gives both two stars ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    wait_until(lambda: page.inner_text("#lib-selbar b") == "0", 5)
+    check(page.inner_text("#lib-selbar b") == "0", "tags: Rate… done clears the selection")
     page.click("#lib-sel-done")
     no_leaks(page, "library tags")
     # Tags of GIFs not on the card (a card edited on a PC).
@@ -1906,6 +1913,119 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     else:
         put_text(base + "/api/files/sets/.smooth", smooth0)
     check(tag_lines(overlay) == tags0, "relink: the tags as they were")
+
+
+def selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """The Library's selection after a bulk action (js/library.js,
+    js/refs.js), in a fresh browser, with the bar's own buttons: six GIFs
+    (a search, Select all shown) moved into a new folder, then six others
+    picked the same way and deleted: the selection is the second six (the
+    bar says 6, nothing not shown), the Delete confirm names some of them,
+    "and 1 more" and their folder, and exactly those six DELETEs reach the
+    mock; with them picked, a search that hides them makes the bar say
+    "· 6 not shown"; a move that fails after two keeps exactly the four
+    not moved selected; a single GIF renamed from its details leaves no
+    hidden selection behind. (The rows a search shows while their GIFs
+    move, and the folders a move empties, are read once more before the
+    tree is listed again: those 404s are this section's to expect.)"""
+    quiet = ["/gifs/Sel_", "%2Fgifs%2FSel_"]
+    expected.extend(quiet)
+    try:
+        _selection_checks(browser, base, overlay, errors)
+    finally:
+        for q in quiet:
+            expected.remove(q)
+
+
+def _selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    a = [f"/gifs/Sel_A/MD_Sel_Smoke_{i:02d}.gif" for i in range(1, 7)]
+    b = [f"/gifs/Sel_B/MD_Sel_Other_{i:02d}.gif" for i in range(1, 7)]
+    for p in a + b:
+        put_bytes(base + "/api/files" + urllib.parse.quote(p), src)
+    page = new_page(browser, "laptop", errors)
+    dels: list[str] = []
+    asked: list[str] = []
+    page.on("request", lambda r: dels.append(urllib.parse.unquote(urllib.parse.urlparse(r.url).path)) if r.method == "DELETE" else None)
+    page.on("dialog", lambda d: asked.append(d.message))
+    page.goto(base + "/#library")
+    page.wait_for_selector("#lib-select", timeout=20000)
+    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
+
+    def search(q, n):
+        page.fill("#lib-search", q)
+        page.wait_for_function("n => document.querySelector('#lib-count').textContent.startsWith(n + ' of ')", arg=n, timeout=60000)
+
+    def bar():
+        return page.inner_text("#lib-selbar span.grow").strip()
+
+    def picked():
+        return sorted(page.evaluate("() => import('./js/state.js').then((m) => [...m.app.selection])"))
+
+    def toast_has(prefix):
+        page.wait_for_function("p => [...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith(p))", arg=prefix, timeout=60000)
+        return page.eval_on_selector_all("#toasts .toast", "(els, p) => els.map((e) => e.textContent).filter((x) => x.startsWith(p)).at(-1)", prefix)
+
+    def move_new(folder):
+        page.evaluate("f => { window.prompt = () => f; }", folder)
+        page.click("#lib-sel-more")
+        page.click("#lib-bulk-move")
+        page.wait_for_selector("#bm-folder", timeout=20000)
+        page.select_option("#bm-folder", "\n")
+        page.click("#bm-ok")
+
+    page.click("#lib-select")
+    search("Sel Smoke", 6)
+    page.click("#lib-all")
+    move_new("Sel_Dest")
+    toast_has("Moved 6 GIFs")
+    dest = [f"/gifs/Sel_Dest/{p.rsplit('/', 1)[1]}" for p in a]
+    wait_until(lambda: picked() == [], 10)
+    check(picked() == [], f"selection: a bulk move that completes clears the selection ({picked()})")
+    search("Sel Other", 6)
+    page.click("#lib-all")
+    check(picked() == sorted(b) and bar() == "6 selected",
+          f"selection: six more ticked after a move are the only six selected, nothing not shown ('{bar()}', {len(picked())})")
+    search("Sel Smoke", 6)
+    check(bar() == "6 selected · 6 not shown", f"selection: a search hiding the selected GIFs: the bar says so ('{bar()}')")
+    search("Sel Other", 6)
+    check(bar() == "6 selected", f"selection: shown again, the note goes ('{bar()}')")
+    dels.clear()
+    asked.clear()
+    page.click("#lib-sel-more")
+    page.click("#lib-bulk-del")
+    toast_has("Deleted ")
+    gone = [p for p in dels if p.startswith("/api/files/gifs/") and p.endswith(".gif")]
+    check(sorted(gone) == sorted("/api/files" + p for p in b) and all((overlay / p.lstrip("/")).exists() for p in dest),
+          f"selection: move six, tick six others, Delete: exactly the second six DELETEd ({len(gone)}: {gone})")
+    msg = asked[0] if asked else ""
+    check("Sel Other 01" in msg and "and 1 more" in msg and "Sel B" in msg and "Sel Smoke" not in msg,
+          f"selection: the Delete confirm names titles, 'and 1 more' and the folder ({msg!r})")
+    check(picked() == [], f"selection: a bulk delete clears the selection ({picked()})")
+    # A move that stops after two: the four not moved stay selected.
+    expected.append("/api/files/move")
+    get_json(base + "/mock/fail-move?after=2")
+    search("Sel Smoke", 6)
+    page.click("#lib-all")
+    move_new("Sel_Back")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.startsWith('Moved 2 of 6'))", timeout=60000)
+    get_json(base + "/mock/fail-move?after=-1")
+    expected.remove("/api/files/move")
+    wait_until(lambda: page.inner_text("#lib-selbar b") == "4", 10)
+    left = picked()
+    check(left == sorted(dest[2:]), f"selection: a move failing after two keeps the four not moved selected, not the two moved ({left})")
+    back = [f"/gifs/Sel_Back/{p.rsplit('/', 1)[1]}" for p in dest[:2]]
+    # One GIF renamed from its details: no hidden selection under the new name.
+    page.evaluate("([f, t]) => import('./js/details.js').then((m) => m.renameGif(f, t))", [dest[2], "/gifs/Sel_Back/MD_Sel_Smoke_Renamed_01.gif"])
+    left = picked()
+    check(left == sorted(dest[3:]), f"selection: a GIF renamed from its details leaves the selection, its new name not added ({left})")
+    page.click("#lib-sel-done")
+    no_leaks(page, "library selection")
+    page.context.close()
+    for p in dest[3:] + back + ["/gifs/Sel_Back/MD_Sel_Smoke_Renamed_01.gif"]:
+        delete_path(base, p)
+    for d in ("/gifs/Sel_Dest", "/gifs/Sel_Back", "/gifs/Sel_A", "/gifs/Sel_B"):
+        delete_path(base, d)
 
 
 def root_manifest_rows(page: Page) -> list[str]:
@@ -5202,6 +5322,7 @@ def mock_pass(browser) -> None:
         smart_more_checks(browser, base, overlay, errors)
         tags_checks(browser, base, overlay, errors)
         relink_checks(browser, base, overlay, errors)
+        selection_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)
@@ -12029,6 +12150,8 @@ ONLY_BROWSER["psi_import"] = psi_import_checks
 # site repository's, its tools/demo-smoke.py, with the demo's player.)
 ONLY_BROWSER.update(now_dim=now_dim_checks)
 # (Settings' Remote control card, with mocks of its own: WEB_SMOKE_ONLY=remote.)
+# (The Library selection after bulk actions: WEB_SMOKE_ONLY=selection, an overlay of its own.)
+ONLY_BROWSER.update(selection=lambda browser, base, errors: selection_checks(browser, base, OUT / "overlay-only", errors))
 ONLY_BROWSER.update(remote=lambda browser, base, errors: remote_pass(browser, errors=errors))
 
 
