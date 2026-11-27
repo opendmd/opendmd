@@ -311,37 +311,52 @@ for anything else. At compile time no name in it may contain any of
 
 What a controller can offer to `play`, as the panel itself knows it (a
 panel up to 1.1.0-beta.4 answers `not-allowed`: a controller then offers
-the Formulas built into that firmware from its own copy of the list):
+the Formulas built into that firmware from its own copy of the list).
+Arguments: none for a listing's first page; `{"after":"<stem>"}` for the
+page after that stem (a stem by the rule below, else `bad-arg`). Any
+other member of `a` is `bad-arg`, so a later controller can tell a panel
+that lacks a later argument.
 
 ```json
 {"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
+{"builtin":[],"card":[["saved-023","Saved"],["saved-024","Saved"]],"more":true,"next":"saved-024"}
 ```
 
 - `builtin`: the Formulas built into the firmware, `[stem, name]` each,
   played as `@formula:<stem>`; `name` from its `name "…"` line, else
-  the stem's title (`big-clock` → "Big clock"). Empty in a build without
-  Formulas.
-- `card`: the card's, played as `/formulas/<stem>.psi`: each
-  `<stem>.psi` in `/formulas/` whose stem is one a remote `play` may name
-  (5.5: `[a-z0-9_-]`, 1 to 64, a letter or digit first) and whose
-  compiled `<stem>.psb` beside it is ready for this firmware (one that is
-  missing, empty, marked as not compiling, or compiled for another version
-  is left out: it would not play). `name` is the one the source's
-  `name "…"` line gave the compiled file, else the stem's title. In the
-  card directory's order: a controller sorts them. `null` when the panel
-  has no card it can read; `[]` when it has none on it.
-- **Bounded.** The result is at most 1,948 bytes (2,048 less 100 for the
-  `ack` around it). Built-in ones first, then the card's in order; the
-  first entry that would not fit, and every one after it, is left out
-  (never a later, shorter one in its place), and `more` is `true`. `more`
-  is also `true` when the panel stopped early: it looks at no more than 64
-  card Formulas per request, and stops if the card stays busy with a
-  file transfer for more than a second in all. Otherwise `more` is
-  `false` and the lists are whole.
-- The card is read the gentle way: one pass over the directory listing
-  (every entry's name at once) and, per candidate, one read of at most
-  261 bytes of its compiled file's header; nothing is written, and the
-  panel keeps playing. No list is kept between requests.
+  the stem's title (`big-clock` → "Big clock"). On the first page only
+  (empty on the pages after it); empty in a build without Formulas.
+- `card`: the card's, played as `/formulas/<stem>.psi`, **in stem order**
+  (byte order), those after `after`: each `<stem>.psi` in `/formulas/`
+  whose stem is one a remote `play` may name (5.5: `[a-z0-9_-]`, 1 to 64,
+  a letter or digit first) and whose compiled `<stem>.psb` beside it is
+  ready for this firmware (one that is missing, empty, marked as not
+  compiling, or compiled for another version is left out: it would not
+  play). `name` is the one the source's `name "…"` line gave the compiled
+  file, else the stem's title. `null` when the panel has no card it can
+  read (and then `more` is false); `[]` when there are none (left).
+- **Bounded, and paged.** The result is at most 1,948 bytes (2,048 less
+  100 for the `ack` around it), whatever its end turns out to be. Built-in
+  ones first, then the card's in order; the first entry that would not
+  fit, and every one after it, is left out (never a later, shorter one in
+  its place), and `more` is `true`. `more` is also `true` when the panel
+  stopped early: it opens no more than 48 compiled files a page, and stops
+  at once (never waiting) while a file transfer is under way on the card.
+  With `more`, `next` (when present) is the `after` for the next page: the
+  last stem the panel looked at. `more` without `next`: ask the same page
+  again later. `more: false`: the list is complete.
+- **Its own rate, per panel.** A listing's first page (no `after`, or an
+  `after` other than the last `next` the panel gave) at most one every
+  5 s, else `rate`. The pages that follow it, each with the `after` the
+  previous page gave as `next`, within 60 s of it, are free, up to 8 pages
+  in a listing. A controller asks a listing's pages in turn and stops
+  after 8.
+- The card is read the gentle way: one directory pass noting the stems
+  that have a compiled file larger than a mark, a second noting the
+  smallest candidate stems after `after` among those (a source with no
+  compiled file costs no lookup), and one read of at most 261 bytes of the
+  header of each one looked at; nothing is written, and the panel keeps
+  playing. No list is kept between requests.
 
 ## 6. Pairing
 

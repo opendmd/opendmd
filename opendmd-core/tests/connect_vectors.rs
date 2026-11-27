@@ -414,6 +414,7 @@ fn build() -> Value {
             "err": proto::ack_err(&key_id(&a_pub), Some(3), Refusal::Replay),
             "err_without_n": proto::ack_err(&key_id(&a_pub), None, Refusal::BadSig),
         },
+        "formula_lists": formula_lists(),
         "signature_check": {
             "note": "Ed25519 (RFC 8032) over the cmd domain then the body; a sanity line for a new implementation",
             "seed": hex(&w.a.to_bytes()),
@@ -421,6 +422,44 @@ fn build() -> Value {
             "sig": hex(&w.a.sign(&[proto::CMD_DOMAIN, b"{}"].concat()).to_bytes()),
         },
     })
+}
+
+/// `formulas` results (protocol 5.6) as `proto::FormulaList` builds them:
+/// each case's entries pushed in order (built-in ones, then the card's)
+/// until one does not fit, then finished with `cut` and `next`. Every
+/// implementation must list the same entries and make the same bytes.
+fn formula_lists() -> serde_json::Value {
+    let mut cases = Vec::new();
+    let mut case = |note: &str, card: bool, builtin: Vec<(String, String)>, cards: Vec<(String, String)>, cut: bool, next: Option<&str>| {
+        let mut l = proto::FormulaList::new(card);
+        let nb = builtin.iter().take_while(|(s, n)| l.builtin(s, n)).count();
+        let nc = cards.iter().take_while(|(s, n)| l.card(s, n)).count();
+        let result = l.finish(cut, next);
+        assert!(result.len() <= proto::RESULT_ROOM, "{note}");
+        cases.push(serde_json::json!({
+            "note": note, "card": card, "builtin": builtin, "cards": cards, "cut": cut, "next": next,
+            "listed": [nb, nc], "result": result,
+        }));
+    };
+    let e = |s: &str, n: &str| (s.to_string(), n.to_string());
+    case("small, names that need escaping", true,
+        vec![e("fire", "Fire \"hot\""), e("big-clock", "Big\\clock")],
+        vec![e("my-road", "My road \u{2028}"), e("del", "\u{7f}\u{1}\u{8}\u{c}\t\n\r"), e("cafe", "Caf\u{e9} \u{1F600}")], false, None);
+    case("no card", false, vec![e("fire", "Fire")], vec![e("x", "X")], true, Some("x"));
+    case("cut by the caller, with next", true, vec![], vec![e("a", "A")], true, Some("a"));
+    case("cut by the caller, no next", true, vec![], vec![], true, None);
+    // The boundary: one entry whose name lands the result at the room to the
+    // byte, then the same with one byte more (refused).
+    for card in [false, true] {
+        let close = if card { 10 + 1 + r#","more":true,"next":""}"#.len() + 64 } else { r#"],"card":null,"more":false}"#.len() };
+        let fits = "n".repeat(proto::RESULT_ROOM - r#"{"builtin":["#.len() - r#"["s",""]"#.len() - close);
+        case(&format!("at the room (card {card})"), card, vec![e("s", &fits)], vec![], false, None);
+        case(&format!("one byte past the room (card {card})"), card, vec![e("s", &format!("{fits}n"))], vec![], false, None);
+    }
+    // Full of the card's: cut at the first that does not fit, next given.
+    let many: Vec<(String, String)> = (0..80).map(|i| (format!("saved-{i:03}"), format!("A Formula with a long name \u{2028} {}", "x".repeat(i % 7)))).collect();
+    case("the card's until full", true, vec![e("fire", "Fire")], many, false, Some("saved-034"));
+    serde_json::Value::Array(cases)
 }
 
 #[test]

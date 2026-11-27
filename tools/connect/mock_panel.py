@@ -85,6 +85,12 @@ class Panel:
         self.builtin_formulas = bundled_formulas()
         self.card_formulas: list[tuple[str, str]] | None = [("my-road", "My road"), ("den-clock", "Den clock")]
         self.formulas_cmd = True
+        # `formulas`' own rate (5.6): a listing's first page one in this
+        # many s per panel, its pages (after = the last `next`) free, 8 at most.
+        self.formulas_every = 5.0
+        self.formulas_first_at: float | None = None
+        self.formulas_listing: list | None = None  # [next, at, pages]
+        self.formulas_opens = 48  # card Formulas looked at per page
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -102,6 +108,40 @@ class Panel:
             "fw": self.fw,
             "name": self.name,
         }
+
+    def formulas_page(self, after):
+        """One page of `formulas` (5.6) as the firmware answers it, or None (`rate`)."""
+        now = time.monotonic()
+        lst = self.formulas_listing
+        if after is not None and lst and after == lst[0] and now - lst[1] <= 60 and lst[2] < 8:
+            lst[2] += 1
+        elif self.formulas_first_at is not None and now - self.formulas_first_at < self.formulas_every:
+            return None
+        else:
+            self.formulas_first_at = now
+            self.formulas_listing = lst = ["", now, 1]
+        fl = odc.FormulaList(self.card_formulas is not None)
+        if after is None:
+            for stem, name in self.builtin_formulas:
+                fl.builtin(stem, name)
+        cut, nxt = False, None
+        if self.card_formulas is not None:
+            cands = sorted((x for x in self.card_formulas if after is None or x[0] > after))
+            cut = len(cands) > self.formulas_opens
+            for stem, name in cands[: self.formulas_opens]:
+                if not fl.card(stem, name):
+                    cut = True
+                    break
+                nxt = stem
+            if cut and nxt is None:
+                nxt = after
+        text = fl.finish(cut, nxt)
+        r = odc.loads(text.encode())
+        if r.get("more") and r.get("next"):
+            lst[0], lst[1] = r["next"], now
+        else:
+            self.formulas_listing = None
+        return r
 
     async def send(self, m) -> None:
         await self.ws.send_str(m if isinstance(m, str) else odc.dumps(m))
@@ -283,7 +323,10 @@ class Panel:
             if not self.formulas_cmd:
                 await self.send(odc.Refusal("not-allowed", k, n).ack())
                 return
-            r = odc.formulas_result(self.builtin_formulas, self.card_formulas)
+            r = self.formulas_page(a.get("after"))
+            if r is None:
+                await self.send(odc.Refusal("rate", k, n).ack())
+                return
         elif c == "controllers":
             r = [{"k": x.k.hex(), "label": x.label, "f": x.flags, "added": x.added, "added_by": x.added_by.hex() if x.added_by else None, "last_s": None} for x in self.keys.values()]
         elif c == "add-controller":

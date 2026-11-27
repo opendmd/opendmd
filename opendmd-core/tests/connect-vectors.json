@@ -851,6 +851,508 @@
     "pair_mac": "opendmd pair v1",
     "paired_mac": "opendmd paired v1"
   },
+  "formula_lists": [
+    {
+      "builtin": [
+        [
+          "fire",
+          "Fire \"hot\""
+        ],
+        [
+          "big-clock",
+          "Big\\clock"
+        ]
+      ],
+      "card": true,
+      "cards": [
+        [
+          "my-road",
+          "My road  "
+        ],
+        [
+          "del",
+          "\u0001\b\f\t\n\r"
+        ],
+        [
+          "cafe",
+          "Café 😀"
+        ]
+      ],
+      "cut": false,
+      "listed": [
+        2,
+        3
+      ],
+      "next": null,
+      "note": "small, names that need escaping",
+      "result": "{\"builtin\":[[\"fire\",\"Fire \\\"hot\\\"\"],[\"big-clock\",\"Big\\\\clock\"]],\"card\":[[\"my-road\",\"My road  \"],[\"del\",\"\\u007f\\u0001\\u0008\\u000c\\t\\n\\r\"],[\"cafe\",\"Café 😀\"]],\"more\":false}"
+    },
+    {
+      "builtin": [
+        [
+          "fire",
+          "Fire"
+        ]
+      ],
+      "card": false,
+      "cards": [
+        [
+          "x",
+          "X"
+        ]
+      ],
+      "cut": true,
+      "listed": [
+        1,
+        0
+      ],
+      "next": "x",
+      "note": "no card",
+      "result": "{\"builtin\":[[\"fire\",\"Fire\"]],\"card\":null,\"more\":false}"
+    },
+    {
+      "builtin": [],
+      "card": true,
+      "cards": [
+        [
+          "a",
+          "A"
+        ]
+      ],
+      "cut": true,
+      "listed": [
+        0,
+        1
+      ],
+      "next": "a",
+      "note": "cut by the caller, with next",
+      "result": "{\"builtin\":[],\"card\":[[\"a\",\"A\"]],\"more\":true,\"next\":\"a\"}"
+    },
+    {
+      "builtin": [],
+      "card": true,
+      "cards": [],
+      "cut": true,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "cut by the caller, no next",
+      "result": "{\"builtin\":[],\"card\":[],\"more\":true}"
+    },
+    {
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": false,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        1,
+        0
+      ],
+      "next": null,
+      "note": "at the room (card false)",
+      "result": "{\"builtin\":[[\"s\",\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"]],\"card\":null,\"more\":false}"
+    },
+    {
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": false,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "one byte past the room (card false)",
+      "result": "{\"builtin\":[],\"card\":null,\"more\":false}"
+    },
+    {
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": true,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        1,
+        0
+      ],
+      "next": null,
+      "note": "at the room (card true)",
+      "result": "{\"builtin\":[[\"s\",\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"]],\"card\":[],\"more\":false}"
+    },
+    {
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": true,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "one byte past the room (card true)",
+      "result": "{\"builtin\":[],\"card\":[],\"more\":true}"
+    },
+    {
+      "builtin": [
+        [
+          "fire",
+          "Fire"
+        ]
+      ],
+      "card": true,
+      "cards": [
+        [
+          "saved-000",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-001",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-002",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-003",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-004",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-005",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-006",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-007",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-008",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-009",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-010",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-011",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-012",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-013",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-014",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-015",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-016",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-017",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-018",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-019",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-020",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-021",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-022",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-023",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-024",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-025",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-026",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-027",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-028",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-029",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-030",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-031",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-032",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-033",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-034",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-035",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-036",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-037",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-038",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-039",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-040",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-041",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-042",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-043",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-044",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-045",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-046",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-047",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-048",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-049",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-050",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-051",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-052",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-053",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-054",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-055",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-056",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-057",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-058",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-059",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-060",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-061",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-062",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-063",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-064",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-065",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-066",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-067",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-068",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-069",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-070",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-071",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-072",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-073",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-074",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-075",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-076",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-077",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-078",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-079",
+          "A Formula with a long name   xx"
+        ]
+      ],
+      "cut": false,
+      "listed": [
+        1,
+        35
+      ],
+      "next": "saved-034",
+      "note": "the card's until full",
+      "result": "{\"builtin\":[[\"fire\",\"Fire\"]],\"card\":[[\"saved-000\",\"A Formula with a long name   \"],[\"saved-001\",\"A Formula with a long name   x\"],[\"saved-002\",\"A Formula with a long name   xx\"],[\"saved-003\",\"A Formula with a long name   xxx\"],[\"saved-004\",\"A Formula with a long name   xxxx\"],[\"saved-005\",\"A Formula with a long name   xxxxx\"],[\"saved-006\",\"A Formula with a long name   xxxxxx\"],[\"saved-007\",\"A Formula with a long name   \"],[\"saved-008\",\"A Formula with a long name   x\"],[\"saved-009\",\"A Formula with a long name   xx\"],[\"saved-010\",\"A Formula with a long name   xxx\"],[\"saved-011\",\"A Formula with a long name   xxxx\"],[\"saved-012\",\"A Formula with a long name   xxxxx\"],[\"saved-013\",\"A Formula with a long name   xxxxxx\"],[\"saved-014\",\"A Formula with a long name   \"],[\"saved-015\",\"A Formula with a long name   x\"],[\"saved-016\",\"A Formula with a long name   xx\"],[\"saved-017\",\"A Formula with a long name   xxx\"],[\"saved-018\",\"A Formula with a long name   xxxx\"],[\"saved-019\",\"A Formula with a long name   xxxxx\"],[\"saved-020\",\"A Formula with a long name   xxxxxx\"],[\"saved-021\",\"A Formula with a long name   \"],[\"saved-022\",\"A Formula with a long name   x\"],[\"saved-023\",\"A Formula with a long name   xx\"],[\"saved-024\",\"A Formula with a long name   xxx\"],[\"saved-025\",\"A Formula with a long name   xxxx\"],[\"saved-026\",\"A Formula with a long name   xxxxx\"],[\"saved-027\",\"A Formula with a long name   xxxxxx\"],[\"saved-028\",\"A Formula with a long name   \"],[\"saved-029\",\"A Formula with a long name   x\"],[\"saved-030\",\"A Formula with a long name   xx\"],[\"saved-031\",\"A Formula with a long name   xxx\"],[\"saved-032\",\"A Formula with a long name   xxxx\"],[\"saved-033\",\"A Formula with a long name   xxxxx\"],[\"saved-034\",\"A Formula with a long name   xxxxxx\"]],\"more\":true,\"next\":\"saved-034\"}"
+    }
+  ],
   "invite": {
     "confirm": "3F6J",
     "invite_id": "96ed7e52e7b06c11e627",

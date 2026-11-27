@@ -228,6 +228,8 @@ pub struct Client {
     pub(super) pending: Option<Pending>,
     /// Remote config commands: one a second.
     pub(super) config_rate: Vec<(KeyId, proto::Bucket)>,
+    /// `formulas`'s own rate, per panel (5.6).
+    pub(super) formulas_rate: proto::FormulasRate,
     /// The settings' card copy (`settings_card`) is due then: once remote
     /// config commands stop (one card write for a drag), or at the
     /// session's end.
@@ -319,6 +321,7 @@ impl Client {
             link,
             pending: None,
             config_rate: Vec::new(),
+            formulas_rate: proto::FormulasRate::default(),
             card_due: None,
             last_use: Vec::new(),
             pair_reqs: Vec::new(),

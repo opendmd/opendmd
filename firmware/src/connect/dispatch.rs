@@ -65,11 +65,7 @@ impl Client {
             Remote::Brightness { v } => self.config(k, Some(v), None),
             Remote::Playlist { set } => self.config(k, None, Some(set)),
             Remote::Playlists => self.playlists(),
-            Remote::Formulas => {
-                // (The status lock let go before the card is read.)
-                let card = self.link.status.lock().unwrap().sd_usable();
-                Ok(Some(formulas(card)))
-            }
+            Remote::Formulas { after } => self.formulas(after),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
                 self.last_use.iter().find(|(x, _)| x == k).map(|(_, at)| at.elapsed().as_secs())
             }))),
@@ -179,6 +175,22 @@ impl Client {
             }
             mpsc::Handoff::Withdrawn => Err(Refusal::Busy),
         }
+    }
+
+    /// `formulas`: its own rate (`proto::FormulasRate`: a listing's first
+    /// page one in 5 s per panel, its next pages free), then a page.
+    #[optimize(size)]
+    #[inline(never)]
+    fn formulas(&mut self, after: Option<String>) -> Done {
+        let now = super::client::core_now();
+        if !self.formulas_rate.take(after.as_deref(), now) {
+            return Err(Refusal::Rate);
+        }
+        // (The status lock let go before the card is read.)
+        let card = self.link.status.lock().unwrap().sd_usable();
+        let (r, next) = formulas_page(card, after.as_deref());
+        self.formulas_rate.answered(next.as_deref(), super::client::core_now());
+        Ok(Some(r))
     }
 
     /// The playlists in `/sets` (`""`, the main list, is always there),
@@ -325,33 +337,36 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
     }
 }
 
-/// What this panel can play by reference (`formulas`): the built-in
-/// Formulas (`@formula:<stem>`, named from their compiled header), then,
-/// with a card it can read, the card's (`/formulas/<stem>.psi`,
-/// `card_formulas::remote_list`), bounded to the panel's text limit
-/// (`proto::FormulaList`). A build without Formulas plays none: two empty
-/// lists.
+/// What this panel can play by reference (`formulas`, protocol 5.6): on
+/// the first page the built-in Formulas (`@formula:<stem>`, named from
+/// their compiled header), then, with a card it can read, a page of the
+/// card's (`/formulas/<stem>.psi`, `card_formulas::remote_list`), bounded
+/// to the panel's text limit (`proto::FormulaList`). A build without
+/// Formulas plays none: two empty lists.
 #[optimize(size)]
 #[inline(never)]
-fn formulas(card: bool) -> String {
-    let mut out = proto::FormulaList::new();
+fn formulas_page(card: bool, after: Option<&str>) -> (String, Option<String>) {
+    let mut out = proto::FormulaList::new(card);
     #[cfg(feature = "psi")]
-    {
+    if after.is_none() {
         use opendmd_core::synth;
         for stem in synth::bundled_names().filter(|s| proto::formula_stem_ok(s)) {
             let name = synth::bundled(stem).and_then(synth::compiled_name).unwrap_or_else(|| synth::stem_title(stem));
-            out.push(stem, &name);
+            out.builtin(stem, &name);
         }
     }
     if !card {
-        return out.finish(false);
+        return (out.finish(false, None), None);
     }
-    out.card();
     #[cfg(feature = "psi")]
-    let cut = crate::card_formulas::remote_list(&mut out);
+    let (cut, next) = crate::card_formulas::remote_list(&mut out, after);
     #[cfg(not(feature = "psi"))]
-    let cut = false;
-    out.finish(cut)
+    let (cut, next) = {
+        let _ = after;
+        (false, None)
+    };
+    let r = out.finish(cut, next.as_deref());
+    (r, if cut { next } else { None })
 }
 
 /// `{"sets":[…],"more":bool}`, bounded so the `ack` that carries it (its

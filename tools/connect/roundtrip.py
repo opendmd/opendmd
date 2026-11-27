@@ -262,20 +262,42 @@ async def main():
         ok(r and r.get("ok") and panel.path == "@formula:fire", "play a bundled Formula")
         r = await a.command("playlists")
         ok(r and isinstance((r.get("r") or {}).get("sets"), list) and (r.get("r") or {}).get("more") is False, "playlists: {sets, more} in r")
+        panel.formulas_every = 0
         r = await a.command("formulas")
         fr = (r or {}).get("r") or {}
-        ok(r and r.get("ok") and fr.get("builtin") and all(isinstance(x, list) and len(x) == 2 for x in fr["builtin"]) and fr.get("card") == [["my-road", "My road"], ["den-clock", "Den clock"]] and fr.get("more") is False,
-           f"formulas: built in ({len(fr.get('builtin') or [])}) and on the card, [stem, name] each")
+        ok(r and r.get("ok") and fr.get("builtin") and all(isinstance(x, list) and len(x) == 2 for x in fr["builtin"]) and fr.get("card") == [["den-clock", "Den clock"], ["my-road", "My road"]] and fr.get("more") is False and "next" not in fr,
+           f"formulas: built in ({len(fr.get('builtin') or [])}) and on the card in stem order, [stem, name] each")
         ok(all(odc.remote_play_path_ok("@formula:" + s) for s, _ in fr.get("builtin") or []) and all(odc.remote_play_path_ok(f"/formulas/{s}.psi") for s, _ in fr.get("card") or []),
            "formulas: every stem listed is one a remote play may name")
+        for bad in ({"after": ""}, {"after": "My-road"}, {"page": 2}, {"after": "a", "x": 1}):
+            r = await a.command("formulas", bad)
+            ok(r and r.get("err") == "bad-arg", f"red: formulas {bad}: bad-arg")
         panel.card_formulas = None
         r = await a.command("formulas")
         ok(r and (r.get("r") or {}).get("card") is None and (r.get("r") or {}).get("builtin"), "formulas with no card: the built-in ones, card null")
+        # Past the text limit: pages, by `next`, until done, each listed once.
         panel.card_formulas = [(f"saved-{i:03}", "A Formula with a long name, " + "x" * 24) for i in range(80)]
-        r = await a.command("formulas")
-        fr = (r or {}).get("r") or {}
-        ok(r and r.get("ok") and fr.get("more") is True and 0 < len(fr.get("card") or []) < 80 and len(odc.ack_ok(a.k, odc.MAX_SAFE, fr).encode()) <= odc.MAX_TEXT_OUT,
-           f"formulas past the text limit: cut at {len(fr.get('card') or [])} of 80, more, the ack within 2,048 bytes")
+        seen, after, pages = [], None, 0
+        while pages < 8:
+            r = await a.command("formulas", {"after": after} if after else None)
+            fr = (r or {}).get("r") or {}
+            ok(r and r.get("ok") and len(odc.ack_ok(a.k, odc.MAX_SAFE, fr).encode()) <= odc.MAX_TEXT_OUT, f"formulas page {pages + 1}: within 2,048 bytes")
+            seen += [s for s, _ in fr.get("card") or []]
+            pages += 1
+            if not fr.get("more"):
+                break
+            after = fr.get("next")
+            ok(after == seen[-1] and (pages == 1 or not fr.get("builtin")), f"formulas page {pages}: more, next = its last stem ({after}); built-in ones on page 1 only")
+        ok(seen == [s for s, _ in panel.card_formulas] and pages > 1, f"formulas: 80 card Formulas in {pages} pages, each once, in order")
+        # Its own rate: one listing in 5 s; a listing's pages free.
+        panel.formulas_every = 5.0
+        panel.formulas_first_at = None
+        r1 = await a.command("formulas")
+        r2 = await a.command("formulas")
+        nxt = ((r1 or {}).get("r") or {}).get("next")
+        r3 = await a.command("formulas", {"after": nxt})
+        ok(r1.get("ok") and r2.get("err") == "rate" and r3 and r3.get("ok"), "formulas' rate: a second listing within 5 s is rate; the first's next page is free")
+        panel.formulas_every = 0
         panel.card_formulas = [("my-road", "My road"), ("den-clock", "Den clock")]
         panel.formulas_cmd = False
         r = await a.command("formulas")

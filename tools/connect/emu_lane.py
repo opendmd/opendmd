@@ -1407,7 +1407,7 @@ class Lane:
             codes[path] = await asyncio.to_thread(self._put_bytes, path, data)
         self.expect(all(c == 200 for c in codes.values()), "four card Formulas put on the card over the LAN", f"{codes}")
         try:
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(5.5)
             r = await cmd("formulas")
             fr = (r or {}).get("r") or {}
             builtin, card = fr.get("builtin") or [], fr.get("card")
@@ -1418,6 +1418,18 @@ class Lane:
                         "formulas: the card's that can play, named by their name line; none with no compiled file, another player's, or a stem remote play refuses",
                         json.dumps(card)[:400])
             self.report["formulas_bytes"] = len(json.dumps(fr))
+            # Its own rate: a second listing at once is `rate`; a page after a
+            # stem lists only the stems after it; unknown arguments are bad-arg.
+            r = await cmd("formulas")
+            self.expect(r and r.get("err") == "rate", "formulas: a second listing within 5 s: rate", json.dumps(r))
+            await asyncio.sleep(5.5)
+            r = await cmd("formulas", {"after": "lane-ramp"})
+            pg = (r or {}).get("r") or {}
+            self.expect(r and r.get("ok") and pg.get("builtin") == [] and all(x[0] > "lane-ramp" for x in pg.get("card") or []),
+                        "formulas after a stem: no built-in ones, only the card's after it", json.dumps(pg)[:300])
+            await asyncio.sleep(1.2)
+            r = await cmd("formulas", {"page": 2})
+            self.expect(r and r.get("err") == "bad-arg", "red: formulas with an unknown argument: bad-arg", json.dumps(r))
             await asyncio.sleep(1.2)
             r = await cmd("play", {"path": "/formulas/lane-ramp.psi"})
             self.expect(r and r.get("ok"), "play a card Formula from the list: ack ok", json.dumps(r))
@@ -1430,7 +1442,7 @@ class Lane:
         finally:
             for path in files:
                 await self.http("DELETE", "/api/files" + urllib.parse.quote(path))
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(5.5)
         r = await cmd("formulas")
         card = ((r or {}).get("r") or {}).get("card")
         self.expect(isinstance(card, list) and not any(x[0].startswith("lane-") for x in card), "formulas after the card's were deleted: gone from the list", json.dumps(card)[:300])

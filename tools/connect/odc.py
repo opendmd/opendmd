@@ -517,7 +517,12 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
         if not remote_play_path_ok(p):
             raise Bad("bad-arg")
         return c, {"path": p}
-    if c in ("next", "prev", "pause", "playlists", "formulas", "controllers"):
+    if c == "formulas":
+        # Strict (5.6): only `after`, a stem, so a later page can tell a panel without a feature.
+        if set(a) - {"after"} or ("after" in a and not (isinstance(a["after"], str) and _stem_ok(a["after"]))):
+            raise Bad("bad-arg")
+        return c, {"after": a.get("after")}
+    if c in ("next", "prev", "pause", "playlists", "controllers"):
         return c, {}
     if c == "brightness":
         v = a.get("v")
@@ -628,23 +633,89 @@ ACK_OVERHEAD = 100
 RESULT_ROOM = MAX_TEXT_OUT - ACK_OVERHEAD
 
 
-def formulas_result(builtin, card, cut: bool = False) -> dict:
-    """`formulas`'s result (opendmd_core::connect::proto::FormulaList):
-    {"builtin": [[stem, name], ...], "card": [[stem, name], ...] or None
-    (no card), "more": bool}. Built-in ones first, then the card's, while
-    the whole is at most RESULT_ROOM bytes; the first that does not fit and
-    every one after it are left out, and `more` says so (as it does when
-    the panel stopped early: `cut`)."""
-    out = {"builtin": [], "card": None if card is None else [], "more": False}
-    for part, items in (("builtin", builtin), ("card", card or ())):
-        for stem, name in items:
-            out[part].append([stem, name])
-            if len(dumps(out).encode()) >= RESULT_ROOM:
-                out[part].pop()
-                out["more"] = True
-                return out
-    out["more"] = bool(cut)
-    return out
+def quote(s: str) -> str:
+    """A JSON string as the panel writes one (opendmd_core::connect::json::push_str):
+    `"`, `\\`, `\n`, `\r`, `\t` escaped, other controls and U+007F as \\u00xx,
+    everything else as it is."""
+    out = ['"']
+    for ch in s:
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 0x20 or ch == "\x7f":
+            out.append("\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+_CARD_OPEN = '],"card":['
+_CLOSE_CARD_MAX = 1 + len(',"more":true,"next":""}') + 64
+_CLOSE_NULL = '],"card":null,"more":false}'
+
+
+class FormulaList:
+    """`formulas`'s result as the panel builds it (opendmd_core::connect::proto::FormulaList,
+    protocol 5.6), byte for byte: built-in ones, then the card's, while the
+    whole stays within RESULT_ROOM bytes whatever the closing; the first
+    that does not fit and every one after it are left out (`more`)."""
+
+    def __init__(self, card: bool):
+        self.s, self.has_card, self.card_open, self.more = '{"builtin":[', card, False, False
+
+    def _closing(self) -> int:
+        if not self.has_card:
+            return len(_CLOSE_NULL)
+        return _CLOSE_CARD_MAX + (0 if self.card_open else len(_CARD_OPEN))
+
+    def _push(self, card: bool, stem: str, name: str) -> bool:
+        if self.more or (card and not self.has_card):
+            self.more = self.more or (card and not self.has_card)
+            return False
+        opening = _CARD_OPEN if card and not self.card_open else ""
+        e = opening + ("," if not self.s.endswith("[") and not opening else "") + "[" + quote(stem) + "," + quote(name) + "]"
+        after = _CLOSE_CARD_MAX if card or self.card_open else self._closing()
+        if len(self.s.encode()) + len(e.encode()) + after > RESULT_ROOM:
+            self.more = True
+            return False
+        self.s += e
+        self.card_open = self.card_open or card
+        return True
+
+    def builtin(self, stem: str, name: str) -> bool:
+        return False if self.card_open else self._push(False, stem, name)
+
+    def card(self, stem: str, name: str) -> bool:
+        return self._push(True, stem, name)
+
+    def finish(self, cut: bool = False, next_: str | None = None) -> str:
+        more = self.has_card and (self.more or cut)
+        if not self.has_card:
+            return self.s + _CLOSE_NULL
+        s = self.s + ("" if self.card_open else _CARD_OPEN) + "]"
+        if more and next_ is not None and _stem_ok(next_):
+            return s + ',"more":true,"next":"' + next_ + '"}'
+        return s + (',"more":true}' if more else ',"more":false}')
+
+
+def formulas_result(builtin, card, cut: bool = False, next_: str | None = None) -> str:
+    """`formulas`'s result text (FormulaList): `card` None for no card."""
+    lst = FormulaList(card is not None)
+    for stem, name in builtin:
+        if not lst.builtin(stem, name):
+            break
+    for stem, name in card or ():
+        if not lst.card(stem, name):
+            break
+    return lst.finish(cut, next_)
 
 
 def ack_ok(k: bytes, n: int, r=None) -> str:

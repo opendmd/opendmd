@@ -222,36 +222,23 @@ fn list(card_dir: &str) -> Vec<Entry> {
     out
 }
 
-/// Card Formulas a remote `formulas` looks at, at most, per request.
+/// Card Formulas a remote `formulas` opens (a `.psb` header each), at
+/// most, per page.
 #[cfg(feature = "connect")]
-pub const REMOTE_READS: usize = 64;
-/// How long, in all, a remote `formulas` waits for a transfer on the card
-/// to end before it stops (and says `more`).
+pub const REMOTE_OPENS: usize = 48;
+/// The most `.psb` files a `formulas` pass notes (by a hash of the stem:
+/// 4 B each).
 #[cfg(feature = "connect")]
-const REMOTE_WAIT: Duration = Duration::from_secs(1);
+const REMOTE_PSB_MAX: usize = 512;
 
-/// The card's Formulas a remote controller can play (Connect's `formulas`,
-/// on the network worker): each `/formulas/<stem>.psi` with a stem a
-/// remote `play` may name (`proto::formula_stem_ok`) and a `.psb` beside
-/// it compiled for this player, as `[stem, name]` into `out`, the name
-/// from the `.psb`'s header (its source's `name "…"` line), else the stem's
-/// title. In the directory's order (a controller sorts them), until `out`
-/// is full. There is no list of them in RAM: one pass of `f_readdir` (each
-/// entry's name at once, no lookup per file) and, per candidate, one open
-/// of its `.psb` for a header of at most 261 bytes; nothing else is opened
-/// or `stat`ed, nothing written. Each read waits while a file goes to or
-/// from the card ([`REMOTE_WAIT`] in all), and at most [`REMOTE_READS`]
-/// are made. True: it stopped before the directory's end (`more`).
+/// Every file in `/formulas`, one `f_readdir` pass: `f(name, size)` for
+/// each (no lookup per file). False: no such directory.
 #[cfg(feature = "connect")]
-pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList) -> bool {
+fn each_file(mut f: impl FnMut(&str, u32) -> bool) -> bool {
     use esp_idf_sys as sys;
-    use opendmd_core::connect::proto::formula_stem_ok;
     let Ok(dir) = std::ffi::CString::new("0:/formulas") else {
         return false;
     };
-    let mut cut = false;
-    let mut reads = 0;
-    let mut waited = Duration::ZERO;
     // SAFETY: plain data FatFs fills, the directory closed before return.
     unsafe {
         let mut d: sys::FF_DIR = std::mem::zeroed();
@@ -259,45 +246,135 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList) -> bool 
             return false;
         }
         let mut fi: sys::FILINFO = std::mem::zeroed();
-        'entries: while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
-            if fi.fattrib as u32 & sys::AM_DIR != 0 {
-                continue;
-            }
-            let Ok(name) = std::ffi::CStr::from_ptr(fi.fname.as_ptr()).to_str() else {
-                continue;
-            };
-            let Some(st) = stem(name, ".psi").filter(|s| formula_stem_ok(s)) else {
-                continue;
-            };
-            if out.full() || reads >= REMOTE_READS {
-                cut = true;
-                break;
-            }
-            while crate::cache_builder::transfer_in_flight() {
-                if waited >= REMOTE_WAIT {
-                    cut = true;
-                    break 'entries;
+        while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
+            if fi.fattrib as u32 & sys::AM_DIR == 0 {
+                if let Ok(name) = std::ffi::CStr::from_ptr(fi.fname.as_ptr()).to_str() {
+                    if !f(name, fi.fsize as u32) {
+                        break;
+                    }
                 }
-                std::thread::sleep(Duration::from_millis(20));
-                waited += Duration::from_millis(20);
             }
-            reads += 1;
-            let h = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
-            // Not ready to play: none, empty (does not compile), a mark,
-            // or compiled for another player.
-            if h.len() < 6 || &h[..3] != b"PSB" || h[3] != psi::psb::ABI {
-                continue;
-            }
-            let title = opendmd_core::synth::compiled_name(&h).unwrap_or_else(|| opendmd_core::synth::stem_title(st));
-            if !out.push(st, &title) {
-                cut = true;
-                break;
-            }
-            std::thread::yield_now();
         }
         sys::f_closedir(&mut d);
     }
-    cut
+    true
+}
+
+/// One page of the card's Formulas a remote controller can play
+/// (Connect's `formulas`, on the network worker; protocol 5.6), into
+/// `out`: each `/formulas/<stem>.psi` with a stem a remote `play` may name
+/// (`proto::formula_stem_ok`) and a `.psb` beside it compiled for this
+/// player, as `[stem, name]`, the name from the `.psb`'s header (its
+/// source's `name "…"` line), else the stem's title; in stem order, the
+/// stems after `after`. There is no list of them in RAM, so:
+///
+/// 1. one `f_readdir` pass notes the stems that have a `.psb` larger than
+///    a mark (a hash each, at most [`REMOTE_PSB_MAX`]);
+/// 2. a second notes the [`REMOTE_OPENS`] smallest `.psi` stems after
+///    `after` among those (a stem without a `.psb` costs no lookup);
+/// 3. only those are opened, in order, for a header of at most 261 bytes,
+///    until `out` is full.
+///
+/// Nothing is written, nothing `stat`ed. A transfer on the card stops the
+/// page at once (never a wait: the controller asks for the rest later).
+/// `(cut, next)`: stopped before the last candidate, and the stem the next
+/// page starts after (the last one looked at).
+#[cfg(feature = "connect")]
+pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: Option<&str>) -> (bool, Option<String>) {
+    use opendmd_core::connect::proto::formula_stem_ok;
+    let t0 = Instant::now();
+    let h = |stem: &str| key(stem);
+    // 1. The stems with a compiled file worth a look.
+    let mut built: Vec<u32> = Vec::new();
+    let _ = built.try_reserve(64);
+    let mut overflow = false;
+    let found = each_file(|name, size| {
+        if let Some(st) = stem(name, ".psb") {
+            if size > MARK_LEN {
+                if built.len() >= REMOTE_PSB_MAX {
+                    overflow = true;
+                    return false;
+                }
+                built.push(h(st));
+            }
+        }
+        true
+    });
+    if !found || built.is_empty() {
+        return (false, None);
+    }
+    built.sort_unstable();
+    // 2. The smallest stems after `after` that have one (one more than is
+    // opened: there are more).
+    let mut cands: Vec<String> = Vec::new();
+    let mut beyond = false;
+    each_file(|name, _| {
+        let Some(st) = stem(name, ".psi").filter(|s| formula_stem_ok(s)) else {
+            return true;
+        };
+        if after.is_some_and(|a| st <= a) || built.binary_search(&h(st)).is_err() {
+            return true;
+        }
+        if cands.len() == REMOTE_OPENS {
+            // Keep the smallest: drop the largest if this one is smaller.
+            let (i, max) = cands.iter().enumerate().max_by(|a, b| a.1.cmp(b.1)).map(|(i, m)| (i, m.clone())).unwrap_or_default();
+            beyond = true;
+            if st < max.as_str() {
+                cands[i] = st.to_string();
+            }
+        } else {
+            cands.push(st.to_string());
+        }
+        true
+    });
+    cands.sort_unstable();
+    let passes = t0.elapsed();
+    // 3. Opened in order.
+    let (mut opened, mut longest) = (0u32, Duration::ZERO);
+    let mut next = None;
+    let mut cut = beyond || overflow;
+    for st in &cands {
+        if out.full() {
+            cut = true;
+            break;
+        }
+        if crate::cache_builder::transfer_in_flight() {
+            cut = true;
+            break;
+        }
+        let t = Instant::now();
+        let hd = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
+        longest = longest.max(t.elapsed());
+        opened += 1;
+        next = Some(st.clone());
+        // Not ready to play: compiled for another player, or not a
+        // compiled Formula.
+        if hd.len() < 6 || &hd[..3] != b"PSB" || hd[3] != psi::psb::ABI {
+            continue;
+        }
+        let title = opendmd_core::synth::compiled_name(&hd).unwrap_or_else(|| opendmd_core::synth::stem_title(st));
+        if !out.card(st, &title) {
+            // (This one was not listed: the next page starts before it.)
+            next = cands.iter().take_while(|c| *c < st).last().cloned().or_else(|| after.map(str::to_string));
+            cut = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    // A page that stopped before looking at anything starts where it was.
+    if cut && next.is_none() {
+        next = after.map(str::to_string);
+    }
+    log::info!(
+        "connect: formulas page: {} compiled noted, {} candidates, {opened} opened (the longest {} ms), in {} ms ({} ms the two passes){}",
+        built.len(),
+        cands.len(),
+        longest.as_millis(),
+        t0.elapsed().as_millis(),
+        passes.as_millis(),
+        if cut { ", more" } else { "" }
+    );
+    (cut, next)
 }
 
 /// One `.psi` and its `.psb`'s state.
