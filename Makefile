@@ -891,7 +891,7 @@ FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEA
 # (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
 # emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
 # and tools/release-test-features-check.sh checks the image for their text.
-FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-oom-test emu-wifi-soak wifi-outage-test connect-test dev-credentials bench
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-crash-test emu-oom-test emu-wifi-soak wifi-outage-test connect-test dev-credentials bench
 FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
@@ -1532,6 +1532,20 @@ emu-image-outage:
 emu-outage: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-outage &&) \
 	uv run --quiet tools/emu/run.py outage --image $(or $(FW_IMAGE),$(EMU_OUTAGE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
+# The resume lane (tools/emu/resume_lane.py): an `emu-crash-test` image (a
+# GIF named CRASH_ON_OPEN panics the board when it is opened) on WiFi,
+# reboots allowed: an in-order playlist's place across POST /api/reboot (the
+# next GIF after the one playing), a file that crashes the board on open
+# stepped over at the second crash boot, two in a row dropping the places
+# at the third. A test image, never a release. EMU_RESUME_OK.
+EMU_RESUME_IMAGE = $(EMU_DIR)/resume/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-resume:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-crash-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/resume/target DIST=$(EMU_DIR)/resume/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-resume: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-resume &&) \
+	uv run --quiet tools/emu/run.py resume --image $(or $(FW_IMAGE),$(EMU_RESUME_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 EMU_WIFI_SOAK_IMAGE = $(EMU_DIR)/wifisoak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-wifi-soak:

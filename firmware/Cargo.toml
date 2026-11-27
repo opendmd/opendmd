@@ -40,6 +40,11 @@ emu-ballast = []
 # bytes in use logged every 20 s (`census:`), checked flat across 40+ GIFs.
 # Never in a release.
 emu-census = []
+# The emulator's resume lane (`make emu-resume`, tools/emu/resume_lane.py):
+# a GIF whose name holds CRASH_ON_OPEN panics the board when the player
+# opens it (src/sd.rs), for the in-order place's crash-loop guard. Never a
+# release (FW_TEST_ONLY_FEATURES).
+emu-crash-test = []
 # The emulator's low-heap lane (`make emu-oom`, src/oom_test.rs): WiFi
 # drops, a squeezed heap through a heartbeat and a reconnect, then an
 # out-of-memory abort and the next boot's record of it. Never in a release.

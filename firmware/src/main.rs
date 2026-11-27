@@ -87,6 +87,7 @@ mod psi_stack;
 #[cfg(feature = "psi")]
 mod card_formulas;
 mod restarts;
+mod resume;
 #[cfg(esp32s3)]
 mod s3mem;
 mod sched;
@@ -574,6 +575,8 @@ fn main() -> Result<()> {
     // (`card_formulas`).
     #[cfg(feature = "psi")]
     card_formulas::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
+    // Where the in-order playlists left off (`resume`).
+    resume::boot(reset == opendmd_core::restarts::Reset::PowerOn, reset.is_crash());
     heapmap::cp("restarts + fatidx boot");
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();
@@ -2360,6 +2363,9 @@ fn main() -> Result<()> {
                 panel.blit(eng.display_mut(&mut canvas));
             }
         }
+        // A rebuilt engine's in-order place (`resume`), before its first
+        // tick: here, the loop's own depth, not the rebuild's.
+        resume_engine(eng);
         let outcome = if off {
             TickOutcome::Idle
         } else {
@@ -2473,6 +2479,7 @@ fn main() -> Result<()> {
                         _ => false,
                     };
                     log_started(playing.ordinal, &playing.path, served);
+                    resume::started(playing.index, &playing.path, eng.in_order());
                     misslog::switched();
                     probe::switch_frame(tick_us, eng.started_ahead());
                 }
@@ -2905,7 +2912,7 @@ fn rebuild_context(
         let ov = catalog.overrides()?;
         // Its own no-repeat window, so a small set of matches can cycle.
         let window = opendmd_core::follow::context_window(ov.len());
-        Ok((engine_over(Box::new(catalog), &ov, settings, window), ov))
+        Ok((engine_over(Box::new(catalog), &ctx.index, &ov, settings, window), ov))
     })();
     let outcome = match built {
         Ok((e, ov)) if e.catalog_len() > 0 => {
@@ -3447,6 +3454,7 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
 /// one.
 fn engine_over(
     catalog: Box<dyn Catalog + Send>,
+    list: &str,
     overrides: &Overrides,
     settings: &Settings,
     no_repeat: usize,
@@ -3471,6 +3479,9 @@ fn engine_over(
         Box::new(SdSource),
     );
     engine.set_overrides(overrides);
+    // In order: on after the entry of this playlist that last started
+    // (`resume`), looked for by the main loop before the first tick.
+    resume::building(list, &settings.platforms);
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
     // A turn that ends before its next file could be opened ahead (a GIF
@@ -3482,6 +3493,33 @@ fn engine_over(
         engine.carry_over();
     }
     engine
+}
+
+/// Continue a rebuilt engine's in-order playlist where it left off, if it
+/// has a place (`resume::pending`): a look at the mark's index and a few
+/// either side (`Engine::resume_at`), at most 17 catalog reads, once.
+#[inline(never)]
+fn resume_engine(eng: &mut Engine) {
+    let Some((mark, step)) = resume::pending() else {
+        return;
+    };
+    let t = uclock::now_us();
+    if let Some(at) = eng.resume_at(&mark, step) {
+        use opendmd_core::resume::Step;
+        let how = match (at.found, step) {
+            _ if at.failed => "a read failed: its place",
+            (Some(_), Step::Next) => "after the last",
+            (Some(_), Step::Replay) => "the last again, it was up briefly",
+            (Some(_), Step::Over) => "one past the last, after 2 crash boots",
+            (None, _) => "the last gone: its place",
+        };
+        log::info!(
+            "resume: in order at entry {} ({how}, {} read in {} us)",
+            at.next,
+            at.probes,
+            uclock::since(t)
+        );
+    }
 }
 
 /// The fingerprint of the playlist's `.meta` as the index records it:
@@ -3744,7 +3782,7 @@ fn finish_build(
 ) -> Result<Applied, String> {
     let outcome = match built {
         Ok((catalog, ov, source)) => {
-            let built = engine_over(catalog, &ov, settings, config::NO_REPEAT_WINDOW);
+            let built = engine_over(catalog, path, &ov, settings, config::NO_REPEAT_WINDOW);
             let entries = built.catalog_len();
             if entries == 0 {
                 log::error!("{path} matched no entries under the configured filter");

@@ -708,6 +708,12 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 impl Source for SdSource {
     /// All of it is the display loop's `open` time ([`crate::frametime::open`]).
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+        // The resume lane's crash (`emu-crash-test`, never a release): a
+        // file named for it brings the board down before its first frame.
+        #[cfg(feature = "emu-crash-test")]
+        if path.contains("CRASH_ON_OPEN") {
+            panic!("emu-crash-test: {path} opened");
+        }
         // A switch: the read-ahead's ring goes before the new decoder and
         // the transition ask the heap (`readahead::release`).
         crate::readahead::release();

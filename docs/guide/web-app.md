@@ -252,7 +252,11 @@ many GIFs each has, with the rare ones behind **+N more** and a box to find
 one. Tap the ones you want and press **Only these**, or **All platforms**.
 
 **Each GIF stays** sets the shortest and longest time a GIF is on (3 to
-30 seconds unless you change them), and **Shuffle** mixes the order. **A Formula you
+30 seconds unless you change them), and **Shuffle** mixes the order. With
+Shuffle off the playlist plays in order and carries on where it was when you
+add or remove GIFs, after another playlist has played for a while (a
+schedule, Follow RePlayOS) and after a restart or an update; only cutting
+the power starts it from the top again. **A Formula you
 show on the panel stays** for one turn, 1 or 5 minutes, or until you change
 it.
 
