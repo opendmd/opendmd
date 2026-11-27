@@ -278,8 +278,9 @@ export async function mount(el) {
   async function bulk(fn, paths) {
     const r = await (await import('./details.js'))[fn](paths, opts());
     if (!r) return;
-    app.selection.clear();
-    for (const p of r.left) app.selection.add(p);
+    // (Only what this batch was given: a GIF ticked while it ran stays.)
+    const left = new Set(r.left);
+    for (const p of paths) if (!left.has(p)) app.selection.delete(p);
     const { done } = r;
     if (!done.length) { sync(); return; }
     if (current && done.some((x) => x.from === current.path)) {
