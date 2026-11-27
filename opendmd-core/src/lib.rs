@@ -56,6 +56,7 @@ pub mod player;
 pub mod query;
 pub mod readahead;
 pub mod restarts;
+pub mod resume;
 pub mod scan;
 pub mod schedule;
 pub mod scheduler;

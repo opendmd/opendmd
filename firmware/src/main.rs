@@ -87,6 +87,7 @@ mod psi_stack;
 #[cfg(feature = "psi")]
 mod card_formulas;
 mod restarts;
+mod resume;
 #[cfg(esp32s3)]
 mod s3mem;
 mod sched;
@@ -574,6 +575,8 @@ fn main() -> Result<()> {
     // (`card_formulas`).
     #[cfg(feature = "psi")]
     card_formulas::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
+    // Where the in-order playlists left off (`resume`).
+    resume::boot(reset == opendmd_core::restarts::Reset::PowerOn);
     heapmap::cp("restarts + fatidx boot");
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();
@@ -2473,6 +2476,7 @@ fn main() -> Result<()> {
                         _ => false,
                     };
                     log_started(playing.ordinal, &playing.path, served);
+                    resume::started(playing.index, &playing.path);
                     misslog::switched();
                     probe::switch_frame(tick_us, eng.started_ahead());
                 }
@@ -2905,7 +2909,7 @@ fn rebuild_context(
         let ov = catalog.overrides()?;
         // Its own no-repeat window, so a small set of matches can cycle.
         let window = opendmd_core::follow::context_window(ov.len());
-        Ok((engine_over(Box::new(catalog), &ov, settings, window), ov))
+        Ok((engine_over(Box::new(catalog), &ctx.index, &ov, settings, window), ov))
     })();
     let outcome = match built {
         Ok((e, ov)) if e.catalog_len() > 0 => {
@@ -3447,6 +3451,7 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
 /// one.
 fn engine_over(
     catalog: Box<dyn Catalog + Send>,
+    list: &str,
     overrides: &Overrides,
     settings: &Settings,
     no_repeat: usize,
@@ -3471,6 +3476,20 @@ fn engine_over(
         Box::new(SdSource),
     );
     engine.set_overrides(overrides);
+    // In order: on after the entry of this playlist that last started
+    // (`resume`; a bounded look near its old index, never a search).
+    if let Some(mark) = resume::building(list) {
+        let t = uclock::now_us();
+        if let Some(at) = engine.resume_at(&mark) {
+            log::info!(
+                "resume: {list} at entry {} ({}, {} read in {} us)",
+                at.next,
+                if at.found.is_some() { "after the last" } else { "the last gone: its place" },
+                at.probes,
+                uclock::since(t)
+            );
+        }
+    }
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
     // A turn that ends before its next file could be opened ahead (a GIF
@@ -3744,7 +3763,7 @@ fn finish_build(
 ) -> Result<Applied, String> {
     let outcome = match built {
         Ok((catalog, ov, source)) => {
-            let built = engine_over(catalog, &ov, settings, config::NO_REPEAT_WINDOW);
+            let built = engine_over(catalog, path, &ov, settings, config::NO_REPEAT_WINDOW);
             let entries = built.catalog_len();
             if entries == 0 {
                 log::error!("{path} matched no entries under the configured filter");

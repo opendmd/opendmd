@@ -95,6 +95,16 @@ impl Scheduler {
         self.history.clear();
     }
 
+    /// Make `index` the next in order: a `Sequential` scheduler's next draw
+    /// starts there (stepping over zero weights as any draw does), for an
+    /// engine resuming where its playlist left off (`crate::resume`). A
+    /// `Shuffle` ignores it. Out of range wraps.
+    pub fn start_at(&mut self, index: usize) {
+        if self.mode == Mode::Sequential && self.len > 0 {
+            self.cursor = index % self.len;
+        }
+    }
+
     /// Relative weight for an item index. Weight 0 is never chosen — in
     /// either mode: `Sequential` steps over it.
     ///
@@ -391,6 +401,39 @@ mod tests {
         let mut s = Scheduler::new(1, Mode::Shuffle, 0);
         s.set_weight(0, 0.0);
         assert_eq!(s.next_index(), None);
+    }
+
+    #[test]
+    fn start_at_resumes_in_order_only() {
+        let mut s = Scheduler::new(5, Mode::Sequential, 0).with_no_repeat(2);
+        s.start_at(3);
+        assert_eq!(take(&mut s, 4), vec![3, 4, 0, 1]);
+        // Steps over a zero weight there, as any draw does.
+        let mut s = Scheduler::new(5, Mode::Sequential, 0);
+        s.set_weight(3, 0.0);
+        s.start_at(3);
+        assert_eq!(take(&mut s, 2), vec![4, 0]);
+        // Given back after a resume: the same entry again.
+        let mut s = Scheduler::new(5, Mode::Sequential, 0);
+        s.start_at(2);
+        let a = s.next_index().unwrap();
+        s.give_back(a);
+        assert_eq!(take(&mut s, 2), vec![2, 3]);
+        // Out of range wraps; empty and one-entry lists hold.
+        let mut s = Scheduler::new(5, Mode::Sequential, 0);
+        s.start_at(7);
+        assert_eq!(s.next_index(), Some(2));
+        let mut s = Scheduler::new(0, Mode::Sequential, 0);
+        s.start_at(3);
+        assert_eq!(s.next_index(), None);
+        let mut s = Scheduler::new(1, Mode::Sequential, 0);
+        s.start_at(1);
+        assert_eq!(take(&mut s, 2), vec![0, 0]);
+        // A shuffle's order is its seed's.
+        let mut a = Scheduler::new(20, Mode::Shuffle, 9);
+        let mut b = Scheduler::new(20, Mode::Shuffle, 9);
+        b.start_at(13);
+        assert_eq!(take(&mut a, 20), take(&mut b, 20));
     }
 
     #[test]

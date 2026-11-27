@@ -58,7 +58,8 @@ use crate::filter::Filter;
 use crate::manifest::{self, Entry};
 use crate::overrides::{Dwell, Override, Overrides};
 use crate::player::FrameSource;
-use crate::scheduler::Scheduler;
+use crate::resume;
+use crate::scheduler::{Mode, Scheduler};
 use crate::synth;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::time::Duration;
@@ -1186,6 +1187,23 @@ impl Engine {
         // The new order starts afresh: nothing to give back.
         self.ahead.take_pick();
         self.ahead.blocked = false;
+    }
+
+    /// Continue an in-order playlist where `mark` says it left off
+    /// ([`crate::resume`]): the scheduler's next draw is the entry after the
+    /// mark's, looked for within [`resume::WINDOW`] of its old index (at
+    /// most `2 * WINDOW + 1` catalog reads), else the mark's old position
+    /// clamped to the catalog. For an engine just built, before its first
+    /// tick. Nothing for a shuffle or an empty catalog.
+    pub fn resume_at(&mut self, mark: &resume::Mark) -> Option<resume::Located> {
+        if self.scheduler.mode() != Mode::Sequential {
+            return None;
+        }
+        let at = resume::locate(&mut *self.catalog, mark, resume::WINDOW)?;
+        // A pick made ahead came from the old cursor.
+        self.ahead.take_pick();
+        self.scheduler.start_at(at.next);
+        Some(at)
     }
 
     /// Drop the file on screen now — its decoder, buffers and handle — and
@@ -5575,5 +5593,193 @@ mod tests {
         assert!(sure <= due, "sure to {sure:?}, frame due {due:?}, retuned at {t} ms");
         let p = e.current.as_ref().unwrap();
         assert!(p.frame_at > ms(8_000), "the position runs on: {:?}", p.frame_at);
+    }
+
+    // -- resuming an in-order playlist (crate::resume) -------------------------
+
+    fn gif_list(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("/gifs/T/T_G{i}_01.gif")).collect()
+    }
+
+    /// An in-order engine over `paths` (every one a playable GIF), as the
+    /// firmware's `engine_over` builds it: one second a turn.
+    fn in_order(paths: &[String], mode: Mode) -> Engine {
+        let cat = catalog(&paths.join("\n"), &Filter::new());
+        let sched = Scheduler::new(cat.len(), mode, 5).with_no_repeat(32);
+        let gif = one_pixel_gif(9, 9, 9);
+        let src = MemSource(paths.iter().map(|p| (p.clone(), gif.clone())).collect());
+        let dwell = DwellPolicy {
+            min: Duration::from_secs(1),
+            max: Duration::from_secs(1),
+            min_loops: 0,
+        };
+        Engine::new(Box::new(cat), sched, dwell, Box::new(src))
+    }
+
+    /// The paths of the next `n` files the engine starts.
+    fn starts(e: &mut Engine, n: usize) -> Vec<String> {
+        let mut canvas = Canvas::new();
+        let mut out = Vec::new();
+        let mut t = Duration::ZERO;
+        while out.len() < n && t < Duration::from_secs(600) {
+            if let TickOutcome::Frame { playing, started: true, .. } = e.tick(t, &mut canvas).unwrap() {
+                out.push(playing.path.to_string());
+            }
+            t += Duration::from_millis(50);
+        }
+        out
+    }
+
+    /// The firmware's mark at a start: the playlist entry on screen.
+    fn mark_of(e: &Engine) -> resume::Mark {
+        let np = e.now_playing().unwrap();
+        resume::Mark {
+            list: resume::path_hash("/filelist.txt"),
+            index: np.index as u32,
+            entry: resume::path_hash(&np.path),
+        }
+    }
+
+    #[test]
+    fn a_rebuild_over_the_same_list_continues_after_the_entry() {
+        let paths = gif_list(10);
+        let mut e = in_order(&paths, Mode::Sequential);
+        assert_eq!(starts(&mut e, 4), paths[..4]);
+        let m = mark_of(&e);
+        let mut e = in_order(&paths, Mode::Sequential);
+        let at = e.resume_at(&m).unwrap();
+        assert_eq!((at.found, at.probes), (Some(3), 1));
+        assert_eq!(starts(&mut e, 3), paths[4..7]);
+        // `ordinal` keeps its meaning: starts since this engine was built.
+        assert_eq!(e.now_playing().unwrap().ordinal, 3);
+        // Wrapping at the end.
+        let mut e = in_order(&paths, Mode::Sequential);
+        e.resume_at(&resume::Mark { index: 9, entry: resume::path_hash(&paths[9]), ..m });
+        assert_eq!(starts(&mut e, 2), [paths[0].clone(), paths[1].clone()]);
+    }
+
+    #[test]
+    fn an_upload_before_the_position_is_followed() {
+        let paths = gif_list(10);
+        let mut e = in_order(&paths, Mode::Sequential);
+        starts(&mut e, 6);
+        let m = mark_of(&e);
+        // Two new entries near the start, as an upload into the list.
+        let mut grown = paths.clone();
+        grown.insert(1, "/gifs/T/T_New_01.gif".into());
+        grown.insert(1, "/gifs/T/T_New_02.gif".into());
+        let mut e = in_order(&grown, Mode::Sequential);
+        assert_eq!(e.resume_at(&m).unwrap().found, Some(7));
+        assert_eq!(starts(&mut e, 2), paths[6..8]);
+        // And two appended at the end (adding to a playlist): not moved.
+        let mut grown = paths.clone();
+        grown.extend(["/gifs/T/T_New_01.gif".into(), "/gifs/T/T_New_02.gif".into()]);
+        let mut e = in_order(&grown, Mode::Sequential);
+        assert_eq!(e.resume_at(&m).unwrap().probes, 1);
+        assert_eq!(starts(&mut e, 1), paths[6..7]);
+    }
+
+    #[test]
+    fn the_entry_at_the_position_removed_continues_with_its_successor() {
+        let paths = gif_list(10);
+        let mut e = in_order(&paths, Mode::Sequential);
+        starts(&mut e, 5);
+        let m = mark_of(&e);
+        assert_eq!(m.index, 4);
+        let mut fewer = paths.clone();
+        fewer.remove(4);
+        let mut e = in_order(&fewer, Mode::Sequential);
+        assert_eq!(e.resume_at(&m).unwrap().found, None);
+        assert_eq!(starts(&mut e, 2), paths[5..7]);
+    }
+
+    #[test]
+    fn a_list_shrunk_below_the_position_is_clamped() {
+        let paths = gif_list(10);
+        let mut e = in_order(&paths, Mode::Sequential);
+        starts(&mut e, 9);
+        let m = mark_of(&e);
+        let other = gif_list(20)[12..15].to_vec();
+        let mut e = in_order(&other, Mode::Sequential);
+        assert_eq!(e.resume_at(&m).unwrap().next, 2);
+        assert_eq!(starts(&mut e, 2), [other[2].clone(), other[0].clone()]);
+        // One entry, and none.
+        let one = gif_list(1);
+        let mut e = in_order(&one, Mode::Sequential);
+        assert_eq!(e.resume_at(&m).unwrap().next, 0);
+        assert_eq!(starts(&mut e, 2), [one[0].clone(), one[0].clone()]);
+        let mut e = in_order(&[], Mode::Sequential);
+        assert_eq!(e.resume_at(&m), None);
+    }
+
+    #[test]
+    fn switching_away_and_back_resumes_the_first_list() {
+        let (a, b) = (gif_list(10), gif_list(30)[20..].to_vec());
+        let (ka, kb) = (resume::path_hash("/filelist.txt"), resume::path_hash("/sets/Night.txt"));
+        let mut marks = resume::Marks::default();
+        let note = |marks: &mut resume::Marks, e: &Engine, list| marks.note(resume::Mark { list, ..mark_of(e) });
+        let mut e = in_order(&a, Mode::Sequential);
+        starts(&mut e, 3);
+        note(&mut marks, &e, ka);
+        // A schedule rule (or Follow's attract playlist) switches to B...
+        let mut e = in_order(&b, Mode::Sequential);
+        assert!(marks.get(kb).is_none(), "B was never played: from its start");
+        assert_eq!(starts(&mut e, 4), b[..4]);
+        note(&mut marks, &e, kb);
+        // ...and back: A goes on after its third, B is remembered too.
+        let mut e = in_order(&a, Mode::Sequential);
+        e.resume_at(&marks.get(ka).unwrap());
+        assert_eq!(starts(&mut e, 2), a[3..5]);
+        let mut e = in_order(&b, Mode::Sequential);
+        e.resume_at(&marks.get(kb).unwrap());
+        assert_eq!(starts(&mut e, 1), b[4..5]);
+    }
+
+    #[test]
+    fn a_restart_record_resumes_only_when_it_is_valid() {
+        let paths = gif_list(10);
+        let key = resume::path_hash("/filelist.txt");
+        let mut e = in_order(&paths, Mode::Sequential);
+        starts(&mut e, 7);
+        let mut marks = resume::Marks::default();
+        marks.note(mark_of(&e));
+        // What RTC memory keeps across a software restart.
+        let words = marks.encode();
+        let back = resume::Marks::decode(&words);
+        let mut e = in_order(&paths, Mode::Sequential);
+        e.resume_at(&back.get(key).unwrap());
+        assert_eq!(starts(&mut e, 1), paths[7..8]);
+        // A torn or garbage record: no mark, the list starts at the top.
+        let mut torn = words;
+        torn[0][1] ^= 0x40;
+        assert_eq!(resume::Marks::decode(&torn).get(key), None);
+        let mut e = in_order(&paths, Mode::Sequential);
+        assert_eq!(starts(&mut e, 1), paths[..1]);
+    }
+
+    #[test]
+    fn a_resume_leaves_shuffle_skips_and_give_back_alone() {
+        let paths = gif_list(10);
+        let m = resume::Mark {
+            list: 1,
+            index: 4,
+            entry: resume::path_hash(&paths[4]),
+        };
+        // Shuffle: no resume, the seed's order.
+        let mut s = in_order(&paths, Mode::Shuffle);
+        let plain = starts(&mut s, 5);
+        let mut s = in_order(&paths, Mode::Shuffle);
+        assert_eq!(s.resume_at(&m), None);
+        assert_eq!(starts(&mut s, 5), plain);
+        // In order: the pick made ahead, given back, is drawn again; a skip
+        // moves on in order from there.
+        let mut e = in_order(&paths, Mode::Sequential);
+        e.resume_at(&m);
+        assert_eq!(e.ahead_step(), Some(AheadOutcome::Picked));
+        assert_eq!(e.ahead_path().map(|(p, _)| p.to_string()), Some(paths[5].clone()));
+        e.drop_ahead();
+        assert_eq!(starts(&mut e, 1), paths[5..6]);
+        e.skip();
+        assert_eq!(starts(&mut e, 1), paths[6..7]);
     }
 }
