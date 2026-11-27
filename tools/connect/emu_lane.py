@@ -1498,6 +1498,10 @@ class Lane:
         vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
         return ok, len(kern), len(vm)
 
+    def pass_checks(self, start=0):
+        """The mount passes' count of compiles checked beside a `.psr`."""
+        return [int(m.group(1)) for _, m in self.emu.find(re.compile(r"formulas: \d+ on the card: .* in \d+ ms; (\d+) checked beside a remote program"), start)]
+
     async def remote_add_confirmed(self, label="after the restart"):
         """After a restart: the pass compiled SMALL here (its .psb written and
         checked, its .psr gone: it may use the JIT); NEVER, which the classic
@@ -1521,6 +1525,9 @@ class Lane:
             pass
         short = self.emu.find(short_rx, self._restart_mark)
         self.expect(bool(self.emu.find(small_rx, self._restart_mark)), f"{label}: the small one compiled here, its .psr removed", "")
+        first, now = self.pass_checks(0)[:1], self.pass_checks(self._restart_mark)
+        self.expect(first == [0] and now and now[0] == 1, "the first boot's pass (no .psr) checked nothing again; the restart's, the one beside a .psr",
+                    f"first boot {first}, after the restart {now}")
         codes = [await self._status_code(f"/formulas/{self.SMALL}{e}") for e in (".psr", ".psb")]
         self.expect(codes == [404, 200], "...a .psb of the panel's own, no .psr", f"{codes}")
         ok, kern, vm = await self._plays(f"/formulas/{self.SMALL}.psi")
@@ -1568,6 +1575,8 @@ class Lane:
             "/formulas/lane-raw.psi": src,
             "/formulas/lane-old.psi": src, "/formulas/lane-old.psb": psb[:3] + bytes([psb[3] ^ 0x7f]) + psb[4:],
             "/formulas/Lane-Upper.psi": src, "/formulas/Lane-Upper.psb": psb,
+            # A mark beside a remote add's program: the mark wins where it plays, so not listed.
+            "/formulas/lane-mark.psi": src, "/formulas/lane-mark.psb": b"PSB\0" + bytes(8), "/formulas/lane-mark" + ".psr": psb,
         }
         codes = {}
         for path, data in files.items():
@@ -1581,7 +1590,7 @@ class Lane:
             self.expect(r and r.get("ok") and ["starfield", "Starfield"] in builtin and len(builtin) >= 5 and fr.get("more") is False,
                         "formulas: the built-in ones, [stem, name] from their compiled headers", json.dumps(fr)[:400])
             stems = [x[0] for x in card or []]
-            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper"} & set(stems),
+            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper", "lane-mark"} & set(stems),
                         "formulas: the card's that can play, named by their name line; none with no compiled file, another player's, or a stem remote play refuses",
                         json.dumps(card)[:400])
             self.report["formulas_bytes"] = len(json.dumps(fr))

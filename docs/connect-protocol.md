@@ -380,7 +380,11 @@ the panel's `abi` (5.6), as `/formulas/<stem>.psi` and `<stem>.psb`.
 firmware's `connect-formula-add` feature (test images); every release and
 beta answers them `not-allowed`, and its `formulas` reports no `abi` or
 `psb`, so a controller offers no Add to panel (a release image's check,
-`tools/release-test-features-check.sh`, holds the code out of it).
+`tools/release-test-features-check.sh`, holds the code out of it). A
+release that finds `<stem>.psr` files (left by a test image, or put there
+by hand) plays each on the VM only, as below, and removes one only
+together with its `.psi` (a LAN delete); it never removes one on its own,
+as an orphan or beside its own compile.
 
 1. `formula-add {id, stem, name, src_size, src_sha256, psb_size,
    psb_sha256}`: `id` a non-zero 32-bit number; `stem` the web app's save
