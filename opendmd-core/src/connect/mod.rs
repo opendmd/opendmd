@@ -11,6 +11,7 @@
 //! - [`qr`], [`screen`]: the pairing QR code (version 3-L) and the panel's
 //!   two pairing screens.
 //! - [`xfer`]: a GIF send's chunks, credit, hashes and quota.
+//! - [`fadd`]: a Formula added by remote (`formula-add`, `formula-part`).
 //! - [`gate`]: the heap gate a handshake waits on, and why it waits.
 //! - [`codec`], [`json`]: hex, base32, HMAC; a strict JSON reader.
 //!
@@ -18,6 +19,8 @@
 
 pub mod codec;
 pub mod dns;
+#[cfg(feature = "connect-formula-add")]
+pub mod fadd;
 pub mod gate;
 pub mod json;
 pub mod keys;

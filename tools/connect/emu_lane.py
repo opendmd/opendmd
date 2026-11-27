@@ -19,7 +19,9 @@ HTTP (the controllers' side, this script's).
 Blue: Remote control off by default; switched on over the LAN (no hold);
 registration, `hello`, `keys`, `info`; a controller attaches, watches and
 gets status; play, next, previous, pause, brightness, playlist,
-playlists, controllers, name, add-controller; the LAN routes; the panel
+playlists, formulas (the built-in ones and the card's that can play, put on
+the card over the LAN; one played by remote), controllers, name,
+add-controller; the LAN routes; the panel
 reconnecting after a server close; a refusal (4403) and a too-new close
 (4406) handled by policy; the server gone and back; pairing (the LAN
 link's window with its QR code on the panel, a guest found by `pair_id`,
@@ -413,6 +415,8 @@ class Lane:
 
             async def cmd(c, a_=None, ctl=None, timeout=120):
                 ctl = ctl or a
+                if c == "play":
+                    self._play_mark = self.emu.mark()
                 f = ctl.frame(c, a_)
                 await ctl.send(f)
                 n = odc.loads(f[odc.COMMAND_HEAD:])["n"]
@@ -481,12 +485,14 @@ class Lane:
                 self.ok("play: on screen")
             r = await cmd("play", {"path": "@formula:starfield"})
             self.expect(r and r.get("ok"), "play a bundled Formula: ack ok", json.dumps(r))
-            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120)
+            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120, every=0.5)
             self.ok("play a Formula: on screen")
             r = await cmd("play", {"path": "/gifs/no such folder/none.gif"})
             self.expect(r and r.get("err") == "bad-arg", "play a GIF that is not there: bad-arg", json.dumps(r))
             r = await cmd("playlists")
             self.expect(r and r.get("ok") and isinstance((r.get("r") or {}).get("sets"), list), "playlists: a bounded list", json.dumps(r)[:300])
+            await self.card_formulas(cmd)
+            await self.remote_add(cmd)
             await asyncio.sleep(1.2)
             r = await cmd("playlist", {"set": ""})
             self.expect(r and r.get("ok"), "playlist \"\" (the main list): ok", json.dumps(r))
@@ -778,6 +784,7 @@ class Lane:
         self.expect(st.get("uptime_secs", 0) >= 30, "after a restart: not before the hold", f"open at {st.get('uptime_secs')} s")
         cfg = (await self.http("GET", "/api/config"))[1] or {}
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
+        await self.remote_add_confirmed()
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
         await self.dns_lookups()
@@ -1191,7 +1198,8 @@ class Lane:
         ws = await ctl.connect(http)
         await ctl.until("challenge", timeout=30)
         await ws.send_str(odc.dumps({"t": "guest", "pair_id": pid.hex()}))
-        if await ctl.until("guest-ok", timeout=30) is None:
+        ok = await ctl.until("guest-ok", timeout=30)
+        if ok is None:
             return {"closed": await ctl.closed()}
         label = ctl.label if raw_label is None else raw_label
         replies = []
@@ -1200,7 +1208,7 @@ class Lane:
             await ws.send_str(odc.dumps({"t": "pair", "pub": ctl.pub.hex(), "label": label, "mac": m.hex()}))
             replies.append(await ctl.until("paired", timeout=timeout))
         await ws.close()
-        return {"dev": found, "replies": replies}
+        return {"dev": found, "replies": replies, "g": ok.get("g")}
 
     async def inject_pair(self, secret, dev, ctl, g=99):
         """A `pair` with the right MAC put straight onto the panel's socket
@@ -1272,6 +1280,7 @@ class Lane:
         rep = (res.get("replies") or [None])[0]
         self.expect(res.get("dev") == dev and rep and rep.get("k") == g1.k.hex(), "a guest found the panel by pair_id and paired", json.dumps(rep))
         self.expect(bytes.fromhex(rep.get("mac2", "")) == odc.paired_mac(secret, dev, g1.pub), "paired's mac2: the secret, this panel and the key", "")
+        self.expect(odc.is_int(res.get("g")) and rep.get("g") == res.get("g"), "paired echoes the guest's slot g whole", f"guest-ok g {res.get('g')}, paired g {rep.get('g')}")
         said = self.srv.said[mark:]
         ki = next((i for i, m in enumerate(said) if m.get("t") == "keys" and any(e.get("k") == g1.k.hex() for e in m.get("keys", []))), None)
         pi = next((i for i, m in enumerate(said) if m.get("t") == "paired" and m.get("k") == g1.k.hex()), None)
@@ -1360,6 +1369,10 @@ class Lane:
         got = await self.inject_pair(secret5, dev, late)
         self.expect(got.get("err") in ("expired", "closed") and late.k not in rec.keys, "red: a pair after expiry, put on the panel's socket: refused", json.dumps(got))
 
+        # The mock server's slots go past a byte on purpose (GUEST_SLOTS):
+        # the panel answered guests either side of 255, each by its own g.
+        slots = {m.get("g") for m in self.srv.said if m.get("t") == "paired" and odc.is_int(m.get("g"))}
+        self.expect(any(g > 255 for g in slots) and any(g <= 255 for g in slots), "paired answers guests' slots either side of a byte", f"{sorted(slots)}")
         su = ((await self.status()).get("connect") or {}).get("stack_unused")
         self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after pairing (MACs and key stores at the top level): >= 1 KB left", f"{su} B")
         self.report["stack_unused_after_pairing"] = su
@@ -1370,11 +1383,186 @@ class Lane:
             self.expect(code == 200, f"the paired device {k.hex()[:6]} removed on the LAN", f"{code}")
         await asyncio.sleep(2)
 
+    def _put_bytes(self, path, data: bytes):
+        req = urllib.request.Request(self.base + "/api/files" + urllib.parse.quote(path), method="PUT", data=data,
+                                     headers={"Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    async def remote_add(self, cmd):
+        """`formula-add` (5.7): the gallery's largest Formula, rift-patrol
+        (10.8 KB of source, its host-compiled 4.4 KB .psb), added by remote in
+        parts; it lands, is listed, and plays on the VM only (its kernel never
+        built) until the restart's pass compiles it here (checked after the
+        restart, `remote_add_confirmed`). Red: a compiled file that fails
+        psb::verify (cut short, its hash signed) is refused with nothing
+        landed; the same source again is `done`, nothing written."""
+        import hashlib
+        src = (REPO / "opendmd-web" / "formulas" / "rift-patrol.psi").read_bytes()
+        psb = (Path(self.psb_dir) / "rift-patrol.psb").read_bytes()
+
+        async def add(src, psb, id_, stem="rift-patrol"):
+            args = {"id": id_, "stem": stem, "name": "Rift patrol", "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
+                    "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+            r = await cmd("formula-add", args)
+            off = ((r or {}).get("r") or {}).get("next")
+            stream = src + psb
+            while r and r.get("ok") and off is not None and off < len(stream):
+                await asyncio.sleep(0.3)
+                d = stream[off: off + odc.ADD_MAX_PART]
+                r = await cmd("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
+                off = ((r or {}).get("r") or {}).get("next", len(stream)) if r and r.get("ok") else None
+            # The checks wait for heap: the same add signed again tries them again (as the page does).
+            for _ in range(6):
+                if not (r and r.get("err") == "busy"):
+                    break
+                self.report["remote_add_busy"] = self.report.get("remote_add_busy", 0) + 1
+                await asyncio.sleep(5)
+                r = await cmd("formula-add", args)
+            return r
+
+        t0 = time.time()
+        r = await add(src, psb, 21)
+        self.expect(r and (r.get("r") or {}).get("done") is True and r["r"].get("stem") == "rift-patrol",
+                    f"formula-add: rift-patrol ({len(src)} + {len(psb)} B) in parts of {odc.ADD_MAX_PART}: landed", f"{json.dumps(r)} in {time.time() - t0:.0f} s")
+        code, got = await asyncio.to_thread(self._get_bytes, "/formulas/rift-patrol.psi")
+        self.expect(code == 200 and got == src, "...its source on the card byte for byte", f"{code}")
+        await asyncio.sleep(5.5)
+        r = await cmd("formulas")
+        fr = (r or {}).get("r") or {}
+        self.expect(["rift-patrol", "Rift patrol"] in (fr.get("card") or []) and odc.is_int(fr.get("abi")) and fr.get("psb") is True,
+                    "formulas: the added Formula listed; abi and psb said", json.dumps({k: fr.get(k) for k in ("abi", "psb")}))
+        await asyncio.sleep(1.2)
+        mark = self.emu.mark()
+        r = await cmd("play", {"path": "/formulas/rift-patrol.psi"})
+        self.expect(r and r.get("ok"), "play the added Formula: ok", json.dumps(r))
+        await asyncio.sleep(12)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
+        self.expect(vm and not kern, "the added Formula plays on the VM only: no kernel built for it (the JIT's gate refuses it first)", f"{len(vm)} VM lines, {len(kern)} kernels")
+        self.report["remote_add_s"] = round(time.time() - t0, 1)
+        # Red: the same source again: done, nothing written.
+        await asyncio.sleep(1.2)
+        r = await add(src, psb, 22)
+        self.expect(r and (r.get("r") or {}).get("stem") == "rift-patrol" and ((r.get("r") or {}).get("done")), "formula-add of the same source again: done as rift-patrol, nothing written", json.dumps(r))
+        # Red: a compiled file that does not load (cut short; the hash of what is sent signed).
+        await asyncio.sleep(1.2)
+        r = await add(src.replace(b"Rift patrol", b"Rift patrol B", 1), psb[:-40], 23, stem="rift-cut")
+        code, _ = await asyncio.to_thread(self._get_bytes, "/formulas/rift-cut.psi")
+        self.expect(r and r.get("err") == "bad-arg" and code == 404, "red: a compiled file that fails psb::verify: bad-arg, nothing landed", f"{json.dumps(r)}, GET {code}")
+        # A small one too (the offline lane's ramp), which the classic can compile at its next start.
+        await asyncio.sleep(1.2)
+        ramp = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes()
+        r = await add(ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 24, stem="remote-ramp")
+        self.expect(r and (r.get("r") or {}).get("stem") == "remote-ramp", "formula-add: a small Formula too", json.dumps(r))
+        await self.http("PUT", "/api/config", {"set": ""})
+
+    async def _plays(self, path):
+        """Play `path` on the LAN; (kernels built, unconfirmed VM lines) in the 12 s after."""
+        mark = self.emu.mark()
+        code, _ = await self.http("POST", "/api/play", {"path": path})
+        await asyncio.sleep(12)
+        kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        return code, len(kern), len(vm)
+
+    async def remote_add_confirmed(self):
+        """After a restart: the pass compiled the small added Formula here
+        (confirmed: it may use the JIT); the gallery's largest needs more heap
+        to compile than the classic has (~147 KB), so it stays unconfirmed, on
+        the VM only."""
+        conf_rx = re.compile(r"formulas: (\d+) added by remote compiled here: confirmed")
+        short_rx = re.compile(r"formulas: short of memory for /formulas/rift-patrol\.psi \(the least needs (\d+) B free")
+        # (The mount pass tries the large one's compile first: it ends some 2 emulated minutes in.)
+        async def pass_done():
+            return bool(self.emu.find(conf_rx)) and bool(self.emu.find(short_rx))
+        try:
+            await self.wait("the mount pass's verdicts on the remote adds", pass_done, 600, every=3)
+        except Fail:
+            pass
+        hits, short = self.emu.find(conf_rx), self.emu.find(short_rx)
+        self.expect(bool(hits), "after the restart: the small added Formula compiled here, confirmed", f"{len(hits)}")
+        code, kern, vm = await self._plays("/formulas/remote-ramp.psi")
+        self.expect(code == 200 and kern and not vm, "...and it now may use the JIT (a kernel built)", f"{code}, {kern} kernels, {vm} VM lines")
+        self.report["rift_patrol_compile_need"] = int(short[-1][1].group(1)) if short else None
+        await asyncio.sleep(1.2)
+        code, kern, vm = await self._plays("/formulas/rift-patrol.psi")
+        self.expect(code == 200 and vm and not kern and short, "the largest, which the classic cannot compile (short of memory), stays on the VM only",
+                    f"{code}, {kern} kernels, {vm} VM lines; compile needs {self.report['rift_patrol_compile_need']} B")
+
+    async def card_formulas(self, cmd):
+        """`formulas`: the built-in Formulas and the card's that can play.
+        Put on the card over the LAN: one ready (the host's `psi build`),
+        one with no compiled file, one compiled for another player, one
+        whose stem a remote play cannot name; only the first is listed,
+        under its `name` line, and plays by remote."""
+        psb = (Path(self.psb_dir) / "ramp.psb").read_bytes()
+        src = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes()
+        files = {
+            "/formulas/lane-ramp.psi": src, "/formulas/lane-ramp.psb": psb,
+            "/formulas/lane-raw.psi": src,
+            "/formulas/lane-old.psi": src, "/formulas/lane-old.psb": psb[:3] + bytes([psb[3] ^ 0x7f]) + psb[4:],
+            "/formulas/Lane-Upper.psi": src, "/formulas/Lane-Upper.psb": psb,
+        }
+        codes = {}
+        for path, data in files.items():
+            codes[path] = await asyncio.to_thread(self._put_bytes, path, data)
+        self.expect(all(c == 200 for c in codes.values()), "four card Formulas put on the card over the LAN", f"{codes}")
+        try:
+            await asyncio.sleep(5.5)
+            r = await cmd("formulas")
+            fr = (r or {}).get("r") or {}
+            builtin, card = fr.get("builtin") or [], fr.get("card")
+            self.expect(r and r.get("ok") and ["starfield", "Starfield"] in builtin and len(builtin) >= 5 and fr.get("more") is False,
+                        "formulas: the built-in ones, [stem, name] from their compiled headers", json.dumps(fr)[:400])
+            stems = [x[0] for x in card or []]
+            self.expect(isinstance(card, list) and ["lane-ramp", "Offline ramp"] in card and not {"lane-raw", "lane-old", "Lane-Upper", "lane-upper"} & set(stems),
+                        "formulas: the card's that can play, named by their name line; none with no compiled file, another player's, or a stem remote play refuses",
+                        json.dumps(card)[:400])
+            self.report["formulas_bytes"] = len(json.dumps(fr))
+            # Its own rate: a second listing at once is `rate`; a page after a
+            # stem lists only the stems after it; unknown arguments are bad-arg.
+            r = await cmd("formulas")
+            self.expect(r and r.get("err") == "rate", "formulas: a second listing within 5 s: rate", json.dumps(r))
+            await asyncio.sleep(5.5)
+            r = await cmd("formulas", {"after": "lane-ramp"})
+            pg = (r or {}).get("r") or {}
+            self.expect(r and r.get("ok") and pg.get("builtin") == [] and all(x[0] > "lane-ramp" for x in pg.get("card") or []),
+                        "formulas after a stem: no built-in ones, only the card's after it", json.dumps(pg)[:300])
+            await asyncio.sleep(1.2)
+            r = await cmd("formulas", {"page": 2})
+            self.expect(r and r.get("err") == "bad-arg", "red: formulas with an unknown argument: bad-arg", json.dumps(r))
+            await asyncio.sleep(1.2)
+            r = await cmd("play", {"path": "/formulas/lane-ramp.psi"})
+            self.expect(r and r.get("ok"), "play a card Formula from the list: ack ok", json.dumps(r))
+            await self.wait("the card Formula on screen", lambda: self._playing("/formulas/lane-ramp.psi"), 120, every=0.5)
+            self.ok("play a card Formula: on screen")
+            await asyncio.sleep(1.2)
+            r = await cmd("play", {"path": "@formula:starfield"})
+            self.expect(r and r.get("ok"), "back to a built-in Formula", json.dumps(r))
+            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120, every=0.5)
+        finally:
+            for path in files:
+                await self.http("DELETE", "/api/files" + urllib.parse.quote(path))
+        await asyncio.sleep(5.5)
+        r = await cmd("formulas")
+        card = ((r or {}).get("r") or {}).get("card")
+        self.expect(isinstance(card, list) and not any(x[0].startswith("lane-") for x in card), "formulas after the card's were deleted: gone from the list", json.dumps(card)[:300])
+
     async def _moved(self, o0):
         return ((await self.status()).get("now_playing") or {}).get("ordinal") != o0
 
     async def _playing(self, path):
-        return ((await self.status()).get("now_playing") or {}).get("path") == path
+        # On screen now, or opened since this lane last looked (the console: a
+        # short play can be over between two status reads when the emulator
+        # runs ahead of the wall clock).
+        if ((await self.status()).get("now_playing") or {}).get("path") == path:
+            return True
+        start = getattr(self, "_play_mark", 0)
+        return bool(self.emu.find(re.compile(r"\] " + re.escape(path) + r" <- "), start))
 
     async def _not_playing(self, path):
         p = ((await self.status()).get("now_playing") or {}).get("path")
@@ -1400,7 +1588,7 @@ class Lane:
         return st.get("uptime_secs", 9999) < s and "connect" in st
 
 
-async def serve_and_run(emu, logs, certs: Path) -> Lane:
+async def serve_and_run(emu, logs, certs: Path, psb: Path) -> Lane:
     from aiohttp import web
 
     srv = lane_server()
@@ -1424,6 +1612,7 @@ async def serve_and_run(emu, logs, certs: Path) -> Lane:
     await asyncio.get_running_loop().create_datagram_endpoint(lambda: srv.dns, local_addr=(host_resolver(), 53))
     await web.TCPSite(runner, "127.0.0.1", CTL_PORT).start()
     lane = Lane(emu, srv, logs)
+    lane.psb_dir = psb
     try:
         await lane.run()
     finally:
@@ -1445,13 +1634,14 @@ def main():
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--certs", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
+    ap.add_argument("--psb", type=Path, required=True, help="the host's psi build of tools/emu/offline/ramp.psi, its directory")
     ap.add_argument("--rom", type=Path)
     ap.add_argument("--seconds", type=int, default=7500, help="emulated seconds at most")
     ap.add_argument("--wall", type=int, default=12600, help="wall-clock limit (s)")
     a = ap.parse_args()
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)
-    for what, p in (("emulator (make emu-build)", sim), ("image", a.image), ("card (make emu-card)", a.card), ("rom", rom), ("certs", a.certs / "chain.pem")):
+    for what, p in (("emulator (make emu-build)", sim), ("image", a.image), ("card (make emu-card)", a.card), ("rom", rom), ("certs", a.certs / "chain.pem"), ("compiled Formula (make emu-connect-psb)", a.psb / "ramp.psb")):
         if not p or not Path(p).exists():
             sys.exit(f"EMU_CONNECT_FAIL: missing {what}: {p}")
     seeded = api_lane.seeded_image(a.image, EMU_DIR / "connect" / "seed")
@@ -1480,7 +1670,7 @@ def main():
     code = 0
     lane = None
     try:
-        lane = asyncio.run(serve_and_run(emu, logs, a.certs))
+        lane = asyncio.run(serve_and_run(emu, logs, a.certs, a.psb))
         print(f"EMU_CONNECT_OK ({len(lane.passes)} checks, {time.time() - t0:.0f} s wall)", flush=True)
     except (Fail, api_lane.LaneFail, Exception) as e:  # noqa: BLE001
         print(f"EMU_CONNECT_FAIL: {e}\n--- console tail:\n{emu.tail(25)}", flush=True)

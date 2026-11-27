@@ -88,6 +88,15 @@ const CHUNK: usize = 2 * 1024;
 /// Compiled files the player refused (`engine::set_formula_refused`), to be
 /// prepared again: the card's list of them (hashes of their paths).
 const REDO_FILE: &str = ".psb-redo";
+/// Compiled files a remote controller delivered (Connect's
+/// `formula-add`) that this panel has not compiled again itself: one line
+/// each, the CRC-32 of the file's bytes and the [`key`] of its Formula, in
+/// hex. Loaded at boot before anything plays (`fx_psi::set_unconfirmed`:
+/// those programs never reach the JIT); each Formula is on [`REDO_FILE`]
+/// too, so the next start's pass compiles its source, and its line goes
+/// once that compile resolved it.
+#[cfg(feature = "connect-formula-add")]
+const REMOTE_FILE: &str = ".remote";
 /// The mark written before a compile: `PSB`, ABI 0, then the source's
 /// size and FAT date (date << 16 | time), little-endian.
 const MARK: &[u8; 4] = b"PSB\0";
@@ -220,6 +229,161 @@ fn list(card_dir: &str) -> Vec<Entry> {
         sys::f_closedir(&mut d);
     }
     out
+}
+
+/// Card Formulas a remote `formulas` opens (a `.psb` header each), at
+/// most, per page.
+#[cfg(feature = "connect")]
+pub const REMOTE_OPENS: usize = 48;
+/// The most `.psb` files a `formulas` pass notes (by a hash of the stem:
+/// 4 B each).
+#[cfg(feature = "connect")]
+const REMOTE_PSB_MAX: usize = 512;
+
+/// Every file in `/formulas`, one `f_readdir` pass: `f(name, size)` for
+/// each (no lookup per file). False: no such directory.
+#[cfg(feature = "connect")]
+fn each_file(mut f: impl FnMut(&str, u32) -> bool) -> bool {
+    use esp_idf_sys as sys;
+    let Ok(dir) = std::ffi::CString::new("0:/formulas") else {
+        return false;
+    };
+    // SAFETY: plain data FatFs fills, the directory closed before return.
+    unsafe {
+        let mut d: sys::FF_DIR = std::mem::zeroed();
+        if sys::f_opendir(&mut d, dir.as_ptr()) != sys::FRESULT_FR_OK {
+            return false;
+        }
+        let mut fi: sys::FILINFO = std::mem::zeroed();
+        while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
+            if fi.fattrib as u32 & sys::AM_DIR == 0 {
+                if let Ok(name) = std::ffi::CStr::from_ptr(fi.fname.as_ptr()).to_str() {
+                    if !f(name, fi.fsize as u32) {
+                        break;
+                    }
+                }
+            }
+        }
+        sys::f_closedir(&mut d);
+    }
+    true
+}
+
+/// One page of the card's Formulas a remote controller can play
+/// (Connect's `formulas`, on the network worker; protocol 5.6), into
+/// `out`: each `/formulas/<stem>.psi` with a stem a remote `play` may name
+/// (`proto::formula_stem_ok`) and a `.psb` beside it compiled for this
+/// player, as `[stem, name]`, the name from the `.psb`'s header (its
+/// source's `name "…"` line), else the stem's title; in stem order, the
+/// stems after `after`. There is no list of them in RAM, so:
+///
+/// 1. one `f_readdir` pass notes the stems that have a `.psb` larger than
+///    a mark (a hash each, at most [`REMOTE_PSB_MAX`]);
+/// 2. a second notes the [`REMOTE_OPENS`] smallest `.psi` stems after
+///    `after` among those (a stem without a `.psb` costs no lookup);
+/// 3. only those are opened, in order, for a header of at most 261 bytes,
+///    until `out` is full.
+///
+/// Nothing is written, nothing `stat`ed. A transfer on the card stops the
+/// page at once (never a wait: the controller asks for the rest later).
+/// `(cut, next)`: stopped before the last candidate, and the stem the next
+/// page starts after (the last one looked at).
+#[cfg(feature = "connect")]
+pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: Option<&str>) -> (bool, Option<String>) {
+    use opendmd_core::connect::proto::formula_stem_ok;
+    let t0 = Instant::now();
+    let h = |stem: &str| key(stem);
+    // 1. The stems with a compiled file worth a look.
+    let mut built: Vec<u32> = Vec::new();
+    let _ = built.try_reserve(64);
+    let mut overflow = false;
+    let found = each_file(|name, size| {
+        if let Some(st) = stem(name, ".psb") {
+            if size > MARK_LEN {
+                if built.len() >= REMOTE_PSB_MAX {
+                    overflow = true;
+                    return false;
+                }
+                built.push(h(st));
+            }
+        }
+        true
+    });
+    if !found || built.is_empty() {
+        return (false, None);
+    }
+    built.sort_unstable();
+    // 2. The smallest stems after `after` that have one (one more than is
+    // opened: there are more).
+    let mut cands: Vec<String> = Vec::new();
+    let mut beyond = false;
+    each_file(|name, _| {
+        let Some(st) = stem(name, ".psi").filter(|s| formula_stem_ok(s)) else {
+            return true;
+        };
+        if after.is_some_and(|a| st <= a) || built.binary_search(&h(st)).is_err() {
+            return true;
+        }
+        if cands.len() == REMOTE_OPENS {
+            // Keep the smallest: drop the largest if this one is smaller.
+            let (i, max) = cands.iter().enumerate().max_by(|a, b| a.1.cmp(b.1)).map(|(i, m)| (i, m.clone())).unwrap_or_default();
+            beyond = true;
+            if st < max.as_str() {
+                cands[i] = st.to_string();
+            }
+        } else {
+            cands.push(st.to_string());
+        }
+        true
+    });
+    cands.sort_unstable();
+    let passes = t0.elapsed();
+    // 3. Opened in order.
+    let (mut opened, mut longest) = (0u32, Duration::ZERO);
+    let mut next = None;
+    let mut cut = beyond || overflow;
+    for st in &cands {
+        if out.full() {
+            cut = true;
+            break;
+        }
+        if crate::cache_builder::transfer_in_flight() {
+            cut = true;
+            break;
+        }
+        let t = Instant::now();
+        let hd = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
+        longest = longest.max(t.elapsed());
+        opened += 1;
+        next = Some(st.clone());
+        // Not ready to play: compiled for another player, or not a
+        // compiled Formula.
+        if hd.len() < 6 || &hd[..3] != b"PSB" || hd[3] != psi::psb::ABI {
+            continue;
+        }
+        let title = opendmd_core::synth::compiled_name(&hd).unwrap_or_else(|| opendmd_core::synth::stem_title(st));
+        if !out.card(st, &title) {
+            // (This one was not listed: the next page starts before it.)
+            next = cands.iter().take_while(|c| *c < st).last().cloned().or_else(|| after.map(str::to_string));
+            cut = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    // A page that stopped before looking at anything starts where it was.
+    if cut && next.is_none() {
+        next = after.map(str::to_string);
+    }
+    log::info!(
+        "connect: formulas page: {} compiled noted, {} candidates, {opened} opened (the longest {} ms), in {} ms ({} ms the two passes){}",
+        built.len(),
+        cands.len(),
+        longest.as_millis(),
+        t0.elapsed().as_millis(),
+        passes.as_millis(),
+        if cut { ", more" } else { "" }
+    );
+    (cut, next)
 }
 
 /// One `.psi` and its `.psb`'s state.
@@ -705,6 +869,44 @@ impl Drop for Writing {
 }
 
 /// The card's list of refused compiled files, as keys.
+/// `.remote`'s lines: (crc, key).
+#[cfg(feature = "connect-formula-add")]
+fn remote_lines(path: &str) -> Vec<(u32, u32)> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (c, k) = l.trim().split_once(' ')?;
+            Some((u32::from_str_radix(c, 16).ok()?, u32::from_str_radix(k, 16).ok()?))
+        })
+        .collect()
+}
+
+/// At boot, before the card's first Formula may play (the start-up show
+/// included): the unconfirmed list from [`REMOTE_FILE`].
+#[cfg(feature = "connect-formula-add")]
+pub fn load_unconfirmed() {
+    let lines = remote_lines(&format!("{}/formulas/{REMOTE_FILE}", config::SD_MOUNT));
+    if !lines.is_empty() {
+        log::info!("formulas: {} added by remote, on the VM until compiled here", lines.len());
+    }
+    opendmd_core::fx_psi::set_unconfirmed(lines.into_iter().map(|(c, _)| c).collect());
+}
+
+/// A Formula a remote controller added (`/formulas/<stem>`, its compiled
+/// bytes' CRC): on [`REMOTE_FILE`] and [`REDO_FILE`] (the next start
+/// compiles it here), and on the unconfirmed list now.
+#[cfg(feature = "connect-formula-add")]
+pub fn note_remote(stem: &str, crc: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    let k = key(&format!("/formulas/{stem}"));
+    let dir = format!("{}/formulas", config::SD_MOUNT);
+    opendmd_core::fx_psi::add_unconfirmed(crc);
+    let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REMOTE_FILE}"))?.write_all(format!("{crc:08x} {k:08x}\n").as_bytes())?;
+    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REDO_FILE}"))?.write_all(format!("{k:08x}\n").as_bytes())
+}
+
 fn redo_keys(path: &str) -> Vec<u32> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -736,12 +938,28 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let sources = entries.iter().filter(|e| stem(&e.name, ".psi").is_some()).take(MAX_FILES);
     let abi_path = format!("{dir}/{ABI_FILE}");
     let redo_path = format!("{dir}/{REDO_FILE}");
-    let redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
+    let mut redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         redo_keys(&redo_path)
     } else {
         Vec::new()
     };
+    // Remote adds are compiled here whatever their dates say (and whether
+    // or not their line on the redo list survived).
+    #[cfg(feature = "connect-formula-add")]
+    let remote: Vec<(u32, u32)> = if entries.iter().any(|e| e.name == REMOTE_FILE) {
+        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        remote_lines(&format!("{dir}/{REMOTE_FILE}"))
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(feature = "connect-formula-add"))]
+    let remote: Vec<(u32, u32)> = Vec::new();
+    for &(_, k) in &remote {
+        if !redo.contains(&k) {
+            redo.push(k);
+        }
+    }
     // The refused ones dealt with (prepared, or found not to compile).
     let mut redone: Vec<u32> = Vec::new();
     let abi_same = redo.is_empty()
@@ -857,6 +1075,28 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             let text: String = now.iter().map(|k| format!("{k:08x}\n")).collect();
             let _ = fs::write(&redo_path, text);
         }
+    }
+    // Remote adds compiled here now are confirmed: off the unconfirmed
+    // list, and the JIT may draw them. (Only a compile confirms one: a line
+    // whose source is gone stays, its compiled file never on the JIT.)
+    #[cfg(feature = "connect-formula-add")]
+    if !remote.is_empty() {
+        let remote_path = format!("{dir}/{REMOTE_FILE}");
+        let kept: Vec<(u32, u32)> = remote.iter().copied().filter(|(_, k)| !redone.contains(k)).collect();
+        if kept.len() != remote.len() {
+            log::info!("formulas: {} added by remote compiled here: confirmed", remote.len() - kept.len());
+            if kept.is_empty() {
+                let _ = fs::remove_file(&remote_path);
+            } else {
+                let _ = fs::write(&remote_path, kept.iter().map(|(c, k)| format!("{c:08x} {k:08x}\n")).collect::<String>());
+            }
+            opendmd_core::fx_psi::set_unconfirmed(kept.into_iter().map(|(c, _)| c).collect());
+        }
+    }
+    // A remote add's part files left by a restart mid-add (the boot's pass
+    // only: a retry's must not take an add under way).
+    for e in entries.iter().filter(|e| opts.wait && e.name.starts_with(".add-") && e.name.ends_with(".part")) {
+        let _ = fs::remove_file(format!("{dir}/{}", e.name));
     }
     (c, left)
 }

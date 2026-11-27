@@ -14,6 +14,9 @@
     "brightness",
     "playlist",
     "playlists",
+    "formulas",
+    "formula-add",
+    "formula-part",
     "send",
     "send-cancel",
     "controllers",
@@ -106,6 +109,69 @@
       "frame": "01ed5328324106ab4e5a348d427cdda5329364b8453f2874c0db214b40552f734861fac5fb08f34ec89f781333b5aa34a55a2fe069debbe861cafaa99e13cd1581d46405081833b5057b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22706c61796c697374222c2261223a7b22736574223a22636f6e736f6c6573227d7d",
       "name": "ok-playlist",
       "note": "",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formulas\",\"a\":{}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4e8e943153e5440d3465344451d36dfc3f76d39c8b04b04bcf12d73b28b47daca9d8c99f8e3921e08aa688cc2f14561839bed71dab822920eedc09c386bb10840a7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c6173222c2261223a7b7d7d",
+      "name": "ok-formulas",
+      "note": "what the panel can play: no arguments",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-add\",\"a\":{\"id\":3,\"stem\":\"rift-patrol\",\"name\":\"Rift patrol\",\"src_size\":10835,\"src_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"psb_size\":4439,\"psb_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4edd22d618b578f04b2f3fcf3834de3f81e4546504da9316923b85d9a819b468d83f17c2e0b4d502554b28333fdd358117980229db757584b932fe8895864be30c7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d616464222c2261223a7b226964223a332c227374656d223a22726966742d706174726f6c222c226e616d65223a225269667420706174726f6c222c227372635f73697a65223a31303833352c227372635f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c227073625f73697a65223a343433392c227073625f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232227d7d",
+      "name": "ok-formula-add",
+      "note": "a Formula's source and compiled file to come (5.7)",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-part\",\"a\":{\"id\":3,\"off\":0,\"data\":\"bmFtZSAiUmlmdCI\"}}",
+      "expect": "ok",
+      "frame": "01ed5328324106ab4efc629e749fd380c7404642cbc91a5d25f8686f0f43391bbe50b034da46d1a5f4bb53f14fa48df750ec1dc0ce3aa3c506c29ed9a758435c6c54fada03f1a6ab0b7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d70617274222c2261223a7b226964223a332c226f6666223a302c2264617461223a22626d46745a534169556d6c6d644349227d7d",
+      "name": "ok-formula-part",
+      "note": "a part: base64url, at most 480 bytes",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-add\",\"a\":{\"id\":3,\"stem\":\"../wifi\",\"name\":\"Rift patrol\",\"src_size\":10,\"src_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"psb_size\":4439,\"psb_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4efe86a8661f43c3a0c77ef5e5cfa506a52adba4819225a3d38755eafc3a5f823b3150245503fb764277bda8b5162d29b00ff74a27672b7eb574e1cad854474a0d7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d616464222c2261223a7b226964223a332c227374656d223a222e2e2f77696669222c226e616d65223a225269667420706174726f6c222c227372635f73697a65223a31302c227372635f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c227073625f73697a65223a343433392c227073625f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232227d7d",
+      "name": "bad-formula-add-stem",
+      "note": "a stem with a path in it",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-add\",\"a\":{\"id\":3,\"stem\":\"Rift\",\"name\":\"Rift patrol\",\"src_size\":10,\"src_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"psb_size\":4439,\"psb_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4e8c35c51e0fc1943806f4ba60658315442ea03911119dcdf63938fa8ce5d6751b8487e92660ed444efb387321d240aada39a16667ba69cd95f75ec5238c13ba077b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d616464222c2261223a7b226964223a332c227374656d223a2252696674222c226e616d65223a225269667420706174726f6c222c227372635f73697a65223a31302c227372635f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c227073625f73697a65223a343433392c227073625f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232227d7d",
+      "name": "bad-formula-add-upper",
+      "note": "the stem rule: lower case",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-add\",\"a\":{\"id\":3,\"stem\":\"rift\",\"name\":\"Rift patrol\",\"src_size\":16385,\"src_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"psb_size\":4439,\"psb_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}}",
+      "expect": "too-big",
+      "frame": "01ed5328324106ab4ec1987fd11bd5b06f3d78a8f1e14fbeec40ca7325641283d4656c02352bb809017df38b8b279a5cec0b74a1aa9910ed3f2467523609ea21c8bb8d7a9e2405f70a7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d616464222c2261223a7b226964223a332c227374656d223a2272696674222c226e616d65223a225269667420706174726f6c222c227372635f73697a65223a31363338352c227372635f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c227073625f73697a65223a343433392c227073625f736861323536223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232227d7d",
+      "name": "too-big-formula-add",
+      "note": "a source past 16 KB",
+      "server": "forward"
+    },
+    {
+      "before": [],
+      "body": "{\"v\":1,\"dev\":\"5rjkoafkrbd37nkvy44xyhoffi\",\"sess\":\"b17bbe0ae870b1fc3dbf55da\",\"n\":1,\"c\":\"formula-part\",\"a\":{\"id\":3,\"off\":0,\"data\":\"AA==\"}}",
+      "expect": "bad-arg",
+      "frame": "01ed5328324106ab4eb91a2e8bf3d54c922ab8450c36df51a462c1666938485d489e5f22c67dfb0b0af591f565317d2f4bf73a5f528f0edd1db1d5bf04c2c5f7babd85032f6b2bf20a7b2276223a312c22646576223a2235726a6b6f61666b72626433376e6b767934347879686f666669222c2273657373223a22623137626265306165383730623166633364626635356461222c226e223a312c2263223a22666f726d756c612d70617274222c2261223a7b226964223a332c226f6666223a302c2264617461223a2241413d3d227d7d",
+      "name": "bad-formula-part-padding",
+      "note": "base64url with padding: one spelling only",
       "server": "forward"
     },
     {
@@ -841,6 +907,541 @@
     "pair_mac": "opendmd pair v1",
     "paired_mac": "opendmd paired v1"
   },
+  "formula_lists": [
+    {
+      "add": false,
+      "builtin": [
+        [
+          "fire",
+          "Fire \"hot\""
+        ],
+        [
+          "big-clock",
+          "Big\\clock"
+        ]
+      ],
+      "card": true,
+      "cards": [
+        [
+          "my-road",
+          "My road  "
+        ],
+        [
+          "del",
+          "\u0001\b\f\t\n\r"
+        ],
+        [
+          "cafe",
+          "Café 😀"
+        ]
+      ],
+      "cut": false,
+      "listed": [
+        2,
+        3
+      ],
+      "next": null,
+      "note": "small, names that need escaping",
+      "result": "{\"builtin\":[[\"fire\",\"Fire \\\"hot\\\"\"],[\"big-clock\",\"Big\\\\clock\"]],\"card\":[[\"my-road\",\"My road  \"],[\"del\",\"\\u007f\\u0001\\u0008\\u000c\\t\\n\\r\"],[\"cafe\",\"Café 😀\"]],\"more\":false}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "fire",
+          "Fire"
+        ]
+      ],
+      "card": false,
+      "cards": [
+        [
+          "x",
+          "X"
+        ]
+      ],
+      "cut": true,
+      "listed": [
+        1,
+        0
+      ],
+      "next": "x",
+      "note": "no card",
+      "result": "{\"builtin\":[[\"fire\",\"Fire\"]],\"card\":null,\"more\":false}"
+    },
+    {
+      "add": true,
+      "builtin": [
+        [
+          "fire",
+          "Fire"
+        ]
+      ],
+      "card": true,
+      "cards": [
+        [
+          "my-road",
+          "My road"
+        ]
+      ],
+      "cut": false,
+      "listed": [
+        1,
+        1
+      ],
+      "next": null,
+      "note": "with abi and psb (5.7)",
+      "result": "{\"abi\":3,\"psb\":true,\"builtin\":[[\"fire\",\"Fire\"]],\"card\":[[\"my-road\",\"My road\"]],\"more\":false}"
+    },
+    {
+      "add": false,
+      "builtin": [],
+      "card": true,
+      "cards": [
+        [
+          "a",
+          "A"
+        ]
+      ],
+      "cut": true,
+      "listed": [
+        0,
+        1
+      ],
+      "next": "a",
+      "note": "cut by the caller, with next",
+      "result": "{\"builtin\":[],\"card\":[[\"a\",\"A\"]],\"more\":true,\"next\":\"a\"}"
+    },
+    {
+      "add": false,
+      "builtin": [],
+      "card": true,
+      "cards": [],
+      "cut": true,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "cut by the caller, no next",
+      "result": "{\"builtin\":[],\"card\":[],\"more\":true}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": false,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        1,
+        0
+      ],
+      "next": null,
+      "note": "at the room (card false)",
+      "result": "{\"builtin\":[[\"s\",\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"]],\"card\":null,\"more\":false}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": false,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "one byte past the room (card false)",
+      "result": "{\"builtin\":[],\"card\":null,\"more\":false}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": true,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        1,
+        0
+      ],
+      "next": null,
+      "note": "at the room (card true)",
+      "result": "{\"builtin\":[[\"s\",\"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\"]],\"card\":[],\"more\":false}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "s",
+          "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        ]
+      ],
+      "card": true,
+      "cards": [],
+      "cut": false,
+      "listed": [
+        0,
+        0
+      ],
+      "next": null,
+      "note": "one byte past the room (card true)",
+      "result": "{\"builtin\":[],\"card\":[],\"more\":true}"
+    },
+    {
+      "add": false,
+      "builtin": [
+        [
+          "fire",
+          "Fire"
+        ]
+      ],
+      "card": true,
+      "cards": [
+        [
+          "saved-000",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-001",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-002",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-003",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-004",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-005",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-006",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-007",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-008",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-009",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-010",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-011",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-012",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-013",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-014",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-015",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-016",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-017",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-018",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-019",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-020",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-021",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-022",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-023",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-024",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-025",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-026",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-027",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-028",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-029",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-030",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-031",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-032",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-033",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-034",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-035",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-036",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-037",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-038",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-039",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-040",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-041",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-042",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-043",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-044",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-045",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-046",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-047",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-048",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-049",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-050",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-051",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-052",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-053",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-054",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-055",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-056",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-057",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-058",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-059",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-060",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-061",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-062",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-063",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-064",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-065",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-066",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-067",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-068",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-069",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-070",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-071",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-072",
+          "A Formula with a long name   xx"
+        ],
+        [
+          "saved-073",
+          "A Formula with a long name   xxx"
+        ],
+        [
+          "saved-074",
+          "A Formula with a long name   xxxx"
+        ],
+        [
+          "saved-075",
+          "A Formula with a long name   xxxxx"
+        ],
+        [
+          "saved-076",
+          "A Formula with a long name   xxxxxx"
+        ],
+        [
+          "saved-077",
+          "A Formula with a long name   "
+        ],
+        [
+          "saved-078",
+          "A Formula with a long name   x"
+        ],
+        [
+          "saved-079",
+          "A Formula with a long name   xx"
+        ]
+      ],
+      "cut": false,
+      "listed": [
+        1,
+        35
+      ],
+      "next": "saved-034",
+      "note": "the card's until full",
+      "result": "{\"builtin\":[[\"fire\",\"Fire\"]],\"card\":[[\"saved-000\",\"A Formula with a long name   \"],[\"saved-001\",\"A Formula with a long name   x\"],[\"saved-002\",\"A Formula with a long name   xx\"],[\"saved-003\",\"A Formula with a long name   xxx\"],[\"saved-004\",\"A Formula with a long name   xxxx\"],[\"saved-005\",\"A Formula with a long name   xxxxx\"],[\"saved-006\",\"A Formula with a long name   xxxxxx\"],[\"saved-007\",\"A Formula with a long name   \"],[\"saved-008\",\"A Formula with a long name   x\"],[\"saved-009\",\"A Formula with a long name   xx\"],[\"saved-010\",\"A Formula with a long name   xxx\"],[\"saved-011\",\"A Formula with a long name   xxxx\"],[\"saved-012\",\"A Formula with a long name   xxxxx\"],[\"saved-013\",\"A Formula with a long name   xxxxxx\"],[\"saved-014\",\"A Formula with a long name   \"],[\"saved-015\",\"A Formula with a long name   x\"],[\"saved-016\",\"A Formula with a long name   xx\"],[\"saved-017\",\"A Formula with a long name   xxx\"],[\"saved-018\",\"A Formula with a long name   xxxx\"],[\"saved-019\",\"A Formula with a long name   xxxxx\"],[\"saved-020\",\"A Formula with a long name   xxxxxx\"],[\"saved-021\",\"A Formula with a long name   \"],[\"saved-022\",\"A Formula with a long name   x\"],[\"saved-023\",\"A Formula with a long name   xx\"],[\"saved-024\",\"A Formula with a long name   xxx\"],[\"saved-025\",\"A Formula with a long name   xxxx\"],[\"saved-026\",\"A Formula with a long name   xxxxx\"],[\"saved-027\",\"A Formula with a long name   xxxxxx\"],[\"saved-028\",\"A Formula with a long name   \"],[\"saved-029\",\"A Formula with a long name   x\"],[\"saved-030\",\"A Formula with a long name   xx\"],[\"saved-031\",\"A Formula with a long name   xxx\"],[\"saved-032\",\"A Formula with a long name   xxxx\"],[\"saved-033\",\"A Formula with a long name   xxxxx\"],[\"saved-034\",\"A Formula with a long name   xxxxxx\"]],\"more\":true,\"next\":\"saved-034\"}"
+    }
+  ],
   "invite": {
     "confirm": "3F6J",
     "invite_id": "96ed7e52e7b06c11e627",

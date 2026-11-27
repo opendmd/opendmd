@@ -39,6 +39,10 @@ import odc
 
 ORIGIN = "https://opendmd.dev"
 GUEST_LIMIT_S = 60
+# The guest slots `g` the mock hands out, in turn (protocol 4.1: a relay
+# assigns 1 to 255; a panel takes any up to 2^31 - 1, so the mock goes past
+# the byte on purpose, the largest first).
+GUEST_SLOTS = (2**31 - 1, 1, 256, 255, 65536, 2)
 
 
 def now_us() -> int:
@@ -55,7 +59,7 @@ class Record:
     sess: str | None = None
     ctls: dict = field(default_factory=dict)  # ws -> k
     guests: dict = field(default_factory=dict)  # g -> (ws, window id, inviter ws or None)
-    next_g: int = 1
+    next_g: int = 0  # an index into GUEST_SLOTS
     pairs: dict = field(default_factory=dict)  # pair_id -> expiry (monotonic s)
     invites: dict = field(default_factory=dict)  # invite_id -> (inviter ws, expiry)
     # transfer id -> [ctl ws, key, last credit's upto, send's n, next offset (-1: none yet), unused]
@@ -422,8 +426,15 @@ class Server:
         if len(rec.guests) >= 2:
             await ws.close(code=odc.CLOSE_STAY_AWAY, message=b"1")
             return ws
-        g = rec.next_g
-        rec.next_g = rec.next_g % 250 + 1
+        # Slots off the list, never one in use: small and large in turn,
+        # so a panel that reads g narrower than the protocol's 2^31 - 1
+        # (1.1.0-beta.4 read one byte, and the live relay once gave 31-bit
+        # slots) fails here rather than only against the real relay.
+        while True:
+            g = GUEST_SLOTS[rec.next_g % len(GUEST_SLOTS)]
+            rec.next_g += 1
+            if g not in rec.guests:
+                break
         rec.guests[g] = (ws, wid, inviter)
         await ws.send_str(odc.dumps({"t": "guest-ok", "g": g}))
         try:

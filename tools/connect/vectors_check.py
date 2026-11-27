@@ -36,6 +36,20 @@ def main():
     lim = v["limits"]
     for name, mine in [("max_text_in", odc.MAX_TEXT_IN), ("max_text_out", odc.MAX_TEXT_OUT), ("max_body", odc.MAX_BODY), ("command_head", odc.COMMAND_HEAD), ("max_chunk", odc.MAX_CHUNK), ("max_file", odc.MAX_FILE), ("max_keys", odc.MAX_KEYS), ("max_label_bytes", odc.MAX_LABEL), ("max_n", odc.MAX_SAFE), ("rate_per_key", odc.RATE_PER_KEY), ("rate_per_panel", odc.RATE_PER_PANEL)]:
         check(lim[name] == mine, f"limit {name}")
+    for c in v.get("formula_lists", []):
+        lst = odc.FormulaList(c["card"], 3 if c.get("add") else None)
+        nb = nc = 0
+        for stem, name in c["builtin"]:
+            if not lst.builtin(stem, name):
+                break
+            nb += 1
+        for stem, name in c["cards"]:
+            if not lst.card(stem, name):
+                break
+            nc += 1
+        got = lst.finish(c["cut"], c["next"])
+        check([nb, nc] == c["listed"] and got == c["result"], f"formula list {c['note']!r}: {[nb, nc]} vs {c['listed']}, {len(got.encode())} vs {len(c['result'].encode())} B")
+    check(len(v.get("formula_lists", [])) >= 9, "formula lists: the cases are there")
     d = v["domains"]
     check(d["cmd"].encode() == odc.CMD_DOMAIN and d["attach"].encode() == odc.ATTACH_DOMAIN and d["dev_tag"].encode() == odc.DEV_TAG_DOMAIN, "domains")
     check(tuple(v["allowed"]) == odc.ALLOWED, "allow-list")

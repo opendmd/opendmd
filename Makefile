@@ -182,7 +182,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font logo web-serve web-mock web-smoke fmt clippy clean pack connect-mock connect-roots-check \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-connect-psb emu-image-connect \
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -198,7 +198,9 @@ blocklist-check:
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: Connect's session half and protocol v1; panel-id: the stable panel ID)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,panel-id
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,connect-formula-add,panel-id
+	@echo "==> Testing $(CORE) as every release builds Connect: without connect-formula-add, no formula-add on the allow-list"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features connect --lib formula_add_is_absent_without_its_feature
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
 	@mkdir -p target
 	$${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iota/updater/main -o target/updater-panel-timing-test \
@@ -678,7 +680,7 @@ FW_L2_COPY ?= 0
 # keeps sdkconfig.defaults' TLS section as it is.
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
-FW_CONNECT_FEATURES := connect connect-measure connect-no-send connect-send-classic connect-test
+FW_CONNECT_FEATURES := connect connect-measure connect-no-send connect-send-classic connect-test connect-formula-add
 # (FW_CHANNEL_FEATURES: a beta release build's `connect`, below.)
 FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES) $(FW_CHANNEL_FEATURES)))
 # The feature and its sdkconfig must go together: a bench build takes it in
@@ -823,6 +825,8 @@ fw-clippy-connect:
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect -- -D warnings'
 	@echo "==> Clippy firmware, connect-test (the emulator lane's image: its test hooks, nothing set)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-test -- -D warnings'
+	@echo "==> Clippy firmware, connect-test + connect-formula-add (Formulas added by remote: test images only)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-test,connect-formula-add -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -891,7 +895,7 @@ FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEA
 # (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
 # emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
 # and tools/release-test-features-check.sh checks the image for their text.
-FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-crash-test emu-oom-test emu-wifi-soak wifi-outage-test connect-test dev-credentials bench
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-crash-test emu-oom-test emu-wifi-soak wifi-outage-test connect-test connect-formula-add dev-credentials bench
 FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
@@ -1342,14 +1346,18 @@ export EMU_DIR SCRATCH
 emu-build:
 	tools/emu/build-emulator.sh
 
+# The cards are shared by every checkout on this machine (EMU_DIR): one
+# build at a time (a lock on the card dir), the second then finding it
+# current.
+EMU_CARD_LOCK = mkdir -p $(EMU_DIR)/card && flock $(EMU_DIR)/card/.lock
 emu-card:
-	uv run --quiet tools/emu/mkcard.py
+	$(EMU_CARD_LOCK) uv run --quiet tools/emu/mkcard.py
 
 # A test panel's scale (~11,000 GIFs in 41 folders, ~11,000 copies in ~4,900 buckets):
 # the FAT index's build must finish with its heap floor reported, the panel
 # playing. Boots the smoke image (or FW_IMAGE). EMU_RIG_OK.
 emu-rig-card:
-	uv run --quiet tools/emu/mkcard.py --rig
+	$(EMU_CARD_LOCK) uv run --quiet tools/emu/mkcard.py --rig
 emu-rig: emu-build emu-rig-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
@@ -1387,10 +1395,16 @@ emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 OPENDMD_CONNECT_PAIR_TTL_S=$(EMU_CONNECT_PAIR_TTL_S) \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
-emu-connect: emu-build emu-card
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic,connect-formula-add FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+# Card Formulas for `formulas` and `formula-add` (the host's psi build: the lane puts
+# ramp on the card over the LAN, and adds the gallery's largest, rift-patrol, by remote).
+emu-connect-psb:
+	@mkdir -p $(EMU_CONNECT_DIR)/psb
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(WEB)/formulas/rift-patrol.psi) -o $(EMU_CONNECT_DIR)/psb/rift-patrol.psb
+emu-connect: emu-build emu-card emu-connect-psb
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
-	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 $(EMU_ARGS)
+	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real

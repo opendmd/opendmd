@@ -25,9 +25,28 @@ import hashlib
 import os
 import time
 
+import re
+from pathlib import Path
+
 import aiohttp
 
 import odc
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def bundled_formulas() -> list[tuple[str, str]]:
+    """The firmware's built-in Formulas, as its `formulas` lists them:
+    (stem, the `name "…"` line or the stem), the `-- bundle` files of
+    opendmd-web/formulas/ in file-name order."""
+    out = []
+    for p in sorted((REPO / "opendmd-web" / "formulas").glob("*.psi")):
+        src = p.read_text()
+        if not re.search(r"^-- bundle", src, re.M):
+            continue
+        m = re.search(r'^\s*name\s+"([^"\n]*)"', src, re.M)
+        out.append((p.stem, m.group(1) if m else p.stem))
+    return out
 
 
 def now_us() -> int:
@@ -60,6 +79,26 @@ class Panel:
         self.quota_used = 0
         self.landed: dict[str, tuple[bytes, bytes]] = {}  # name -> (gif, copy)
         self.last_landed = None  # (k, args, name, when)
+        # `formulas`: the built-in ones and a pretend card's ((stem, name);
+        # None: no card); `formulas_cmd` False answers it as a panel up to
+        # 1.1.0-beta.4 does (`not-allowed`).
+        self.builtin_formulas = bundled_formulas()
+        self.card_formulas: list[tuple[str, str]] | None = [("my-road", "My road"), ("den-clock", "Den clock")]
+        self.formulas_cmd = True
+        # `formulas`' own rate (5.6): a listing's first page one in this
+        # many s per panel, its pages (after = the last `next`) free, 8 at most.
+        self.formulas_every = 5.0
+        self.formulas_first_at: float | None = None
+        self.formulas_listing: list | None = None  # [next, at, pages]
+        self.formulas_opens = 48  # card Formulas looked at per page
+        # Formulas added by remote (5.7): the pretend card's files by stem
+        # (source, compiled), the add under way, the day's adds, and the
+        # compiled files not yet compiled here (on the VM only).
+        self.abi = 3
+        self.files: dict[str, tuple[bytes, bytes]] = {}
+        self.add: dict | None = None
+        self.add_day: list[tuple[float, int]] = []
+        self.unconfirmed: set[str] = set()
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -77,6 +116,102 @@ class Panel:
             "fw": self.fw,
             "name": self.name,
         }
+
+    def on_add(self, k, a):
+        """`formula-add` as the firmware takes it (firmware/src/connect/fadd.rs)."""
+        import hashlib
+        h = self.add
+        if h and h["k"] == k and h["a"] == a:
+            if h.get("landed"):
+                return {"done": True, "stem": h["target"]}
+            if h["next"] == a["src_size"] + a["psb_size"]:
+                return self.land()
+            return {"next": h["next"]}
+        if h and h["k"] != k and time.monotonic() - h["at"] < 600:
+            raise odc.Bad("busy")
+        target = None
+        for st in [a["stem"]] + [f"{a['stem'][:38]}-{i}" for i in range(2, 10)]:
+            if st in self.files:
+                if hashlib.sha256(self.files[st][0]).digest() == a["src_sha256"]:
+                    return {"done": True, "stem": st}
+                continue
+            target = st
+            break
+        if target is None:
+            raise odc.Bad("quota")
+        now = time.monotonic()
+        self.add_day = [(t, b) for t, b in self.add_day if now - t < 86400]
+        total = a["src_size"] + a["psb_size"]
+        if len(self.add_day) >= odc.ADD_QUOTA_ADDS or sum(b for _, b in self.add_day) + total > odc.ADD_QUOTA_BYTES:
+            raise odc.Bad("quota")
+        self.add_day.append((now, total))
+        self.add = {"k": k, "a": a, "target": target, "next": 0, "buf": b"", "at": now}
+        return {"next": 0}
+
+    def on_part(self, k, a):
+        h = self.add
+        if not h or h["a"]["id"] != a["id"] or h.get("landed"):
+            raise odc.Bad("bad-arg")
+        if h["k"] != k:
+            raise odc.Bad("not-allowed")
+        total = h["a"]["src_size"] + h["a"]["psb_size"]
+        if a["off"] != h["next"] or a["off"] + len(a["data"]) > total:
+            raise odc.Bad("bad-arg")
+        h["buf"] += a["data"]
+        h["next"] += len(a["data"])
+        h["at"] = time.monotonic()
+        if h["next"] < total:
+            return {"next": h["next"]}
+        return self.land()
+
+    def land(self):
+        import hashlib
+        h, a = self.add, self.add["a"]
+        src, psb = h["buf"][: a["src_size"]], h["buf"][a["src_size"]:]
+        # (The firmware also loads every program in it through psb::verify.)
+        if hashlib.sha256(src).digest() != a["src_sha256"] or hashlib.sha256(psb).digest() != a["psb_sha256"] or psb[:3] != b"PSB" or psb[3] != self.abi:
+            self.add = None
+            raise odc.Bad("bad-arg")
+        self.files[h["target"]] = (src, psb)
+        self.unconfirmed.add(h["target"])
+        if self.card_formulas is not None:
+            self.card_formulas = [x for x in self.card_formulas if x[0] != h["target"]] + [(h["target"], a["name"])]
+        h["landed"] = True
+        return {"done": True, "stem": h["target"]}
+
+    def formulas_page(self, after):
+        """One page of `formulas` (5.6) as the firmware answers it, or None (`rate`)."""
+        now = time.monotonic()
+        lst = self.formulas_listing
+        if after is not None and lst and after == lst[0] and now - lst[1] <= 60 and lst[2] < 8:
+            lst[2] += 1
+        elif self.formulas_first_at is not None and now - self.formulas_first_at < self.formulas_every:
+            return None
+        else:
+            self.formulas_first_at = now
+            self.formulas_listing = lst = ["", now, 1]
+        fl = odc.FormulaList(self.card_formulas is not None, self.abi, True)
+        if after is None:
+            for stem, name in self.builtin_formulas:
+                fl.builtin(stem, name)
+        cut, nxt = False, None
+        if self.card_formulas is not None:
+            cands = sorted((x for x in self.card_formulas if after is None or x[0] > after))
+            cut = len(cands) > self.formulas_opens
+            for stem, name in cands[: self.formulas_opens]:
+                if not fl.card(stem, name):
+                    cut = True
+                    break
+                nxt = stem
+            if cut and nxt is None:
+                nxt = after
+        text = fl.finish(cut, nxt)
+        r = odc.loads(text.encode())
+        if r.get("more") and r.get("next"):
+            lst[0], lst[1] = r["next"], now
+        else:
+            self.formulas_listing = None
+        return r
 
     async def send(self, m) -> None:
         await self.ws.send_str(m if isinstance(m, str) else odc.dumps(m))
@@ -252,7 +387,16 @@ class Panel:
         elif c == "playlist":
             self.set = a["set"]
         elif c == "playlists":
-            r = ["", "consoles", "arcade"]
+            # As the firmware answers: {sets, more}, the main list ("") not in it.
+            r = {"sets": ["consoles", "arcade"], "more": False}
+        elif c == "formulas":
+            if not self.formulas_cmd:
+                await self.send(odc.Refusal("not-allowed", k, n).ack())
+                return
+            r = self.formulas_page(a.get("after"))
+            if r is None:
+                await self.send(odc.Refusal("rate", k, n).ack())
+                return
         elif c == "controllers":
             r = [{"k": x.k.hex(), "label": x.label, "f": x.flags, "added": x.added, "added_by": x.added_by.hex() if x.added_by else None, "last_s": None} for x in self.keys.values()]
         elif c == "add-controller":
@@ -265,6 +409,15 @@ class Panel:
         elif c == "name":
             self.name = a["name"]
             await self.send({"t": "info", "name": self.name})
+        elif c in ("formula-add", "formula-part"):
+            if not self.formulas_cmd:
+                await self.send(odc.Refusal("not-allowed", k, n).ack())
+                return
+            try:
+                r = self.on_add(k, a) if c == "formula-add" else self.on_part(k, a)
+            except odc.Bad as e:
+                await self.send(odc.Refusal(str(e), k, n).ack())
+                return
         elif c == "send":
             try:
                 r, x = self.on_send(k, a)

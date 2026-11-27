@@ -63,8 +63,8 @@ ADD_MAC_DOMAIN = b"opendmd add v1"
 CONFIRM_DOMAIN = b"opendmd confirm v1"
 
 ALLOWED = (
-    "play", "next", "prev", "pause", "brightness", "playlist", "playlists",
-    "send", "send-cancel", "controllers", "add-controller", "remove-controller", "name",
+    "play", "next", "prev", "pause", "brightness", "playlist", "playlists", "formulas",
+    "formula-add", "formula-part", "send", "send-cancel", "controllers", "add-controller", "remove-controller", "name",
 )
 
 # --- Encodings -----------------------------------------------------------------
@@ -517,6 +517,15 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
         if not remote_play_path_ok(p):
             raise Bad("bad-arg")
         return c, {"path": p}
+    if c == "formulas":
+        # Strict (5.6): only `after`, a stem, so a later page can tell a panel without a feature.
+        if set(a) - {"after"} or ("after" in a and not (isinstance(a["after"], str) and _stem_ok(a["after"]))):
+            raise Bad("bad-arg")
+        return c, {"after": a.get("after")}
+    if c == "formula-add":
+        return c, add_args(a)
+    if c == "formula-part":
+        return c, part_args(a)
     if c in ("next", "prev", "pause", "playlists", "controllers"):
         return c, {}
     if c == "brightness":
@@ -620,6 +629,157 @@ class Session:
         except Bad as e:
             raise no(str(e)) from None
         return k, n, c, args
+
+
+# What an ack adds around its result (t, a key id, the largest n, ok): a
+# bounded result (playlists, formulas) takes at most RESULT_ROOM bytes.
+ACK_OVERHEAD = 100
+RESULT_ROOM = MAX_TEXT_OUT - ACK_OVERHEAD
+
+
+# --- Formulas added by remote (5.7; opendmd_core::connect::fadd) ------------------
+
+ADD_MAX_STEM = 40
+ADD_MAX_SOURCE = 16 * 1024
+ADD_MIN_PSB, ADD_MAX_PSB = 6, 8 * 1024
+ADD_MAX_PART = 384
+ADD_QUOTA_ADDS, ADD_QUOTA_BYTES = 16, 256 * 1024
+
+
+def add_stem_ok(s) -> bool:
+    return isinstance(s, str) and 1 <= len(s) <= ADD_MAX_STEM and s[0].isascii() and s[0].isalnum() and all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in s)
+
+
+def b64url(b: bytes) -> str:
+    import base64
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def unb64url(s: str):
+    import base64
+    import re
+    if not isinstance(s, str) or len(s) % 4 == 1 or not re.fullmatch(r"[A-Za-z0-9_-]*", s):
+        return None
+    b = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    return b if b64url(b) == s else None  # canonical only
+
+
+def add_args(a: dict) -> dict:
+    def no(code="bad-arg"):
+        raise Bad(code)
+    i = a.get("id")
+    if not is_int(i) or not 0 < i <= 0xFFFFFFFF or not add_stem_ok(a.get("stem")) or not isinstance(a.get("name"), str):
+        no()
+    name = clean_text(a["name"], 240, 60)
+    ss, ps = a.get("src_size"), a.get("psb_size")
+    if not is_int(ss) or not is_int(ps):
+        no()
+    if ss > ADD_MAX_SOURCE or ps > ADD_MAX_PSB:
+        no("too-big")
+    if ss < 1 or ps < ADD_MIN_PSB or name is None:
+        no()
+    sh, ph = unhex(a.get("src_sha256"), 32), unhex(a.get("psb_sha256"), 32)
+    if sh is None or ph is None:
+        no()
+    return {"id": i, "stem": a["stem"], "name": name, "src_size": ss, "src_sha256": sh, "psb_size": ps, "psb_sha256": ph}
+
+
+def part_args(a: dict) -> dict:
+    i, off, d = a.get("id"), a.get("off"), a.get("data")
+    if not is_int(i) or not 0 < i <= 0xFFFFFFFF or not is_int(off) or not 0 <= off <= 0xFFFFFFFF or not isinstance(d, str):
+        raise Bad("bad-arg")
+    if len(d) > -(-ADD_MAX_PART // 3) * 4:
+        raise Bad("too-big")
+    b = unb64url(d)
+    if not b or len(b) > ADD_MAX_PART:
+        raise Bad("bad-arg")
+    return {"id": i, "off": off, "data": b}
+
+
+def quote(s: str) -> str:
+    """A JSON string as the panel writes one (opendmd_core::connect::json::push_str):
+    `"`, `\\`, `\n`, `\r`, `\t` escaped, other controls and U+007F as \\u00xx,
+    everything else as it is."""
+    out = ['"']
+    for ch in s:
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 0x20 or ch == "\x7f":
+            out.append("\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+_CARD_OPEN = '],"card":['
+_CLOSE_CARD_MAX = 1 + len(',"more":true,"next":""}') + 64
+_CLOSE_NULL = '],"card":null,"more":false}'
+
+
+class FormulaList:
+    """`formulas`'s result as the panel builds it (opendmd_core::connect::proto::FormulaList,
+    protocol 5.6), byte for byte: built-in ones, then the card's, while the
+    whole stays within RESULT_ROOM bytes whatever the closing; the first
+    that does not fit and every one after it are left out (`more`)."""
+
+    def __init__(self, card: bool, abi: int | None = None, psb: bool = True):
+        head = "{" if abi is None else '{"abi":%d,"psb":%s,' % (abi, "true" if psb else "false")
+        self.s, self.has_card, self.card_open, self.more = head + '"builtin":[', card, False, False
+
+    def _closing(self) -> int:
+        if not self.has_card:
+            return len(_CLOSE_NULL)
+        return _CLOSE_CARD_MAX + (0 if self.card_open else len(_CARD_OPEN))
+
+    def _push(self, card: bool, stem: str, name: str) -> bool:
+        if self.more or (card and not self.has_card):
+            self.more = self.more or (card and not self.has_card)
+            return False
+        opening = _CARD_OPEN if card and not self.card_open else ""
+        e = opening + ("," if not self.s.endswith("[") and not opening else "") + "[" + quote(stem) + "," + quote(name) + "]"
+        after = _CLOSE_CARD_MAX if card or self.card_open else self._closing()
+        if len(self.s.encode()) + len(e.encode()) + after > RESULT_ROOM:
+            self.more = True
+            return False
+        self.s += e
+        self.card_open = self.card_open or card
+        return True
+
+    def builtin(self, stem: str, name: str) -> bool:
+        return False if self.card_open else self._push(False, stem, name)
+
+    def card(self, stem: str, name: str) -> bool:
+        return self._push(True, stem, name)
+
+    def finish(self, cut: bool = False, next_: str | None = None) -> str:
+        more = self.has_card and (self.more or cut)
+        if not self.has_card:
+            return self.s + _CLOSE_NULL
+        s = self.s + ("" if self.card_open else _CARD_OPEN) + "]"
+        if more and next_ is not None and _stem_ok(next_):
+            return s + ',"more":true,"next":"' + next_ + '"}'
+        return s + (',"more":true}' if more else ',"more":false}')
+
+
+def formulas_result(builtin, card, cut: bool = False, next_: str | None = None) -> str:
+    """`formulas`'s result text (FormulaList): `card` None for no card."""
+    lst = FormulaList(card is not None)
+    for stem, name in builtin:
+        if not lst.builtin(stem, name):
+            break
+    for stem, name in card or ():
+        if not lst.card(stem, name):
+            break
+    return lst.finish(cut, next_)
 
 
 def ack_ok(k: bytes, n: int, r=None) -> str:

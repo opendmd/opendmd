@@ -317,6 +317,11 @@ pub const ALLOWED: &[&str] = &[
     "brightness",
     "playlist",
     "playlists",
+    "formulas",
+    #[cfg(feature = "connect-formula-add")]
+    "formula-add",
+    #[cfg(feature = "connect-formula-add")]
+    "formula-part",
     "send",
     "send-cancel",
     "controllers",
@@ -394,6 +399,14 @@ pub enum Command {
     Brightness { v: u8 },
     Playlist { set: String },
     Playlists,
+    /// `formulas`; `after`: the page after this stem (5.6), `None` the first.
+    Formulas { after: Option<String> },
+    /// `formula-add` (5.7): a Formula's source and compiled file to come.
+    #[cfg(feature = "connect-formula-add")]
+    FormulaAdd(super::fadd::AddArgs),
+    /// `formula-part`: `data` of the add `id` at stream offset `off`.
+    #[cfg(feature = "connect-formula-add")]
+    FormulaPart { id: u32, off: u32, data: Vec<u8> },
     Send(SendArgs),
     SendCancel { id: u32 },
     Controllers,
@@ -415,7 +428,7 @@ pub const MAX_NAME_CHARS: usize = 32;
 /// A Formula's stem in a remote play: `[a-z0-9_-]`, 1 to 64, starting with
 /// a letter or digit (so never `~sent`).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn formula_stem_ok(s: &str) -> bool {
+pub fn formula_stem_ok(s: &str) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
         && b.len() <= 64
@@ -560,6 +573,26 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             Command::Playlist { set: set.to_string() }
         }
         "playlists" => Command::Playlists,
+        "formulas" => {
+            // Strict, so a later page can tell a panel without a feature:
+            // only `after`, a stem.
+            let Value::Object(m) = a else { return Err(Refusal::BadArg) };
+            if m.iter().any(|(k, _)| k != "after") {
+                return Err(Refusal::BadArg);
+            }
+            let after = match a.get("after") {
+                None => None,
+                Some(v) => Some(v.as_str().filter(|s| formula_stem_ok(s)).ok_or(Refusal::BadArg)?.to_string()),
+            };
+            Command::Formulas { after }
+        }
+        #[cfg(feature = "connect-formula-add")]
+        "formula-add" => Command::FormulaAdd(super::fadd::add_args(a)?),
+        #[cfg(feature = "connect-formula-add")]
+        "formula-part" => {
+            let (id, off, data) = super::fadd::part_args(a)?;
+            Command::FormulaPart { id, off, data }
+        }
         "send" => Command::Send(send_args(a)?),
         "send-cancel" => Command::SendCancel { id: u32_arg(a, "id")? },
         "controllers" => Command::Controllers,
@@ -749,6 +782,189 @@ impl Session {
 
 // --- Text messages -------------------------------------------------------------
 
+/// What an `ack` adds around its result `r` (`t`, a key id, the largest
+/// `n`, `ok`): under this, so a result of [`RESULT_ROOM`] bytes keeps the
+/// `ack` inside [`MAX_TEXT_OUT`].
+pub const ACK_OVERHEAD: usize = 100;
+/// The most a bounded result (`playlists`, `formulas`) may take.
+pub const RESULT_ROOM: usize = MAX_TEXT_OUT - ACK_OVERHEAD;
+
+/// `formulas`'s result, built a Formula at a time so the caller can stop
+/// reading the card once it is full (protocol 5.6):
+/// `{"builtin":[[stem,name],…],"card":[[stem,name],…]|null,"more":bool}`,
+/// and `"next":"<stem>"` with `more` when the caller knows where the next
+/// page starts (its `after`). Built-in ones first (the first page only),
+/// then the card's (`null`: no card the panel can read), each a
+/// `[stem, display name]` pair, while the whole stays within
+/// [`RESULT_ROOM`] whatever the closing turns out to be; the first that
+/// does not fit, and every one after it, is left out and `more` is true
+/// (as it is when the caller stopped early: [`FormulaList::finish`]).
+#[derive(Debug)]
+pub struct FormulaList {
+    s: String,
+    /// A card list follows (else `"card":null`).
+    has_card: bool,
+    /// Its `[` is written.
+    card_open: bool,
+    more: bool,
+}
+
+/// What may still close a list, at most: with a card, `],"card":[` if not
+/// yet open, then `]` and `,"more":true,"next":"<a 64-byte stem>"}`;
+/// without one, `],"card":null,"more":false}`.
+const CARD_OPEN: &str = r#"],"card":["#;
+const CLOSE_CARD_MAX: usize = "]".len() + r#","more":true,"next":""}"#.len() + 64;
+const CLOSE_NULL: &str = r#"],"card":null,"more":false}"#;
+
+impl FormulaList {
+    /// `card`: the panel has a card it can read (a card list follows).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn new(card: bool) -> FormulaList {
+        FormulaList { s: String::from(r#"{"builtin":["#), has_card: card, card_open: false, more: false }
+    }
+
+    /// [`new`](Self::new), saying first what an add needs (5.7): the
+    /// compiled format this player takes (`abi`) and whether it wants the
+    /// controller's compiled file with the source (`psb`; a board that
+    /// compiles while Connect is open would say false).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn with_add(card: bool, abi: u8, psb: bool) -> FormulaList {
+        FormulaList { s: format!(r#"{{"abi":{abi},"psb":{psb},"builtin":["#), has_card: card, card_open: false, more: false }
+    }
+
+    /// Anything left out yet?
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn full(&self) -> bool {
+        self.more
+    }
+
+    /// The most the closing may add now.
+    fn closing(&self) -> usize {
+        match (self.has_card, self.card_open) {
+            (false, _) => CLOSE_NULL.len(),
+            (true, false) => CARD_OPEN.len() + CLOSE_CARD_MAX,
+            (true, true) => CLOSE_CARD_MAX,
+        }
+    }
+
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn push_into(&mut self, card: bool, stem: &str, name: &str) -> bool {
+        if self.more || (card && !self.has_card) {
+            self.more |= card && !self.has_card;
+            return false;
+        }
+        let opening = if card && !self.card_open { CARD_OPEN } else { "" };
+        let mut e = String::with_capacity(opening.len() + stem.len() + name.len() + 8);
+        e.push_str(opening);
+        if !self.s.ends_with('[') && opening.is_empty() {
+            e.push(',');
+        }
+        e.push('[');
+        push_str(&mut e, stem);
+        e.push(',');
+        push_str(&mut e, name);
+        e.push(']');
+        let after = if card || self.card_open { CLOSE_CARD_MAX } else { self.closing() };
+        if self.s.len() + e.len() + after > RESULT_ROOM {
+            self.more = true;
+            return false;
+        }
+        self.s.push_str(&e);
+        self.card_open |= card;
+        true
+    }
+
+    /// A built-in one; false (and `more`) if it did not fit, or an earlier
+    /// one did not: the list never skips one to fit a later, shorter one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn builtin(&mut self, stem: &str, name: &str) -> bool {
+        if self.card_open {
+            return false;
+        }
+        self.push_into(false, stem, name)
+    }
+
+    /// One of the card's, as [`builtin`](Self::builtin).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn card(&mut self, stem: &str, name: &str) -> bool {
+        self.push_into(true, stem, name)
+    }
+
+    /// The result. `cut`: the caller stopped before the card's end (its
+    /// read cap, the card busy): `more` then too. `next`: with `more`, the
+    /// `after` for the next page (a stem: nothing to escape; one that is not
+    /// is left out).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn finish(mut self, cut: bool, next: Option<&str>) -> String {
+        let more = self.has_card && (self.more || cut);
+        if !self.has_card {
+            self.s.push_str(CLOSE_NULL);
+            return self.s;
+        }
+        if !self.card_open {
+            self.s.push_str(CARD_OPEN);
+        }
+        self.s.push(']');
+        match next.filter(|n| more && formula_stem_ok(n)) {
+            Some(n) => {
+                self.s.push_str(r#","more":true,"next":""#);
+                self.s.push_str(n);
+                self.s.push_str("\"}");
+            }
+            None if more => self.s.push_str(r#","more":true}"#),
+            None => self.s.push_str(r#","more":false}"#),
+        }
+        self.s
+    }
+}
+
+/// `formulas`'s own rate, per panel (5.6): a listing's first page (no
+/// `after`, or an `after` that is not the last page's `next`) at most one
+/// every [`FORMULAS_EVERY`], answered `rate` otherwise; the pages that
+/// follow it (an `after` equal to the `next` the panel last gave, within
+/// [`FORMULAS_PAGE_WAIT`]) free, up to [`FORMULAS_PAGES`] in all.
+#[derive(Debug, Clone, Default)]
+pub struct FormulasRate {
+    last_first: Option<Duration>,
+    /// The listing under way: the `next` it gave, when, and its pages.
+    listing: Option<(String, Duration, u8)>,
+}
+
+pub const FORMULAS_EVERY: Duration = Duration::from_secs(5);
+pub const FORMULAS_PAGE_WAIT: Duration = Duration::from_secs(60);
+pub const FORMULAS_PAGES: u8 = 8;
+
+impl FormulasRate {
+    /// May a `formulas` with `after` go now?
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn take(&mut self, after: Option<&str>, now: Duration) -> bool {
+        if let (Some(a), Some((next, at, pages))) = (after, self.listing.as_mut()) {
+            if a == next && now.saturating_sub(*at) <= FORMULAS_PAGE_WAIT && *pages < FORMULAS_PAGES {
+                *pages += 1;
+                return true;
+            }
+        }
+        if self.last_first.is_some_and(|t| now.saturating_sub(t) < FORMULAS_EVERY) {
+            return false;
+        }
+        self.last_first = Some(now);
+        self.listing = Some((String::new(), now, 1));
+        true
+    }
+
+    /// The page just answered said `next` (none: the listing is done).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn answered(&mut self, next: Option<&str>, now: Duration) {
+        match (next, self.listing.as_mut()) {
+            (Some(n), Some(l)) => {
+                l.0 = n.to_string();
+                l.1 = now;
+            }
+            _ => self.listing = None,
+        }
+    }
+}
+
 /// `ack` for an accepted command; `r`: its result as JSON, if any.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn ack_ok(k: &KeyId, n: u64, r: Option<&str>) -> String {
@@ -833,14 +1049,18 @@ pub fn pair_close(pair_id: &[u8; 10]) -> String {
 
 /// The panel's answer to guest `g`'s `pair`, once the key is stored.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn paired(g: u8, k: &KeyId, mac2: &[u8; 32]) -> String {
+pub fn paired(g: u32, k: &KeyId, mac2: &[u8; 32]) -> String {
     format!(r#"{{"t":"paired","g":{g},"k":"{}","mac2":"{}"}}"#, hex(k), hex(mac2))
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn paired_err(g: u8, err: &str) -> String {
+pub fn paired_err(g: u32, err: &str) -> String {
     format!(r#"{{"t":"paired","g":{g},"err":"{err}"}}"#)
 }
+
+/// The largest guest slot `g` a `pair` may carry (and `paired` echoes):
+/// 2^31 - 1. Relays assign 1 to 255 (protocol 4.1).
+pub const MAX_GUEST_SLOT: u32 = (1 << 31) - 1;
 
 /// The panel's last message under an identity it is dropping.
 pub const FORGET: &str = r#"{"t":"forget"}"#;
@@ -850,11 +1070,13 @@ pub const FORGET: &str = r#"{"t":"forget"}"#;
 pub enum ServerMsg {
     /// `watch {on}`: whether a controller is looking.
     Watch(bool),
-    /// A guest's `pair`, relayed; `g`: the guest's slot, echoed in `paired`.
+    /// A guest's `pair`, relayed; `g`: the guest's slot, echoed in `paired`
+    /// (0 to [`MAX_GUEST_SLOT`]: a relay assigns 1 to 255, which panels up
+    /// to 1.1.0-beta.4 read as one byte; this one takes any up to 2^31 - 1).
     /// `label` is as sent: its bytes go into the MAC check
     /// ([`Window::check`](super::pair::Window::check)) and it is cleaned
     /// only after that.
-    Pair { g: u8, public: [u8; 32], label: String, mac: [u8; 32] },
+    Pair { g: u32, public: [u8; 32], label: String, mac: [u8; 32] },
     /// A type this version does not know: ignored.
     Unknown,
 }
@@ -878,7 +1100,7 @@ pub fn parse_server_text(text: &[u8]) -> Result<ServerMsg, TextError> {
     match v.get("t").and_then(Value::as_str).ok_or(bad)? {
         "watch" => Ok(ServerMsg::Watch(v.get("on").and_then(Value::as_bool).ok_or(bad)?)),
         "pair" => {
-            let g = v.get("g").and_then(Value::as_int).and_then(|g| u8::try_from(g).ok()).ok_or(bad)?;
+            let g = v.get("g").and_then(Value::as_int).filter(|g| (0..=i64::from(MAX_GUEST_SLOT)).contains(g)).ok_or(bad)? as u32;
             let public = v.get("pub").and_then(Value::as_str).and_then(unhex::<32>).ok_or(bad)?;
             let mac = v.get("mac").and_then(Value::as_str).and_then(unhex::<32>).ok_or(bad)?;
             let label = v.get("label").and_then(Value::as_str).ok_or(bad)?.to_string();
@@ -995,6 +1217,168 @@ mod tests {
         assert_eq!(parse_server_text(b"ping"), Err(TextError::Malformed));
         let big = format!(r#"{{"t":"watch","on":true,"p":"{}"}}"#, "x".repeat(MAX_TEXT_IN));
         assert_eq!(parse_server_text(big.as_bytes()), Err(TextError::TooBig));
+    }
+
+    /// A guest's slot `g`: any integer 0 to 2^31 - 1, echoed whole in
+    /// `paired` (the relay once gave 31-bit slots that a one-byte read
+    /// dropped as malformed, so pairing never answered).
+    #[test]
+    fn pair_slots() {
+        let pair = |g: &str| format!(r#"{{"t":"pair","g":{g},"pub":"{}","label":"phone","mac":"{}"}}"#, "ab".repeat(32), "cd".repeat(32));
+        for (text, want) in [("0", 0), ("1", 1), ("7", 7), ("255", 255), ("256", 256), ("65536", 65536), ("2147483647", MAX_GUEST_SLOT)] {
+            match parse_server_text(pair(text).as_bytes()) {
+                Ok(ServerMsg::Pair { g, public, label, mac }) => {
+                    assert_eq!(g, want, "{text}");
+                    assert_eq!((public, label.as_str(), mac), ([0xab; 32], "phone", [0xcd; 32]));
+                    let back = json::parse(paired(g, &[1; 8], &[2; 32]).as_bytes()).unwrap();
+                    assert_eq!(back.get("g").and_then(Value::as_int), Some(i64::from(want)), "paired {text}");
+                    let back = json::parse(paired_err(g, "bad-mac").as_bytes()).unwrap();
+                    assert_eq!(back.get("g").and_then(Value::as_int), Some(i64::from(want)), "paired_err {text}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        for bad in ["2147483648", "4294967296", "9007199254740991", "-1", "-2147483648", "1.5", "1e2", "-0", "\"1\"", "true", "null", "[1]", "{}"] {
+            assert_eq!(parse_server_text(pair(bad).as_bytes()), Err(TextError::Malformed), "{bad}");
+        }
+        let no_g = format!(r#"{{"t":"pair","pub":"{}","label":"phone","mac":"{}"}}"#, "ab".repeat(32), "cd".repeat(32));
+        assert_eq!(parse_server_text(no_g.as_bytes()), Err(TextError::Malformed));
+    }
+
+    #[test]
+    fn formula_lists() {
+        let parse = |s: &str| json::parse(s.as_bytes()).unwrap();
+        let mut l = FormulaList::new(true);
+        assert!(l.builtin("fire", "Fire") && l.builtin("big-clock", "Big \"clock\""));
+        let r = l.finish(false, None);
+        assert_eq!(r, r#"{"builtin":[["fire","Fire"],["big-clock","Big \"clock\""]],"card":[],"more":false}"#);
+        let mut l = FormulaList::new(false);
+        l.builtin("fire", "Fire");
+        assert!(!l.card("x", "X"), "no card: nothing of the card's");
+        let r = l.finish(true, Some("x"));
+        assert_eq!(r, r#"{"builtin":[["fire","Fire"]],"card":null,"more":false}"#);
+        assert!(parse(&r).get("card").is_some_and(|c| matches!(c, Value::Null)));
+        let mut l = FormulaList::new(true);
+        assert!(l.card("a", "A") && !l.builtin("b", "B"), "built-in ones before the card's only");
+        assert_eq!(l.finish(true, Some("a")), r#"{"builtin":[],"card":[["a","A"]],"more":true,"next":"a"}"#);
+        let l = FormulaList::new(true);
+        assert_eq!(l.finish(true, None), r#"{"builtin":[],"card":[],"more":true}"#);
+        let l = FormulaList::new(true);
+        assert_eq!(l.finish(true, Some("Bad/stem")), r#"{"builtin":[],"card":[],"more":true}"#);
+    }
+
+    /// Fill a list until one does not fit; whatever the closing, the result
+    /// is at most RESULT_ROOM (and so the ack within MAX_TEXT_OUT), and the
+    /// room is used to within an entry and the closing's reserve.
+    fn fill(card: bool, name: &str) -> (String, usize) {
+        let mut l = FormulaList::new(card);
+        let mut n = 0;
+        loop {
+            let stem = format!("{}{n:03}", "s".repeat(61));
+            let ok = if card { l.card(&stem, name) } else { l.builtin(&stem, name) };
+            if !ok {
+                break;
+            }
+            n += 1;
+        }
+        assert!(n > 0 && l.full());
+        assert!(!l.card("x", "X") && !l.builtin("x", "X"));
+        (l.finish(false, Some(&"z".repeat(64))), n)
+    }
+
+    #[test]
+    fn formula_lists_stay_in_room() {
+        for name in ["\u{2028}".repeat(60), "\u{7f}".repeat(60), "\"".repeat(60), "x".to_string()] {
+            for card in [true, false] {
+                let (r, n) = fill(card, &name);
+                assert!(r.len() <= RESULT_ROOM, "{} > {RESULT_ROOM} (card {card}, {n} entries)", r.len());
+                let ack = ack_ok(&[0xff; 8], MAX_N, Some(&r));
+                assert!(ack.len() <= MAX_TEXT_OUT, "{}", ack.len());
+                let v = json::parse(ack.as_bytes()).unwrap();
+                let r = v.get("r").unwrap();
+                assert_eq!(r.get("more").and_then(Value::as_bool), Some(card), "{name:?}");
+            }
+        }
+    }
+
+    /// The exact boundary: entries made to land the result at RESULT_ROOM
+    /// to the byte, with no card (its closing is 27 bytes) and with one (at
+    /// most 88), and one byte past it refused.
+    #[test]
+    fn formula_lists_at_the_boundary() {
+        for card in [false, true] {
+            // One entry, its name sized so that it just fits.
+            let head = r#"{"builtin":["#.len();
+            let close = if card { CARD_OPEN.len() + CLOSE_CARD_MAX } else { CLOSE_NULL.len() };
+            let fixed = head + r#"["s",""]"#.len() + close;
+            let fits = "n".repeat(RESULT_ROOM - fixed);
+            let mut l = FormulaList::new(card);
+            assert!(l.builtin("s", &fits), "card {card}: exactly at the room");
+            let r = l.finish(false, None);
+            assert!(r.len() <= RESULT_ROOM);
+            let mut l = FormulaList::new(card);
+            assert!(!l.builtin("s", &format!("{fits}n")), "card {card}: one byte past it");
+            assert!(l.full());
+        }
+        // Without a card, the most a result can be is exactly RESULT_ROOM.
+        let fits = "n".repeat(RESULT_ROOM - r#"{"builtin":["#.len() - r#"["s",""]"#.len() - CLOSE_NULL.len());
+        let mut l = FormulaList::new(false);
+        l.builtin("s", &fits);
+        assert_eq!(l.finish(false, None).len(), RESULT_ROOM);
+    }
+
+    /// Without `connect-formula-add` (every release and beta) the two
+    /// commands are not on the allow-list.
+    #[test]
+    fn formula_add_is_absent_without_its_feature() {
+        let keys = KeyList::new();
+        let limits = Limits { max_brightness: 128 };
+        let empty = Value::Object(Vec::new());
+        let on = cfg!(feature = "connect-formula-add");
+        for c in ["formula-add", "formula-part"] {
+            assert_eq!(ALLOWED.contains(&c), on, "{c}");
+            if !on {
+                assert_eq!(parse_command(c, &empty, &limits, true, &keys), Err(Refusal::NotAllowed), "{c}");
+            }
+        }
+    }
+
+    #[test]
+    fn formulas_rate() {
+        let t = |ms: u64| Duration::from_millis(ms);
+        let mut r = FormulasRate::default();
+        assert!(r.take(None, t(0)));
+        assert!(!r.take(None, t(1000)), "a second first page within 5 s");
+        r.answered(Some("b"), t(1000));
+        // The listing's next pages are free, up to 8 in all, but only with
+        // the `next` it gave.
+        assert!(!r.take(Some("zz"), t(1100)), "another after is a first page");
+        for i in 2..=FORMULAS_PAGES {
+            assert!(r.take(Some("b"), t(1200)), "page {i}");
+            r.answered(Some("b"), t(1200));
+        }
+        assert!(!r.take(Some("b"), t(1300)), "past 8 pages");
+        // Done: the next listing after 5 s.
+        r.answered(None, t(1300));
+        assert!(!r.take(Some("b"), t(2000)));
+        assert!(r.take(None, t(5000)));
+        r.answered(Some("c"), t(5000));
+        // A stale listing's page (past 60 s) is a first page: it takes the
+        // rate, and a second at once is refused.
+        assert!(r.take(Some("c"), t(66_000)), "a stale page, 5 s after the last first page");
+        assert!(!r.take(Some("d"), t(66_100)));
+    }
+
+    #[test]
+    fn formulas_arguments() {
+        let keys = KeyList::new();
+        let limits = Limits { max_brightness: 128 };
+        let p = |a: &str| parse_command("formulas", &json::parse(a.as_bytes()).unwrap(), &limits, false, &keys);
+        assert_eq!(p("{}"), Ok(Command::Formulas { after: None }));
+        assert_eq!(p(r#"{"after":"my-road"}"#), Ok(Command::Formulas { after: Some("my-road".into()) }));
+        for bad in [r#"{"after":""}"#, r#"{"after":"My-road"}"#, r#"{"after":"../x"}"#, r#"{"after":1}"#, r#"{"after":null}"#, r#"{"page":2}"#, r#"{"after":"a","x":1}"#] {
+            assert_eq!(p(bad), Err(Refusal::BadArg), "{bad}");
+        }
     }
 
     #[test]
