@@ -2363,6 +2363,9 @@ fn main() -> Result<()> {
                 panel.blit(eng.display_mut(&mut canvas));
             }
         }
+        // A rebuilt engine's in-order place (`resume`), before its first
+        // tick: here, the loop's own depth, not the rebuild's.
+        resume_engine(eng);
         let outcome = if off {
             TickOutcome::Idle
         } else {
@@ -3477,19 +3480,8 @@ fn engine_over(
     );
     engine.set_overrides(overrides);
     // In order: on after the entry of this playlist that last started
-    // (`resume`; a bounded look near its old index, never a search).
-    if let Some(mark) = resume::building(list) {
-        let t = uclock::now_us();
-        if let Some(at) = engine.resume_at(&mark) {
-            log::info!(
-                "resume: {list} at entry {} ({}, {} read in {} us)",
-                at.next,
-                if at.found.is_some() { "after the last" } else { "the last gone: its place" },
-                at.probes,
-                uclock::since(t)
-            );
-        }
-    }
+    // (`resume`), looked for by the main loop before the first tick.
+    resume::building(list);
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
     // A turn that ends before its next file could be opened ahead (a GIF
@@ -3501,6 +3493,26 @@ fn engine_over(
         engine.carry_over();
     }
     engine
+}
+
+/// Continue a rebuilt engine's in-order playlist where it left off, if it
+/// has a place (`resume::pending`): a look at the mark's index and a few
+/// either side (`Engine::resume_at`), at most 17 catalog reads, once.
+#[inline(never)]
+fn resume_engine(eng: &mut Engine) {
+    let Some(mark) = resume::pending() else {
+        return;
+    };
+    let t = uclock::now_us();
+    if let Some(at) = eng.resume_at(&mark) {
+        log::info!(
+            "resume: in order at entry {} ({}, {} read in {} us)",
+            at.next,
+            if at.found.is_some() { "after the last" } else { "the last gone: its place" },
+            at.probes,
+            uclock::since(t)
+        );
+    }
 }
 
 /// The fingerprint of the playlist's `.meta` as the index records it:

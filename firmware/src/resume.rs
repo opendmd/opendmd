@@ -8,10 +8,11 @@
 //! slot's check word drops anything else that is not a mark.
 //!
 //! The main task alone reads and writes them: [`building`] when an engine
-//! is built, [`started`] at every playlist entry's start (16 word stores,
-//! no card or flash write).
+//! is built, [`pending`] before its first tick (the main loop hands the
+//! mark to `Engine::resume_at`), [`started`] at every playlist entry's
+//! start (16 word stores, no card or flash write).
 
-use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use opendmd_core::engine::OFF_PLAYLIST;
 use opendmd_core::resume::{path_hash, Mark, Marks, SLOTS, WORDS};
@@ -21,6 +22,8 @@ static mut MARKS: [[u32; WORDS]; SLOTS] = [[0; WORDS]; SLOTS];
 
 /// The key of the playlist the engine plays ([`path_hash`]; 0: none yet).
 static LIST: AtomicU32 = AtomicU32::new(0);
+/// An engine was built and has not looked for its place yet.
+static PENDING: AtomicBool = AtomicBool::new(false);
 
 fn word(i: usize) -> &'static AtomicU32 {
     debug_assert!(i < SLOTS * WORDS);
@@ -55,15 +58,33 @@ pub fn boot(power_on: bool) {
 
 /// An engine is being built over the playlist keyed by `key_path` (its
 /// manifest's path, or a Follow RePlayOS context's index): the starts from
-/// here on are its, and this is where it left off, if anywhere.
-pub fn building(key_path: &str) -> Option<Mark> {
-    let list = path_hash(key_path);
-    LIST.store(list, Relaxed);
-    load().get(list)
+/// here on are its, and the main loop looks for its place ([`pending`])
+/// before the engine's first tick. (Not here: this is the bottom of a
+/// rebuild, the main task's deepest path, and the look reads the card.)
+pub fn building(key_path: &str) {
+    LIST.store(path_hash(key_path), Relaxed);
+    PENDING.store(true, Relaxed);
+}
+
+/// Once after [`building`]: where the new engine's playlist left off, if
+/// anywhere.
+#[inline(never)]
+pub fn pending() -> Option<Mark> {
+    if !PENDING.swap(false, Relaxed) {
+        return None;
+    }
+    let list = LIST.load(Relaxed);
+    // Slot by slot; the first valid one of the playlist wins, as in
+    // `Marks::decode`.
+    (0..SLOTS).find_map(|s| {
+        let w: [u32; WORDS] = core::array::from_fn(|k| word(s * WORDS + k).load(Relaxed));
+        Mark::decode(&w).filter(|m| m.list == list)
+    })
 }
 
 /// A file started: a playlist entry (`index`, not [`OFF_PLAYLIST`]: a file
 /// played on request, "previous" included, is not the playlist's place).
+#[inline(never)]
 pub fn started(index: usize, path: &str) {
     let list = LIST.load(Relaxed);
     if index == OFF_PLAYLIST || list == 0 {
