@@ -299,6 +299,13 @@ psi-check:
 	@test -n "$(F)" || { echo 'usage: make psi-check F=formula.psi [ARGS="--out sheet.png"]'; exit 2; }
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- check $(abspath $(F)) $(if $(filter command line,$(origin ARGS)),$(ARGS),)
 
+# Which board measurements in opendmd-psi/tests/measured.rs are of a Formula
+# changed since it was measured (git history; an ignored test, so make test
+# does not fail on it). How to measure them again: that test's comment.
+.PHONY: psi-stale
+psi-stale:
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --test estimate stale_board_measurements -- --ignored --nocapture
+
 # The `psi` command (check, fmt, builtins/errors --json) into ~/.cargo/bin.
 psi:
 	RUSTUP_TOOLCHAIN=stable cargo install --locked --path $(PSICLI)

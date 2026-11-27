@@ -371,3 +371,166 @@ fn the_fused_compares_and_guards_as_measured() {
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
 }
+
+/// The rows of tests/measured.rs that `include_str!` a Formula's file as
+/// it is now (so their source moves on with it): the file, and the commit
+/// whose version of it the board ran (the commit that added the row:
+/// jit2-c's for JIT_EFFECTS and JIT_LOOKS, consoleb's for CONSOLEB).
+const MEASURED_AT: &[(&str, &str, &str)] = &[
+    ("JIT_EFFECTS Endless road Both", "opendmd-web/experiments/road-life/road-both.psi", "c6f7302"),
+    ("JIT_EFFECTS Endless road Full", "opendmd-web/experiments/road-life/road-full.psi", "ebf1c73"),
+    ("JIT_EFFECTS Wireframe cube", "opendmd-web/formulas/wireframe-cube.psi", "ebf1c73"),
+    ("JIT_EFFECTS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "ebf1c73"),
+    ("JIT_EFFECTS Rotozoom floor", "opendmd-web/formulas/rotozoom-floor.psi", "ebf1c73"),
+    ("JIT_EFFECTS Tunnel", "opendmd-web/formulas/tunnel.psi", "ebf1c73"),
+    ("JIT_EFFECTS Time gate", "opendmd-web/formulas/time-gate.psi", "ebf1c73"),
+    ("JIT_EFFECTS Fire", "opendmd-web/formulas/fire.psi", "ebf1c73"),
+    ("JIT_EFFECTS Plasma", "opendmd-web/formulas/plasma.psi", "ebf1c73"),
+    ("JIT_LOOKS Old TV", "opendmd-web/formulas/old-tv.psi", "ebf1c73"),
+    ("JIT_LOOKS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "ebf1c73"),
+    ("JIT_LOOKS Plasma", "opendmd-web/formulas/plasma.psi", "ebf1c73"),
+    ("CONSOLEB Cycled plasma", "opendmd-web/formulas/cycled-plasma.psi", "30d2ea5"),
+    ("CONSOLEB Waterfall", "opendmd-web/formulas/waterfall.psi", "30d2ea5"),
+    ("CONSOLEB Copper sky", "opendmd-web/formulas/copper-sky.psi", "30d2ea5"),
+    (
+        "CONSOLEB Big clock rate (bar in the mask)",
+        "opendmd-web/experiments/console-b/big-clock-rate-mask.psi",
+        "30d2ea5",
+    ),
+];
+
+/// A Formula's source as the player sees it: comments, blank lines and
+/// its `name` and `about` gone, each line trimmed.
+fn psi_body(src: &str) -> String {
+    let mut out = String::new();
+    for l in src.lines() {
+        // (`--` starts a comment outside a string.)
+        let mut quoted = false;
+        let mut cut = l.len();
+        let b = l.as_bytes();
+        for (i, &c) in b.iter().enumerate() {
+            match c {
+                b'"' => quoted = !quoted,
+                b'-' if !quoted && b.get(i + 1) == Some(&b'-') => {
+                    cut = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let l = l[..cut].trim();
+        if l.is_empty() || l.starts_with("name ") || l.starts_with("about ") {
+            continue;
+        }
+        out += l;
+        out.push('\n');
+    }
+    out
+}
+
+/// Whether two sources are the same Formula to the player: the same steps
+/// and the same rate, compiled now (or, where one no longer compiles, the
+/// same [`psi_body`]).
+fn same_formula(a: &str, b: &str) -> bool {
+    match (compile(a), compile(b)) {
+        (Ok(p), Ok(q)) => p.listing() == q.listing() && p.frame_ms() == q.frame_ms(),
+        _ => psi_body(a) == psi_body(b),
+    }
+}
+
+/// How the program measured and the one now differ, in a few words.
+fn how_changed(then: &str, now: &str) -> String {
+    match (compile(then), compile(now)) {
+        (Ok(p), Ok(q)) => {
+            let n = |p: &opendmd_psi::Program| p.listing().lines().count();
+            format!("{} -> {} steps", n(&p), n(&q))
+        }
+        (Err(_), _) => "the source measured no longer compiles".into(),
+        (_, Err(_)) => "the file does not compile".into(),
+    }
+}
+
+/// `git -C <repo> args`, its output trimmed ("" if git fails).
+fn git(args: &[&str]) -> String {
+    let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Which board measurements in tests/measured.rs are of a Formula that has
+/// changed since (ignored by default: it reads git history, and a stale
+/// row is news, not a failure of the build). Run it with
+/// `cargo test --test estimate stale_board_measurements -- --ignored --nocapture`.
+///
+/// - The rows that `include_str!` a file (`MEASURED_AT`): the file at the
+///   commit the board ran against the file now.
+/// - The rows whose source is written out in measured.rs (or a snapshot
+///   beside it, tests/neon-city-measured.psi) and whose name is a bundled
+///   Formula's (`opendmd-web/formulas/<name>.psi`): that source against
+///   the file now.
+///
+/// Compared as the player sees them ([`same_formula`]: the steps and the
+/// rate the compiler makes of each now): a change of comments, layout,
+/// name or about is not one. Each stale row is listed with the commits
+/// that changed its file since.
+///
+/// **To refresh one** (on a test board; never needed for the build): build
+/// the probe that measured its table (`make fw-flash FW_FEATURES=psi-probe`
+/// with `JIT2_ONLY` for JIT_EFFECTS and JIT_LOOKS, `CONSOLEB_ONLY` for
+/// CONSOLEB, in firmware/src/psi_probe.rs; `FW_FEATURES=paint-probe` for
+/// PAINT_FORMULAS; the full psi-probe for STEPS, LOOKS, SPEED2), let it run
+/// once with the current Formulas (it writes `/filelist-psi-probe.txt` on
+/// the card), then put its p50 µs in the row, and the commit it was built
+/// from in `MEASURED_AT` (or the source as measured in the row or its
+/// snapshot). The estimate tests then hold the model to the new figures.
+#[test]
+#[ignore]
+fn stale_board_measurements() {
+    let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+    let mut stale = Vec::new();
+    let mut since = |what: String, path: &str, from: Option<&str>, change: String| {
+        let log = match from {
+            Some(c) => git(&["log", "--format=%h %ad %s", "--date=short", &format!("{c}..HEAD"), "--", path]),
+            None => git(&["log", "-3", "--format=%h %ad %s", "--date=short", "--", path]),
+        };
+        let when = if from.is_some() { " since" } else { "; its last changes" };
+        stale.push(format!("{what}: {path} ({change}), changed{when}:\n    {}", log.replace('\n', "\n    ")));
+    };
+    for &(row, path, commit) in MEASURED_AT {
+        let then = git(&["show", &format!("{commit}:{path}")]);
+        let now = std::fs::read_to_string(format!("{repo}/{path}")).unwrap_or_default();
+        assert!(!then.is_empty(), "{row}: git show {commit}:{path} gave nothing (a shallow clone?)");
+        if !same_formula(&then, &now) {
+            since(format!("{row} (measured at {commit})"), path, Some(commit), how_changed(&then, &now));
+        }
+    }
+    let mut inline: Vec<(String, &str)> = Vec::new();
+    for &(n, s, _) in measured::STEPS.iter().chain(measured::SPEED2).chain(measured::EFFECTS) {
+        inline.push((n.to_string(), s));
+    }
+    for &(n, s, b, k, _) in measured::LOOKS {
+        inline.push((format!("{n} ({b} {k} %)"), s));
+    }
+    for &(n, s, _, _) in measured::PAINT_FORMULAS {
+        inline.push((n.to_string(), s));
+    }
+    for (name, src) in inline {
+        let slug = name.split(" (").next().unwrap().to_lowercase().replace(' ', "-");
+        let path = format!("opendmd-web/formulas/{slug}.psi");
+        let Ok(now) = std::fs::read_to_string(format!("{repo}/{path}")) else {
+            continue;
+        };
+        if !same_formula(src, &now) {
+            since(format!("{name} (as written in measured.rs)"), &path, None, how_changed(src, &now));
+        }
+    }
+    println!("{}", stale.join("\n"));
+    assert!(stale.is_empty(), "{} stale board measurements:\n{}", stale.len(), stale.join("\n"));
+}
