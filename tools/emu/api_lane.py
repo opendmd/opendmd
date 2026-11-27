@@ -943,18 +943,22 @@ class Lane:
         succ = lambda at: at + 1
         at1, reads1, us1 = rebuilt(put_list(new + listed), len(listed) + 2, "two GIFs put at the head of the list", "after the last", succ)
         at2, reads2, us2 = rebuilt(put_list(listed), len(listed), "the list put back", "after the last", succ)
-        # The entry playing removed: not found, its place (which its successor moved into).
+        # The entry playing removed: not found, its place (which its successor moved into); then
+        # put back the moment that successor starts: it had only just started, so it plays again.
         at3 = listed.index(on(settled()))
         without = listed[:at3] + listed[at3 + 1:]
-        _, reads3, _ = rebuilt(put_list(without), len(listed) - 1, "the GIF playing removed", "the last gone: its place", succ)
-        # Put back at once: the successor had only just started, so it plays again.
-        at4 = listed.index(on(api.status()))
+        mark = emu.mark()
+        put_list(without)()
+        i, m = emu.wait_for(resumed, 120, mark, "the `resume:` line after the GIF playing was removed")
+        self.expect(m[2] == "the last gone: its place", "in order", f"the GIF playing removed: {emu.lines[i][:200]}")
+        reads3 = int(m[3])
+        emu.wait_for(re.compile(r"\] .+ <- "), 120, i, "the next GIF's start")
         mark = emu.mark()
         put_list(listed)()
-        i, m = emu.wait_for(resumed, 120, mark, "the `resume:` line after a rebuild right after a start")
-        self.expect(m[2] == "the last again, it was up briefly", "in order", f"a rebuild right after a start: {emu.lines[i][:200]}")
+        j, m = emu.wait_for(resumed, 120, mark, "the `resume:` line after a rebuild right after a start")
+        self.expect(m[2] == "the last again, it was up briefly", "in order", f"a rebuild right after a start: {emu.lines[j][:200]}")
         st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and s.get("entries") == len(listed) and on(s) in listed, 120, "the GIF again")
-        self.expect(on(st) == listed[at4], "in order", f"a rebuild {listed[at4]} had just started: playing {on(st)}")
+        self.expect(on(st) == listed[at3 + 1], "in order", f"removed {listed[at3]}, then put back: playing {on(st)}, wanted {listed[at3 + 1]} again")
         # Another playlist and back: the first goes on after the GIF it was cut at.
         at5 = listed.index(on(settled()))
         mark = emu.mark()
