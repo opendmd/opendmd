@@ -1,0 +1,165 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Neon city"
+about "A night drive through a neon megacity: crowding towers lined with neon, a holo screen, rain on a wet road"
+loop forever
+smooth
+
+-- Neon city: Endless road's pseudo-3D road, through a megacity at night.
+-- Dark towers crowd the road, tall enough to leave the top of the panel,
+-- with a hazy violet row behind them and a magenta glow over it all;
+-- each tower is lined with neon, a lit roof or a lit edge, in its own
+-- colour (some changing), one carries a holo screen, and the wet road
+-- catches the haze. Four lanes, a dashed cyan middle line and neon kerbs;
+-- the car is dark, with a red light bar and a cyan glow under it. It
+-- always drizzles, and now and then a shower comes through: slanted rain
+-- streaks, as 16-bit consoles drew it, and the road wetter. Each play starts elsewhere, in
+-- another city.
+
+-- Colours: the sky's ramp from the top down to the haze; the towers (far,
+-- near, a lit window); the street (pavement, dry and wet asphalt, each
+-- with its stripe's, lane line, kerb); then what is painted: the rain,
+-- the car (its own colours are the sprite's), the neon
+palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
+  #6a1658, #a02870, farTower #3a1450, nearTower #08060e, window #90e8ff,
+  pavement #120c1c, #1a1224, asphalt #0e0a16, #130e1c, wet #2a0e30,
+  #34123a, lane #8090b0, kerb #e0207a, rain #6878a8, car #303850,
+  glass #5878a8, red #ff2030, violet #a040ff, magenta #ff40ff,
+  pink #ff2a9a, cyan #20f0ff, white #fff
+
+-- Across the road, left to right, in 30ths of its half width (the middle
+-- at 31): 3 kerb, 1 asphalt, 2 a lane line, 4 the middle line; past
+-- either end 0, the pavement
+table across = 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3
+
+-- Powers of two: a tower's windows are this many random bits
+table twos = 1, 2, 4, 8, 16, 32, 64
+
+-- The car from behind: dark, a glass window, a red light bar, a cyan
+-- glow under it
+sprite car {
+  key . 0, C #303850, G #5878a8, R #ff2030, X #20f0ff
+  .........CCCCCCCCCCCC.........
+  .......CGGGGGGGGGGGGGGC.......
+  ....CCCCCCCCCCCCCCCCCCCCCC....
+  .CRRRRRRRRRRRRRRRRRRRRRRRRRRC.
+  .CCCCCCCCCCCCCCCCCCCCCCCCCCCC.
+  .CCCCCCCCCCCCCCCCCCCCCCCCCCCC.
+  ..CCCCC................CCCCC..
+  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+}
+
+-- How far we have driven, in bends (from somewhere else each play);
+-- the road's heading here, and where its middle would be if it ran
+-- straight on (each row and each thing on it adds its bend)
+driven = t*.15 + seed*1000
+heading = noise(driven, 0, 0)
+straight = 64 - heading*2000
+
+-- The car's left edge, negated: it slides out in bends
+carLeft = (heading - noise(driven + .03, 0, 0))*80 - 48
+
+-- The two rows of towers turn with the road, the near one faster (the
+-- near row repeats every 176 columns; `seed` picks another city)
+nearShift = heading*-90
+
+-- The towers in view (the first one's number, and where its first
+-- column is less its number*8), the neon's colour changes, and the
+-- holo screen's
+firstTower = floor(nearShift/8)
+towerLeft = .9999 - nearShift
+turn = floor(t*1.5)
+holo = floor(t*3)
+
+-- Showers come and go (a drizzle at least, up to a downpour): how
+-- much of the rain is falling now
+shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
+
+draw {
+  -- Painted, back to front: the rain under everything else, then the
+  -- car, then the neon and the holo screen. (Each colour is its place in
+  -- the palette.)
+
+  -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
+  -- one slant, spread evenly across and each at its own height, falling
+  -- down and to the right; as many as the shower brings
+  for k < 21 {
+    if k/21 < shower {
+      dropX = frac(k/21 + t*.49)*150 - 12
+      dropY = 31 - frac(hash(k, 3) - t*4)*44
+      pset(dropX, dropY, pal(city, city.rain))
+      pset(dropX + .5, dropY + 1, pal(city, city.rain))
+      pset(dropX + 1, dropY + 2, pal(city, city.rain))
+    }
+  }
+
+  -- The car
+  spr(car, 1 - carLeft, 24)
+
+  -- Neon on the near row's towers, worked out as the pixels do (tower
+  -- `id` has the columns where floor((px + nearShift)/8) is `id`, the
+  -- last of each eight a gap, and its top row just under 22 + its height),
+  -- so each sits on its own tower and moves with it: along the roof of
+  -- every other one, down the right-hand edge of the rest (and of any
+  -- whose roof is above the panel); each tower its own colour, a third of
+  -- them changing
+  for k < 17 {
+    id = firstTower + k
+    left = floor(id*8 + towerLeft)
+    top = floor(hash(id%22, seed)*13 + 21.9999)
+    edge = id%2 or top > 31
+    line(left + edge*6, 31 - top, left + 6, edge ? 11 : 31 - top, pal(city, city.violet + (id + turn%4*(id%3 < 1))%4*city.step))
+  }
+
+  -- One tower carries a holo screen across its face, under its roof
+  -- (when it is tall enough for one): bands of colour (and white) scrolling down it,
+  -- now and then one dropping out
+  screenX = floor((156.9999 - nearShift) % 176) - 20
+  screenTop = floor(hash(17, seed)*13 + 19.9999)
+  if screenTop > 23 {
+    for k < 4 {
+      if hash(k, holo) > .2 {
+        line(screenX + 1, 31 - screenTop + k, screenX + 5, 31 - screenTop + k, pal(city, city.violet + (holo - k)%5*city.step))
+      }
+    }
+  }
+}
+
+-- Each row below the horizon looks ahead: the road's half width there, a
+-- light or dark stripe, and where across the road each column is (in the
+-- table's 30ths, from the road's middle there, bent to the noise that
+-- far on); from the horizon up, the sky's shade, and which row of
+-- windows this is (every other row from row 20)
+below = (31 - py) < 19
+halfWidth = below * 3.6 * (19.5 - (31 - py))
+stripe = frac(54/max(halfWidth, 1.3) + t*10) < .5
+scale = below ? clamp(30/halfWidth, 0, 9) : 0
+start = below ? 40 - (straight + noise(driven + .1125/(19.5 - (31 - py)), 0, 0)*2000)*scale : -99
+skyRow = below ? 99 : (31 - py)
+windowRow = ((31 - py) - 20)/2 + (31 - py)%2*20
+
+-- Each column: the near tower here (7 columns and a gap, its roof at row
+-- 22-35: some leave the panel) and the far one (6 wide, roof at 25-34,
+-- never below the near one's); the near tower's windows, three columns
+-- of them, and which are lit (a random number of as many bits as it has
+-- rows of them)
+nearAt = px + nearShift
+nearHeight = hash(floor(nearAt/8)%22, seed)*13
+nearTop = (nearAt%8 < 7) * (22 + nearHeight)
+farTop = max(25 + hash(seed, floor((px + nearShift*.44) / 6))*9, nearTop)
+windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
+
+-- What each pixel shows: below the horizon, what is across the road
+-- there; above it, the towers: 0 sky, 1 the far row, 2 the near row, 3 a
+-- lit window. Each number's colour is the street's below the horizon
+-- (the asphalt wet near the horizon, where it shows the haze) and the
+-- sky's above it; what is painted goes over it (the road's cyan lines
+-- are the window's colour).
+towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
+pal(city, pick(across[px*scale + start] + towers,
+    below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
+    below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
+    below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
+    below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt))

@@ -343,8 +343,12 @@ fn the_examples_are_light_enough_for_the_panel() {
         // Endless road is a showcase too: its tables (the car, the peaks,
         // the palm) and five draw loops, written tight for the path; and
         // so are its two alternatives, Neon city and Wormhole run.
-        let most = if ["Endless road", "Neon city", "Wormhole run"].contains(&e.name.as_str()) {
+        let most = if ["Endless road", "Wormhole run"].contains(&e.name.as_str()) {
             80
+        } else if e.name == "Neon city" {
+            // 90 since its lightning: the struck palette, when a strike
+            // falls and how it flickers, and the tower its bolt picks.
+            90
         } else if e.name == "Rift patrol" {
             // A showcase too, the longest: a shooter that plays itself
             // (four zones' palettes, the world's rules a line each, the

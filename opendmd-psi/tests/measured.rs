@@ -368,8 +368,10 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
     // (The JIT's under(x, y) template, the second run, paint80-f6aa6.)
     ("pixelate", include_str!("device/pixelate.psi"), 5318, 2645),
     ("under-shake", include_str!("device/under-shake.psi"), 5312, 2563),
-    // (Painted, the second run.)
-    ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
+    // (Painted, the second run. Neon city as it was measured: the gallery's
+    // has lightning since, a bolt in ink and a palette tween, not yet
+    // measured on a board.)
+    ("Neon city", include_str!("neon-city-measured.psi"), 4289, 4037),
 ];
 
 /// P0b-4 and the guards a row on a test board (paint80-01e06, 2026-11-04,
