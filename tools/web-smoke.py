@@ -1962,7 +1962,12 @@ def _selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
 
     def search(q, n):
         page.fill("#lib-search", q)
-        page.wait_for_function("n => document.querySelector('#lib-count').textContent.startsWith(n + ' of ')", arg=n, timeout=60000)
+        try:
+            page.wait_for_function("n => document.querySelector('#lib-count').textContent.startsWith(n + ' of ')", arg=n, timeout=60000)
+        except PlaywrightTimeoutError:
+            rows = page.eval_on_selector_all("#lib-list .vrow:not([hidden])", "els => els.map(e => e.dataset.path || e.textContent.trim().slice(0, 40))")
+            print(f"  search {q!r}: '{page.inner_text('#lib-count')}', rows {rows[:20]}")
+            raise
 
     def bar():
         return page.inner_text("#lib-selbar span.grow").strip()
@@ -1992,6 +1997,14 @@ def _selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
         return document.querySelector('#lib-list')._tree.items('Sel_B') !== undefined; }""")
     page.unroute("**/api/files?dir=%2Fgifs%2FSel_B*", slow)
     check(not kept, "selection: a listing answered after its folder was forgotten is not kept")
+    # And a folder forgotten while a search shows (a move answered while it
+    # gathers, or after) is listed again, so the count does not leave it out.
+    page.fill("#lib-search", "Sel Other")
+    page.wait_for_function("(t => t && t.items('Sel_A'))(document.querySelector('#lib-list')._tree)", timeout=60000)
+    page.evaluate("() => import('./js/tree.js').then((m) => m.forget('Sel_A'))")
+    page.wait_for_function("(t => !t.gathering && t.items('Sel_A'))(document.querySelector('#lib-list')._tree)", timeout=60000)
+    check(True, "selection: a folder forgotten while a search shows is listed again")
+    page.fill("#lib-search", "")
     page.click("#lib-select")
     search("Sel Smoke", 6)
     page.click("#lib-all")

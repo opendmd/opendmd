@@ -67,7 +67,8 @@ export function listCat(c) {
 }
 export function forget(c) {
   for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); }
-  for (const t of trees) t.dirty = true;
+  // (A search showing lists it again: its count would leave the folder out.)
+  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); }
 }
 on('gifs', forget);
 on('card', () => forget());
@@ -154,11 +155,17 @@ export class Tree {
   }
   // A search is of every GIF: each folder listed (one at a time: the device
   // shares the card with the player), the tree updated as they come.
+  // Asked again while it runs (another search, a folder forgotten): once
+  // more when done, so a folder forgotten after it was passed is listed.
   async gather() {
-    if (this.gathering) return;
+    if (this.gathering) { this.again = true; return; }
     this.gathering = true;
-    let bad = 0;
-    for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) { bad++; this.failed.add(c); } this.update(); }
+    let bad;
+    do {
+      this.again = false;
+      bad = 0;
+      for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) { bad++; this.failed.add(c); } this.update(); }
+    } while (this.again);
     this.gathering = false;
     this.bad = bad;
     this.update();
