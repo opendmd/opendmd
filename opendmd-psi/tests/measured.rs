@@ -369,8 +369,8 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
     ("pixelate", include_str!("device/pixelate.psi"), 5318, 2645),
     ("under-shake", include_str!("device/under-shake.psi"), 5312, 2563),
     // (Painted, the second run. Neon city as it was measured: the gallery's
-    // has lightning since, a bolt in ink and a palette tween, not yet
-    // measured on a board.)
+    // is a storm since, a painted bolt, a palette tween and rain by a
+    // control, not yet measured by the probe.)
     ("Neon city", include_str!("neon-city-measured.psi"), 4289, 4037),
 ];
 
