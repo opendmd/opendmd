@@ -1342,14 +1342,18 @@ export EMU_DIR SCRATCH
 emu-build:
 	tools/emu/build-emulator.sh
 
+# The cards are shared by every checkout on this machine (EMU_DIR): one
+# build at a time (a lock on the card dir), the second then finding it
+# current.
+EMU_CARD_LOCK = mkdir -p $(EMU_DIR)/card && flock $(EMU_DIR)/card/.lock
 emu-card:
-	uv run --quiet tools/emu/mkcard.py
+	$(EMU_CARD_LOCK) uv run --quiet tools/emu/mkcard.py
 
 # A test panel's scale (~11,000 GIFs in 41 folders, ~11,000 copies in ~4,900 buckets):
 # the FAT index's build must finish with its heap floor reported, the panel
 # playing. Boots the smoke image (or FW_IMAGE). EMU_RIG_OK.
 emu-rig-card:
-	uv run --quiet tools/emu/mkcard.py --rig
+	$(EMU_CARD_LOCK) uv run --quiet tools/emu/mkcard.py --rig
 emu-rig: emu-build emu-rig-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
