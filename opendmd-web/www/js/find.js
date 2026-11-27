@@ -1,6 +1,7 @@
 // Finding GIFs and pictures on the web: Create Art's "Game art" and
 // "GifCities" sources (a results grid with a row of ways to narrow it).
-// Loaded with the Create Art view (js/studio.js), with find.css.
+// Loaded with the converter the website mounts (js/studio.js), with
+// find.css; not packed for the panel (opendmd-pack www.rs SITE_ONLY).
 //
 // A source is { id, label, search(q, opts) -> Promise<Hit[]>, filters,
 // narrow?(hits, opts), caption }. A Hit is { id, title, w, h, preview (an

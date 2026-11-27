@@ -26,7 +26,7 @@ function loop() {
   if (live.size) raf = requestAnimationFrame(loop);
 }
 
-// The one scale rule (dot matrix, Create Art's frame): whole device pixels per
+// The one scale rule (dot matrix, Add GIFs' fitting frame): whole device pixels per
 // pixel that fit `room` CSS px; 0 when none.
 export const fitScale = (room, w) => Math.floor((room * devicePixelRatio) / w);
 
@@ -86,6 +86,8 @@ export class PanelPreview {
     return true;
   }
   clear() { this.token++; this.p.clear(); }
+  // Done with it (a dialog's preview): its renderer freed.
+  dispose() { live.delete(this); this.p.free(); }
   get path() { return this.p.path; }
   setPaused(v) { this.p.setPaused(v); }
   get paused() { return this.p.paused; }

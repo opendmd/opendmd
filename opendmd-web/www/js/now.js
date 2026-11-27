@@ -62,8 +62,8 @@ function favButton() {
   return b;
 }
 
-// Edit, as the Library's: a GIF (its original) in Create Art, a Formula in its editor (the saved or example one, else the
-// panel's one-line text); [where, go], or null for what the panel draws.
+// Edit: a Formula in its editor (the saved or example one, else the
+// panel's one-line text); [where, go], or null for a GIF or what the panel draws.
 function editFor(p) {
   const q = p?.startsWith('@formula?') && new URLSearchParams(p.slice(9));
   if (q) return q.get('psb') && ['Formulas', async () => {
@@ -75,8 +75,7 @@ function editFor(p) {
     for (const k of 'abc') if (num(q.get(k)) != null) app.psiOpen[k] = num(q.get(k));
     app.go('formulas/edit');
   }];
-  const e = p?.[0] == '/' && app.wasm.parsePath(p);
-  return e && ['Create Art', () => { app.artFrom = { path: p, e }; app.go('create'); }];
+  return null;
 }
 function editLine() {
   const b = h('button.sm', { id: 'now-edit', hidden: true }), why = h('span.muted', { id: 'now-live' }), el = h('div', { style: 'margin-top:8px' }, b, why);
@@ -84,7 +83,8 @@ function editLine() {
     const x = editFor(p);
     b.hidden = !x;
     if (x) [b.textContent, b.onclick] = ['✎ Edit in ' + x[0], x[1]];
-    why.textContent = !x && p ? t + ': drawn by the panel itself, not a GIF' : '';
+    why.textContent = !x && p && p[0] !== '/' ? t + ': drawn by the panel itself, not a GIF' : '';
+    el.hidden = !x && !why.textContent; // (a GIF: nothing to say)
   };
   return el;
 }

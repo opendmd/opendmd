@@ -1,5 +1,6 @@
-// A GIF from the site's Create Art (opendmd.dev/create/, its Send to my
-// panel): that page opens this app at `#import` (app.js), this window says
+// A GIF from the website (the Studio's Send to panel, opendmd.dev/studio/,
+// and the converter it frames, opendmd.dev/create/): that page opens this
+// app at `#import` (app.js), this window says
 // `READY` to its opener, and the page answers this window alone with
 // `{type: IMPORT, gif (an ArrayBuffer, transferred: no copy, nothing in a
 // link, nothing kept on the site), name, title, platform, author, logo}`.
@@ -21,7 +22,7 @@ const text = (v, n, re) => (typeof v == 'string' && v.length <= n && (!re || re.
 // with a sentence.
 export function received() {
   const from = [new URL(SITE).origin, location.origin], o = window.opener;
-  if (!o) return Promise.reject(new Error('open it again from Create Art on opendmd.dev'));
+  if (!o) return Promise.reject(new Error('send it again from the Studio on opendmd.dev'));
   return new Promise((res, rej) => {
     const end = (f, v) => { clearTimeout(t); removeEventListener('message', on); f(v); };
     const t = setTimeout(() => end(rej, new Error('opendmd.dev didn’t send it: send it again from there')), WAIT);

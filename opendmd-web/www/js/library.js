@@ -1,12 +1,14 @@
 // Library: the GIFs on the player as a tree of folders (js/tree.js), and
-// Details for the one picked (finding new art on the web is Create Art's,
-// js/studio.js). See "The Library's layout" in CLAUDE.md. The user's tags
+// Details for the one picked. + Add: Add GIFs (your own GIFs and pictures,
+// fitted to the panel first where they need it: js/fit.js) and Find art
+// online (the website's Studio, opendmd.dev/studio/#import: finding art on
+// the web is the website's). See "The Library's layout" in CLAUDE.md. The user's tags
 // and stars (js/tags.js) show on the rows and in Details, and Select's
 // More ▾ tags, rates, moves, renames or deletes many GIFs at once
 // (js/tags.js, js/refs.js).
 
 import { app, platName } from './state.js';
-import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
+import { Overrides, glyphs, menu, moreButton, actions, fav, popup, closeMenu } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
@@ -23,19 +25,27 @@ export async function mount(el) {
   // Checkboxes only in Select mode (the button, or a long press on a row).
   const selBtn = h('button.sm', { id: 'lib-select', onclick: () => selMode(!selecting) }, 'Select');
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
-  const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
-  const addBtn = app.device && h('button', { id: 'lib-add-btn', onclick: () => addInput.click() }, '+ Add GIFs');
-  // Nothing on the player matches: the same words in Create Art (its Game
-  // art on the one platform chip picked, else GifCities).
-  const webQ = h('b');
-  const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
-    h('button.txt', { id: 'lib-web-go', onclick: () => webSearch(search.value.trim(), plats.size === 1 ? [...plats][0] : '') }, 'Search the web in Create Art →'));
-  // (Create Art's web sources are the site's: opendmd.dev/create/, the demo's beside it.)
-  const webSearch = (q, platform) => {
-    const u = new URL('create/', app.demo ? new URL('../', location.href) : SITE);
-    u.search = new URLSearchParams({ q, ...(platform && { platform }) });
-    window.open(u.href, '_blank', 'noopener');
+  const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/*', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
+  // Finding art on the web is the website's: its Studio's Import, with the
+  // search's words and its one platform chip (the demo's own site beside it).
+  const online = () => {
+    const q = search.value.trim(), p = new URLSearchParams({ ...(q && { q }), ...(plats.size === 1 && { platform: [...plats][0] }) });
+    return new URL('studio/', app.demo ? new URL('../', location.href) : SITE).href + '#import' + (p.size ? '?' + p : '');
   };
+  const findLink = (id, cls, text) => h('a', { id, className: cls, href: online(), target: '_blank', rel: 'noopener' }, text);
+  // + Add ▾: Add GIFs… (your own files), Find art online ↗.
+  const addBtn = app.device && h('button', { id: 'lib-add-btn', 'aria-haspopup': 'menu', onclick: (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    popup(h('div.menu', { id: 'lib-add-menu', role: 'menu' },
+      h('button.mi', { id: 'lib-add-gifs', onclick: () => { closeMenu(); addInput.click(); } }, 'Add GIFs…'),
+      h('p.cap', { style: 'margin:0 8px 4px' }, 'GIFs and pictures from this device'),
+      // (Closed once the click has opened the tab.)
+      Object.assign(findLink('lib-find-online', 'btn mi', 'Find art online ↗'), { onclick: () => setTimeout(closeMenu) }),
+      h('p.cap', { style: 'margin:0 8px 4px' }, 'On opendmd.dev: search, convert, then send it here')), r.right - 250, r.bottom + 4);
+  } }, '+ Add ▾');
+  // Nothing on the player matches: the same words, online.
+  const webQ = h('b'), webGo = findLink('lib-web-go', 'txt', 'Find art online ↗');
+  const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ', webGo);
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -87,16 +97,14 @@ export async function mount(el) {
   const meta = h('div.cap', { id: 'lib-d-meta' });
   const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Send to panel');
   const plBtn = h('button', { id: 'lib-d-add', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [current.path]) }, 'Add to playlist…');
-  const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
   const tagBox = h('div', { id: 'lib-d-tags' });
-  const gifOnly = [meta, editArt, moreBtn];
+  const gifOnly = [meta, moreBtn];
   const body = h('div', { id: 'lib-d-body', hidden: true },
     h('div.dhead', h('div.grow', dTitle, meta), moreBtn),
     tagBox,
-    h('div.row.acts', sendBtn, plBtn),
-    h('div.row.acts', editArt), smoothBox);
+    h('div.row.acts', sendBtn, plBtn), smoothBox);
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -243,6 +251,7 @@ export async function mount(el) {
     grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply) < 2);
     grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
+    webGo.href = online();
     webHint.hidden = !text || st.busy || st.matched > 0;
     tree.el.hidden = !webHint.hidden; // no empty box under the hint
   }
@@ -310,10 +319,15 @@ export async function mount(el) {
     const c = (open.length === 1 ? open[0] : cur) || open[0] || '';
     return { category: c, categories: tree.real(), platforms: [...new Set(tree.rows.filter((r) => r.path).map((r) => r.e.platform).filter(Boolean))] };
   };
-  async function addGifs(picked, inits) {
-    const gifs = picked.filter((f) => /\.gif$/i.test(f.name));
-    if (!gifs.length) { toast('choose .gif files', 'bad'); return; }
-    const plan = await (await import('./details.js')).addDialog(gifs, { ...opts(), inits });
+  // Add GIFs: the files (GIFs, pictures), each that is not a 128 × 32 GIF
+  // fitted to the panel first (js/fit.js), then their details (js/details.js).
+  async function addGifs(picked, inits = []) {
+    const ok = picked.map((f, i) => [f, inits[i]]).filter(([f]) => /\.gif$/i.test(f.name) || f.type.startsWith('image/'));
+    if (!ok.length) { toast('choose GIFs or pictures', 'bad'); return; }
+    const fit = await import('./fit.js');
+    const got = await fit.fitAll(ok.map((x) => x[0]), ok.map((x) => x[1]));
+    if (!got.length) return;
+    const plan = await (await import('./details.js')).addDialog(got.map((x) => x.file), { ...opts(), inits: got.map((x) => x.init) });
     if (!plan) return;
     addCard.hidden = false;
     addErr.replaceChildren();
@@ -376,7 +390,8 @@ export async function mount(el) {
       sync();
       playlists();
       again();
-      // A GIF sent from the site's Create Art (app.js, js/importgif.js): Add GIFs, filled in.
+      // A GIF sent from the website (its Studio's Send to panel: app.js,
+      // js/importgif.js) or a Formula's Save as GIF: Add GIFs, filled in.
       const gif = app.gifIn;
       app.gifIn = null;
       gif?.then(({ file, init }) => (app.device ? addGifs([file], [init]) : toast('Send it to your panel’s own address: this isn’t one', 'bad')),
