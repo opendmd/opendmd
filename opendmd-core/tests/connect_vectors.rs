@@ -73,6 +73,8 @@ fn cases(w: &World) -> Vec<Case> {
     let sign = |k: &SigningKey, body: &str| proto::sign_command(k, body.as_bytes());
     let a = |n: u64, c: &str, args: &str| sign(&w.a, &body(n, c, args));
     let case = |name, note, frame, expect, server| Case { name, note, frame, before: vec![], expect, server };
+    let fsha = hex(&[0x22; 32]);
+    let fadd = |stem: &str, src: u32| format!(r#""id":3,"stem":"{stem}","name":"Rift patrol","src_size":{src},"src_sha256":"{fsha}","psb_size":4439,"psb_sha256":"{fsha}""#);
     let mut v = Vec::new();
 
     // Blue: what must work.
@@ -83,6 +85,12 @@ fn cases(w: &World) -> Vec<Case> {
     v.push(case("ok-brightness-ceiling", "max_brightness is 128", a(1, "brightness", r#""v":128"#), "ok", "forward"));
     v.push(case("ok-playlist", "", a(1, "playlist", r#""set":"consoles""#), "ok", "forward"));
     v.push(case("ok-formulas", "what the panel can play: no arguments", a(1, "formulas", ""), "ok", "forward"));
+    v.push(case("ok-formula-add", "a Formula's source and compiled file to come (5.7)", a(1, "formula-add", &fadd("rift-patrol", 10835)), "ok", "forward"));
+    v.push(case("ok-formula-part", "a part: base64url, at most 480 bytes", a(1, "formula-part", r#""id":3,"off":0,"data":"bmFtZSAiUmlmdCI""#), "ok", "forward"));
+    v.push(case("bad-formula-add-stem", "a stem with a path in it", a(1, "formula-add", &fadd("../wifi", 10)), "bad-arg", "forward"));
+    v.push(case("bad-formula-add-upper", "the stem rule: lower case", a(1, "formula-add", &fadd("Rift", 10)), "bad-arg", "forward"));
+    v.push(case("too-big-formula-add", "a source past 16 KB", a(1, "formula-add", &fadd("rift", 16385)), "too-big", "forward"));
+    v.push(case("bad-formula-part-padding", "base64url with padding: one spelling only", a(1, "formula-part", r#""id":3,"off":0,"data":"AA==""#), "bad-arg", "forward"));
     v.push(case("ok-no-args", "`a` may be left out", sign(&w.a, &format!(r#"{{"v":1,"dev":"{}","sess":"{}","n":1,"c":"pause"}}"#, w.dev.text(), hex(&w.sess))), "ok", "forward"));
     v.push(case(
         "ok-bytes-as-sent",
@@ -431,14 +439,16 @@ fn build() -> Value {
 fn formula_lists() -> serde_json::Value {
     let mut cases = Vec::new();
     let mut case = |note: &str, card: bool, builtin: Vec<(String, String)>, cards: Vec<(String, String)>, cut: bool, next: Option<&str>| {
-        let mut l = proto::FormulaList::new(card);
+        // (`abi`/`psb` with a note that says so.)
+        let add = note.starts_with("with abi");
+        let mut l = if add { proto::FormulaList::with_add(card, 3, true) } else { proto::FormulaList::new(card) };
         let nb = builtin.iter().take_while(|(s, n)| l.builtin(s, n)).count();
         let nc = cards.iter().take_while(|(s, n)| l.card(s, n)).count();
         let result = l.finish(cut, next);
         assert!(result.len() <= proto::RESULT_ROOM, "{note}");
         cases.push(serde_json::json!({
             "note": note, "card": card, "builtin": builtin, "cards": cards, "cut": cut, "next": next,
-            "listed": [nb, nc], "result": result,
+            "listed": [nb, nc], "result": result, "add": add,
         }));
     };
     let e = |s: &str, n: &str| (s.to_string(), n.to_string());
@@ -446,6 +456,7 @@ fn formula_lists() -> serde_json::Value {
         vec![e("fire", "Fire \"hot\""), e("big-clock", "Big\\clock")],
         vec![e("my-road", "My road \u{2028}"), e("del", "\u{7f}\u{1}\u{8}\u{c}\t\n\r"), e("cafe", "Caf\u{e9} \u{1F600}")], false, None);
     case("no card", false, vec![e("fire", "Fire")], vec![e("x", "X")], true, Some("x"));
+    case("with abi and psb (5.7)", true, vec![e("fire", "Fire")], vec![e("my-road", "My road")], false, None);
     case("cut by the caller, with next", true, vec![], vec![e("a", "A")], true, Some("a"));
     case("cut by the caller, no next", true, vec![], vec![], true, None);
     // The boundary: one entry whose name lands the result at the room to the

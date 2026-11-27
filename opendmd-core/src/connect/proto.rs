@@ -318,6 +318,8 @@ pub const ALLOWED: &[&str] = &[
     "playlist",
     "playlists",
     "formulas",
+    "formula-add",
+    "formula-part",
     "send",
     "send-cancel",
     "controllers",
@@ -397,6 +399,10 @@ pub enum Command {
     Playlists,
     /// `formulas`; `after`: the page after this stem (5.6), `None` the first.
     Formulas { after: Option<String> },
+    /// `formula-add` (5.7): a Formula's source and compiled file to come.
+    FormulaAdd(super::fadd::AddArgs),
+    /// `formula-part`: `data` of the add `id` at stream offset `off`.
+    FormulaPart { id: u32, off: u32, data: Vec<u8> },
     Send(SendArgs),
     SendCancel { id: u32 },
     Controllers,
@@ -575,6 +581,11 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
                 Some(v) => Some(v.as_str().filter(|s| formula_stem_ok(s)).ok_or(Refusal::BadArg)?.to_string()),
             };
             Command::Formulas { after }
+        }
+        "formula-add" => Command::FormulaAdd(super::fadd::add_args(a)?),
+        "formula-part" => {
+            let (id, off, data) = super::fadd::part_args(a)?;
+            Command::FormulaPart { id, off, data }
         }
         "send" => Command::Send(send_args(a)?),
         "send-cancel" => Command::SendCancel { id: u32_arg(a, "id")? },
@@ -804,6 +815,15 @@ impl FormulaList {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(card: bool) -> FormulaList {
         FormulaList { s: String::from(r#"{"builtin":["#), has_card: card, card_open: false, more: false }
+    }
+
+    /// [`new`](Self::new), saying first what an add needs (5.7): the
+    /// compiled format this player takes (`abi`) and whether it wants the
+    /// controller's compiled file with the source (`psb`; a board that
+    /// compiles while Connect is open would say false).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn with_add(card: bool, abi: u8, psb: bool) -> FormulaList {
+        FormulaList { s: format!(r#"{{"abi":{abi},"psb":{psb},"builtin":["#), has_card: card, card_open: false, more: false }
     }
 
     /// Anything left out yet?

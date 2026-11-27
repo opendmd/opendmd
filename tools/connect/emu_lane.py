@@ -483,13 +483,14 @@ class Lane:
                 self.ok("play: on screen")
             r = await cmd("play", {"path": "@formula:starfield"})
             self.expect(r and r.get("ok"), "play a bundled Formula: ack ok", json.dumps(r))
-            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120)
+            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120, every=0.5)
             self.ok("play a Formula: on screen")
             r = await cmd("play", {"path": "/gifs/no such folder/none.gif"})
             self.expect(r and r.get("err") == "bad-arg", "play a GIF that is not there: bad-arg", json.dumps(r))
             r = await cmd("playlists")
             self.expect(r and r.get("ok") and isinstance((r.get("r") or {}).get("sets"), list), "playlists: a bounded list", json.dumps(r)[:300])
             await self.card_formulas(cmd)
+            await self.remote_add(cmd)
             await asyncio.sleep(1.2)
             r = await cmd("playlist", {"set": ""})
             self.expect(r and r.get("ok"), "playlist \"\" (the main list): ok", json.dumps(r))
@@ -781,6 +782,7 @@ class Lane:
         self.expect(st.get("uptime_secs", 0) >= 30, "after a restart: not before the hold", f"open at {st.get('uptime_secs')} s")
         cfg = (await self.http("GET", "/api/config"))[1] or {}
         self.expect(cfg.get("brightness") == 77, "a remote brightness survives a restart after the save window", f"brightness {cfg.get('brightness')}")
+        await self.remote_add_confirmed()
         st = await self.status()
         self.expect(not self.emu.failure and self.emu.resets <= self.emu.resets_allowed, "no panic, no unplanned restart", f"resets {self.emu.resets}")
         await self.dns_lookups()
@@ -1388,6 +1390,107 @@ class Lane:
         except urllib.error.HTTPError as e:
             return e.code
 
+    async def remote_add(self, cmd):
+        """`formula-add` (5.7): the gallery's largest Formula, rift-patrol
+        (10.8 KB of source, its host-compiled 4.4 KB .psb), added by remote in
+        parts; it lands, is listed, and plays on the VM only (its kernel never
+        built) until the restart's pass compiles it here (checked after the
+        restart, `remote_add_confirmed`). Red: a compiled file that fails
+        psb::verify (cut short, its hash signed) is refused with nothing
+        landed; the same source again is `done`, nothing written."""
+        import hashlib
+        src = (REPO / "opendmd-web" / "formulas" / "rift-patrol.psi").read_bytes()
+        psb = (Path(self.psb_dir) / "rift-patrol.psb").read_bytes()
+
+        async def add(src, psb, id_, stem="rift-patrol"):
+            args = {"id": id_, "stem": stem, "name": "Rift patrol", "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
+                    "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+            r = await cmd("formula-add", args)
+            off = ((r or {}).get("r") or {}).get("next")
+            stream = src + psb
+            while r and r.get("ok") and off is not None and off < len(stream):
+                await asyncio.sleep(0.3)
+                d = stream[off: off + odc.ADD_MAX_PART]
+                r = await cmd("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
+                off = ((r or {}).get("r") or {}).get("next", len(stream)) if r and r.get("ok") else None
+            # The checks wait for heap: the same add signed again tries them again (as the page does).
+            for _ in range(6):
+                if not (r and r.get("err") == "busy"):
+                    break
+                self.report["remote_add_busy"] = self.report.get("remote_add_busy", 0) + 1
+                await asyncio.sleep(5)
+                r = await cmd("formula-add", args)
+            return r
+
+        t0 = time.time()
+        r = await add(src, psb, 21)
+        self.expect(r and (r.get("r") or {}).get("done") is True and r["r"].get("stem") == "rift-patrol",
+                    f"formula-add: rift-patrol ({len(src)} + {len(psb)} B) in parts of {odc.ADD_MAX_PART}: landed", f"{json.dumps(r)} in {time.time() - t0:.0f} s")
+        code, got = await asyncio.to_thread(self._get_bytes, "/formulas/rift-patrol.psi")
+        self.expect(code == 200 and got == src, "...its source on the card byte for byte", f"{code}")
+        await asyncio.sleep(5.5)
+        r = await cmd("formulas")
+        fr = (r or {}).get("r") or {}
+        self.expect(["rift-patrol", "Rift patrol"] in (fr.get("card") or []) and odc.is_int(fr.get("abi")) and fr.get("psb") is True,
+                    "formulas: the added Formula listed; abi and psb said", json.dumps({k: fr.get(k) for k in ("abi", "psb")}))
+        await asyncio.sleep(1.2)
+        mark = self.emu.mark()
+        r = await cmd("play", {"path": "/formulas/rift-patrol.psi"})
+        self.expect(r and r.get("ok"), "play the added Formula: ok", json.dumps(r))
+        await asyncio.sleep(12)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
+        self.expect(vm and not kern, "the added Formula plays on the VM only: no kernel built for it (the JIT's gate refuses it first)", f"{len(vm)} VM lines, {len(kern)} kernels")
+        self.report["remote_add_s"] = round(time.time() - t0, 1)
+        # Red: the same source again: done, nothing written.
+        await asyncio.sleep(1.2)
+        r = await add(src, psb, 22)
+        self.expect(r and (r.get("r") or {}).get("stem") == "rift-patrol" and ((r.get("r") or {}).get("done")), "formula-add of the same source again: done as rift-patrol, nothing written", json.dumps(r))
+        # Red: a compiled file that does not load (cut short; the hash of what is sent signed).
+        await asyncio.sleep(1.2)
+        r = await add(src.replace(b"Rift patrol", b"Rift patrol B", 1), psb[:-40], 23, stem="rift-cut")
+        code, _ = await asyncio.to_thread(self._get_bytes, "/formulas/rift-cut.psi")
+        self.expect(r and r.get("err") == "bad-arg" and code == 404, "red: a compiled file that fails psb::verify: bad-arg, nothing landed", f"{json.dumps(r)}, GET {code}")
+        # A small one too (the offline lane's ramp), which the classic can compile at its next start.
+        await asyncio.sleep(1.2)
+        ramp = (REPO / "tools" / "emu" / "offline" / "ramp.psi").read_bytes()
+        r = await add(ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 24, stem="remote-ramp")
+        self.expect(r and (r.get("r") or {}).get("stem") == "remote-ramp", "formula-add: a small Formula too", json.dumps(r))
+        await self.http("PUT", "/api/config", {"set": ""})
+
+    async def _plays(self, path):
+        """Play `path` on the LAN; (kernels built, unconfirmed VM lines) in the 12 s after."""
+        mark = self.emu.mark()
+        code, _ = await self.http("POST", "/api/play", {"path": path})
+        await asyncio.sleep(12)
+        kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        return code, len(kern), len(vm)
+
+    async def remote_add_confirmed(self):
+        """After a restart: the pass compiled the small added Formula here
+        (confirmed: it may use the JIT); the gallery's largest needs more heap
+        to compile than the classic has (~147 KB), so it stays unconfirmed, on
+        the VM only."""
+        conf_rx = re.compile(r"formulas: (\d+) added by remote compiled here: confirmed")
+        short_rx = re.compile(r"formulas: short of memory for /formulas/rift-patrol\.psi \(the least needs (\d+) B free")
+        # (The mount pass tries the large one's compile first: it ends some 2 emulated minutes in.)
+        async def pass_done():
+            return bool(self.emu.find(conf_rx)) and bool(self.emu.find(short_rx))
+        try:
+            await self.wait("the mount pass's verdicts on the remote adds", pass_done, 600, every=3)
+        except Fail:
+            pass
+        hits, short = self.emu.find(conf_rx), self.emu.find(short_rx)
+        self.expect(bool(hits), "after the restart: the small added Formula compiled here, confirmed", f"{len(hits)}")
+        code, kern, vm = await self._plays("/formulas/remote-ramp.psi")
+        self.expect(code == 200 and kern and not vm, "...and it now may use the JIT (a kernel built)", f"{code}, {kern} kernels, {vm} VM lines")
+        self.report["rift_patrol_compile_need"] = int(short[-1][1].group(1)) if short else None
+        await asyncio.sleep(1.2)
+        code, kern, vm = await self._plays("/formulas/rift-patrol.psi")
+        self.expect(code == 200 and vm and not kern and short, "the largest, which the classic cannot compile (short of memory), stays on the VM only",
+                    f"{code}, {kern} kernels, {vm} VM lines; compile needs {self.report['rift_patrol_compile_need']} B")
+
     async def card_formulas(self, cmd):
         """`formulas`: the built-in Formulas and the card's that can play.
         Put on the card over the LAN: one ready (the host's `psi build`),
@@ -1433,12 +1536,12 @@ class Lane:
             await asyncio.sleep(1.2)
             r = await cmd("play", {"path": "/formulas/lane-ramp.psi"})
             self.expect(r and r.get("ok"), "play a card Formula from the list: ack ok", json.dumps(r))
-            await self.wait("the card Formula on screen", lambda: self._playing("/formulas/lane-ramp.psi"), 120)
+            await self.wait("the card Formula on screen", lambda: self._playing("/formulas/lane-ramp.psi"), 120, every=0.5)
             self.ok("play a card Formula: on screen")
             await asyncio.sleep(1.2)
             r = await cmd("play", {"path": "@formula:starfield"})
             self.expect(r and r.get("ok"), "back to a built-in Formula", json.dumps(r))
-            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120)
+            await self.wait("the Formula on screen", lambda: self._playing("@formula:starfield"), 120, every=0.5)
         finally:
             for path in files:
                 await self.http("DELETE", "/api/files" + urllib.parse.quote(path))

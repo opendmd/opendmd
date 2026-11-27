@@ -93,6 +93,9 @@ pub struct PsiFx {
     drawn: u32,
     /// This frame is raced ([`set_beam`]): decided in `frame_inner`.
     racing: bool,
+    /// Never on the JIT: a compiled Formula a remote controller delivered
+    /// that the panel's own compiler has not made again ([`unconfirmed`]).
+    vm_only: bool,
     /// The JIT's kernel for the pixel stage (the ESP32 with `psi-jit`).
     #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
     jit: jit::Jit,
@@ -1162,6 +1165,7 @@ impl PsiFx {
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
         let (prog, est, delay) = compile(q)?;
         clock_check(&prog)?;
+        fx.vm_only = unconfirmed(q.bytes());
         fx.prog = prog;
         fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
@@ -1211,6 +1215,7 @@ impl PsiFx {
         let q = resolve(q)?;
         let (prog, est, delay) = compile(&q)?;
         clock_check(&prog)?;
+        self.vm_only = unconfirmed(q.bytes());
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
         self.ink = canvas_for(&prog, &mut self.ink)?;
@@ -1920,6 +1925,8 @@ pub struct FormulaLook {
     /// take, a new formula or a new file (a cold flash cache, the file's
     /// open in the same tick).
     cold: u8,
+    /// Never on the JIT ([`unconfirmed`]), as [`PsiFx`]'s.
+    vm_only: bool,
     /// The JIT's kernel for its pixel stage (the ESP32 with `psi-jit`).
     #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
     jit: jit::Jit,
@@ -1992,6 +1999,7 @@ impl FormulaLook {
             fresh: true,
             ink_tried: None,
             cold: Governor::SKIP,
+            vm_only: unconfirmed(q.bytes()),
             #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
             jit: jit::Jit::default(),
         };
@@ -2088,6 +2096,7 @@ impl FormulaLook {
     pub fn retune(&mut self, path: &str, how: Retune) -> Result<(), psi::Error> {
         let q = resolve(Self::query_of(path))?;
         let (prog, est) = Self::compile(&q)?;
+        self.vm_only = unconfirmed(q.bytes());
         self.prog = prog;
         // Another program: its kernel (if any) is made once the edits pause.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -2322,7 +2331,7 @@ impl FormulaLook {
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let trial = self.jit.trialing();
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-        let drawn = match self.jit.kernel_for(1, &self.prog) {
+        let drawn = match self.jit.kernel_for(1, &self.prog, self.vm_only) {
             // (False when the VM drew it: the inputs out of range.)
             Some(k) => k.render(
                 &self.prog,
@@ -2438,6 +2447,59 @@ impl std::fmt::Debug for FormulaLook {
     }
 }
 
+/// Compiled Formulas a remote controller delivered (Connect's
+/// `formula-add`) that the panel's own compiler has not yet made again
+/// from their source: the CRC-32 of each one's bytes. Such a program is
+/// checked like any other (`psb::verify`) and drawn by the bounds-checked
+/// VM, never handed to the JIT, until its next start's mount pass compiles
+/// the source and the firmware takes it off this list. (A CRC is enough:
+/// the bytes looked up are the bytes delivered; a collision only ever puts
+/// a program on the VM.)
+static UNCONFIRMED: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// The list, whole (the firmware, from `/formulas/.remote` at boot).
+pub fn set_unconfirmed(crcs: Vec<u32>) {
+    *UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner()) = crcs;
+}
+
+/// One more (a remote add just landed).
+pub fn add_unconfirmed(crc: u32) {
+    let mut l = UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
+    if !l.contains(&crc) {
+        l.push(crc);
+    }
+}
+
+/// Is `psb` a program the panel has not compiled itself? (No CRC is made
+/// while the list is empty, as it nearly always is.)
+pub fn unconfirmed(psb: &[u8]) -> bool {
+    let l = UNCONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
+    !l.is_empty() && l.contains(&crate::settings_file::crc32(psb))
+}
+
+/// Why the VM draws a program, before anything else is asked: one not
+/// compiled by the panel itself ([`unconfirmed`]) never reaches the JIT.
+pub const UNCONFIRMED_WHY: &str = "added by remote: on the VM until the panel compiles it";
+
+/// The JIT's first gate (its only caller is the kernel's build path,
+/// `jit::Jit::kernel_for`, which asks it before anything else).
+pub fn jit_refusal(vm_only: bool) -> Option<&'static str> {
+    vm_only.then_some(UNCONFIRMED_WHY)
+}
+
+/// Whether the program this Formula draws is held to the VM.
+impl PsiFx {
+    pub fn vm_only(&self) -> bool {
+        self.vm_only
+    }
+}
+
+impl FormulaLook {
+    pub fn vm_only(&self) -> bool {
+        self.vm_only
+    }
+}
+
 /// The kill switch (`/api/config` `formula_jit`): off, every formula plays
 /// on the VM (a kernel held is let go at its next frame).
 static JIT_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -2533,7 +2595,17 @@ mod jit {
         /// The kernel, if it draws this frame (a trial's frames kernel and
         /// VM in turn). Not made yet: made now, and the VM draws this frame
         /// (the check reads its bytes).
-        pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Prog) -> Option<&mut psi::jit::Kernel> {
+        pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Prog, vm_only: bool) -> Option<&mut psi::jit::Kernel> {
+            // First, before any build: a program the panel has not compiled
+            // itself never reaches the JIT (`super::jit_refusal`).
+            if let Some(why) = super::jit_refusal(vm_only) {
+                if self.why != Some(why) || self.kernel.is_some() {
+                    log::info!("formula: on the VM ({why})");
+                    *self = Jit { why: Some(why), ..Jit::default() };
+                    set_jit_status(which, false, why, 0);
+                }
+                return None;
+            }
             if !super::jit_allowed() {
                 if self.why != Some(OFF) {
                     *self = Jit { why: Some(OFF), ..Jit::default() };
@@ -2711,7 +2783,7 @@ mod jit {
             if rate && self.held.is_none() {
                 return false;
             }
-            let Some(k) = self.jit.kernel_for(0, &self.prog) else {
+            let Some(k) = self.jit.kernel_for(0, &self.prog, self.vm_only) else {
                 return false;
             };
             // (Its slow rows are already brought up to date: `render`.)
@@ -2845,6 +2917,48 @@ mod alloc_box {
 
 #[cfg(test)]
 mod tests {
+
+    /// A remotely delivered program (its CRC on the unconfirmed list) is
+    /// held to the VM as an effect and as a look, opened and retuned; any
+    /// other is not. (The tests share the list: each uses its own bytes.)
+    #[test]
+    fn unconfirmed_programs_never_reach_the_jit() {
+        let remote = psi::build("name \"Remote\"\ngray(x * 0.37 + t)").unwrap();
+        let local = psi::build("name \"Local\"\ngray(x * 0.41 + t)").unwrap();
+        assert!(!unconfirmed(&remote));
+        add_unconfirmed(crate::settings_file::crc32(&remote));
+        assert!(unconfirmed(&remote) && !unconfirmed(&local));
+        let fx = PsiFx::from_bytes(&remote, "").unwrap();
+        assert!(fx.vm_only(), "an effect of the remote bytes");
+        let mut fx2 = PsiFx::from_bytes(&local, "").unwrap();
+        assert!(!fx2.vm_only());
+        fx2.retune_from(&path_of(&remote, "")[crate::synth::FORMULA.len()..], Retune::Edit).unwrap();
+        assert!(fx2.vm_only(), "retuned onto the remote bytes");
+        let remote_look = psi::build("name \"Remote look\"\nlook screen 40\ngray(x * 0.37 + t)").unwrap();
+        add_unconfirmed(crate::settings_file::crc32(&remote_look));
+        let look = FormulaLook::from_bytes(&remote_look, "").unwrap();
+        assert!(look.vm_only(), "a look of remote bytes");
+        assert_eq!(jit_refusal(true), Some(UNCONFIRMED_WHY));
+        assert_eq!(jit_refusal(false), None);
+    }
+
+    /// The code path, not only the behaviour: the JIT's one build call in
+    /// this module sits in `kernel_for` after the unconfirmed gate, and
+    /// both callers of `kernel_for` pass their `vm_only`.
+    #[test]
+    fn the_jits_only_build_is_behind_the_unconfirmed_gate() {
+        let src = include_str!("fx_psi.rs");
+        let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        let emit = concat!("psi::jit::", "emit(");
+        assert_eq!(code.matches(emit).count(), 1, "one JIT build in fx_psi");
+        let gate = concat!("super::jit_refusal", "(vm_only)");
+        let k = code.find(concat!("fn kernel_", "for(")).unwrap();
+        let g = code[k..].find(gate).map(|x| x + k).expect("the gate in kernel_for");
+        let e = code.find(emit).unwrap();
+        assert!(k < g && g < e, "the gate before the build");
+        assert_eq!(code.matches(concat!(".kernel_", "for(")).count(), 2);
+        assert_eq!(code.matches(concat!(", self.vm_", "only)")).count(), 2, "both callers pass vm_only");
+    }
     use super::*;
     use crate::fx::Fx;
 

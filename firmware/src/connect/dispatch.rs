@@ -66,6 +66,13 @@ impl Client {
             Remote::Playlist { set } => self.config(k, None, Some(set)),
             Remote::Playlists => self.playlists(),
             Remote::Formulas { after } => self.formulas(after),
+            #[cfg(feature = "psi")]
+            Remote::FormulaAdd(args) => self.formula_add(k, args),
+            #[cfg(feature = "psi")]
+            Remote::FormulaPart { id, off, data } => self.formula_part(k, id, off, data),
+            // (A build without Formulas plays none: nothing to add.)
+            #[cfg(not(feature = "psi"))]
+            Remote::FormulaAdd(_) | Remote::FormulaPart { .. } => Err(Refusal::NotAllowed),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
                 self.last_use.iter().find(|(x, _)| x == k).map(|(_, at)| at.elapsed().as_secs())
             }))),
@@ -241,6 +248,8 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn remove(&mut self, k: [u8; 8]) -> Done {
+        #[cfg(feature = "psi")]
+        self.formula_forget(&k);
         change(
             &self.link.cmd,
             move |s| {
@@ -346,6 +355,12 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
 #[optimize(size)]
 #[inline(never)]
 fn formulas_page(card: bool, after: Option<&str>) -> (String, Option<String>) {
+    // (A build with Formulas takes adds: the compiled format it plays, and
+    // the controller's compiled file wanted with the source. Every board
+    // asks for it today: none compiles while Connect is open.)
+    #[cfg(feature = "psi")]
+    let mut out = proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI, true);
+    #[cfg(not(feature = "psi"))]
     let mut out = proto::FormulaList::new(card);
     #[cfg(feature = "psi")]
     if after.is_none() {

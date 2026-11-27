@@ -88,6 +88,14 @@ const CHUNK: usize = 2 * 1024;
 /// Compiled files the player refused (`engine::set_formula_refused`), to be
 /// prepared again: the card's list of them (hashes of their paths).
 const REDO_FILE: &str = ".psb-redo";
+/// Compiled files a remote controller delivered (Connect's
+/// `formula-add`) that this panel has not compiled again itself: one line
+/// each, the CRC-32 of the file's bytes and the [`key`] of its Formula, in
+/// hex. Loaded at boot before anything plays (`fx_psi::set_unconfirmed`:
+/// those programs never reach the JIT); each Formula is on [`REDO_FILE`]
+/// too, so the next start's pass compiles its source, and its line goes
+/// once that compile resolved it.
+const REMOTE_FILE: &str = ".remote";
 /// The mark written before a compile: `PSB`, ABI 0, then the source's
 /// size and FAT date (date << 16 | time), little-endian.
 const MARK: &[u8; 4] = b"PSB\0";
@@ -860,6 +868,42 @@ impl Drop for Writing {
 }
 
 /// The card's list of refused compiled files, as keys.
+/// `.remote`'s lines: (crc, key).
+fn remote_lines(path: &str) -> Vec<(u32, u32)> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (c, k) = l.trim().split_once(' ')?;
+            Some((u32::from_str_radix(c, 16).ok()?, u32::from_str_radix(k, 16).ok()?))
+        })
+        .collect()
+}
+
+/// At boot, before the card's first Formula may play (the start-up show
+/// included): the unconfirmed list from [`REMOTE_FILE`].
+pub fn load_unconfirmed() {
+    let lines = remote_lines(&format!("{}/formulas/{REMOTE_FILE}", config::SD_MOUNT));
+    if !lines.is_empty() {
+        log::info!("formulas: {} added by remote, on the VM until compiled here", lines.len());
+    }
+    opendmd_core::fx_psi::set_unconfirmed(lines.into_iter().map(|(c, _)| c).collect());
+}
+
+/// A Formula a remote controller added (`/formulas/<stem>`, its compiled
+/// bytes' CRC): on [`REMOTE_FILE`] and [`REDO_FILE`] (the next start
+/// compiles it here), and on the unconfirmed list now.
+#[cfg(feature = "connect")]
+pub fn note_remote(stem: &str, crc: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    let k = key(&format!("/formulas/{stem}"));
+    let dir = format!("{}/formulas", config::SD_MOUNT);
+    opendmd_core::fx_psi::add_unconfirmed(crc);
+    let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REMOTE_FILE}"))?.write_all(format!("{crc:08x} {k:08x}\n").as_bytes())?;
+    fs::OpenOptions::new().create(true).append(true).open(format!("{dir}/{REDO_FILE}"))?.write_all(format!("{k:08x}\n").as_bytes())
+}
+
 fn redo_keys(path: &str) -> Vec<u32> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -891,12 +935,25 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let sources = entries.iter().filter(|e| stem(&e.name, ".psi").is_some()).take(MAX_FILES);
     let abi_path = format!("{dir}/{ABI_FILE}");
     let redo_path = format!("{dir}/{REDO_FILE}");
-    let redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
+    let mut redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         redo_keys(&redo_path)
     } else {
         Vec::new()
     };
+    // Remote adds are compiled here whatever their dates say (and whether
+    // or not their line on the redo list survived).
+    let remote: Vec<(u32, u32)> = if entries.iter().any(|e| e.name == REMOTE_FILE) {
+        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        remote_lines(&format!("{dir}/{REMOTE_FILE}"))
+    } else {
+        Vec::new()
+    };
+    for &(_, k) in &remote {
+        if !redo.contains(&k) {
+            redo.push(k);
+        }
+    }
     // The refused ones dealt with (prepared, or found not to compile).
     let mut redone: Vec<u32> = Vec::new();
     let abi_same = redo.is_empty()
@@ -1012,6 +1069,27 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             let text: String = now.iter().map(|k| format!("{k:08x}\n")).collect();
             let _ = fs::write(&redo_path, text);
         }
+    }
+    // Remote adds compiled here now are confirmed: off the unconfirmed
+    // list, and the JIT may draw them. (Only a compile confirms one: a line
+    // whose source is gone stays, its compiled file never on the JIT.)
+    if !remote.is_empty() {
+        let remote_path = format!("{dir}/{REMOTE_FILE}");
+        let kept: Vec<(u32, u32)> = remote.iter().copied().filter(|(_, k)| !redone.contains(k)).collect();
+        if kept.len() != remote.len() {
+            log::info!("formulas: {} added by remote compiled here: confirmed", remote.len() - kept.len());
+            if kept.is_empty() {
+                let _ = fs::remove_file(&remote_path);
+            } else {
+                let _ = fs::write(&remote_path, kept.iter().map(|(c, k)| format!("{c:08x} {k:08x}\n")).collect::<String>());
+            }
+            opendmd_core::fx_psi::set_unconfirmed(kept.into_iter().map(|(c, _)| c).collect());
+        }
+    }
+    // A remote add's part files left by a restart mid-add (the boot's pass
+    // only: a retry's must not take an add under way).
+    for e in entries.iter().filter(|e| opts.wait && e.name.starts_with(".add-") && e.name.ends_with(".part")) {
+        let _ = fs::remove_file(format!("{dir}/{}", e.name));
     }
     (c, left)
 }

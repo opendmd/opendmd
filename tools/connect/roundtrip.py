@@ -22,6 +22,7 @@ case; `ROUNDTRIP PASS` at the end.
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import sys
 
@@ -298,6 +299,57 @@ async def main():
         r3 = await a.command("formulas", {"after": nxt})
         ok(r1.get("ok") and r2.get("err") == "rate" and r3 and r3.get("ok"), "formulas' rate: a second listing within 5 s is rate; the first's next page is free")
         panel.formulas_every = 0
+        # --- Formulas added by remote (5.7) ------------------------------------------
+        import hashlib
+
+        async def add(src: bytes, psb: bytes, stem="rift-patrol", name="Rift patrol", id_=11, parts=True):
+            args = {"id": id_, "stem": stem, "name": name, "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
+                    "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+            await asyncio.sleep(0.26)
+            r = await a.command("formula-add", args)
+            if not parts or not r or not r.get("ok") or (r.get("r") or {}).get("done"):
+                return r
+            stream, off = src + psb, (r["r"] or {}).get("next", 0)
+            while off < len(stream):
+                d = stream[off: off + odc.ADD_MAX_PART]
+                await asyncio.sleep(0.26)  # (the key's 4 commands a second)
+                r = await a.command("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
+                if not r or not r.get("ok"):
+                    return r
+                off += len(d)
+            return r
+
+        panel.card_formulas = []
+        src = b'name "Rift patrol"\n' + b"-- " + b"x" * 1200 + b"\ngray(x)\n"
+        psb = b"PSB" + bytes([panel.abi]) + b"\x00\x0bRift patrol" + b"\x01" * 300
+        r = await add(src, psb)
+        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and panel.files["rift-patrol"] == (src, psb) and "rift-patrol" in panel.unconfirmed,
+           f"formula-add: {len(src) + len(psb)} B in parts of {odc.ADD_MAX_PART}, landed as rift-patrol, unconfirmed ({r})")
+        await asyncio.sleep(0.3)
+        fr = ((await a.command("formulas")) or {}).get("r") or {}
+        ok(fr.get("abi") == panel.abi and fr.get("psb") is True and ["rift-patrol", "Rift patrol"] in (fr.get("card") or []), "formulas: abi and psb said, the added one listed")
+        r = await add(src, psb, id_=12)
+        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and list(panel.files) == ["rift-patrol"], "formula-add of the same source again: done, the same stem, nothing written")
+        src2 = src.replace(b"gray(x)", b"gray(y)")
+        r = await add(src2, psb, id_=13)
+        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol-2"} and panel.files["rift-patrol"][0] == src, "formula-add of another source under a taken stem: the next free stem, the first untouched")
+        bad = b"PSB" + bytes([panel.abi + 1]) + psb[4:]
+        r = await add(src.replace(b"gray(x)", b"gray(z)"), bad, id_=14)
+        ok(r and r.get("err") == "bad-arg" and len(panel.files) == 2, "red: a compiled file the panel cannot take: bad-arg, nothing landed")
+        r = await add(src.replace(b"gray(x)", b"gray(w)"), psb, id_=15, parts=False)
+        await asyncio.sleep(0.3)
+        r1 = await a.command("formula-part", {"id": 15, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
+        await asyncio.sleep(0.3)
+        r2 = await a.command("formula-part", {"id": 15, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
+        ok(r1.get("ok") and r2.get("err") == "bad-arg", f"red: a part again (a replay past the counter): not at next, bad-arg ({r}, {r1}, {r2})")
+        for bad_args in ({"id": 16, "stem": "../x"}, {"id": 16, "stem": "Rift"}):
+            await asyncio.sleep(0.3)
+            r = await a.command("formula-add", {**{"name": "x", "src_size": 1, "src_sha256": "00" * 32, "psb_size": 6, "psb_sha256": "00" * 32}, **bad_args})
+            ok(r and r.get("err") == "bad-arg", f"red: formula-add {bad_args['stem']!r}: bad-arg")
+        panel.add_day = [(time.monotonic(), 0)] * odc.ADD_QUOTA_ADDS
+        r = await add(b"other", psb, stem="other", id_=17, parts=False)
+        ok(r and r.get("err") == "quota", "formula-add past the day's 16: quota")
+        panel.add_day = []
         panel.card_formulas = [("my-road", "My road"), ("den-clock", "Den clock")]
         panel.formulas_cmd = False
         r = await a.command("formulas")

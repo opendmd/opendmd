@@ -299,7 +299,9 @@ for anything else. At compile time no name in it may contain any of
 | `brightness` | `v` | an integer, 0 to the panel's `max_brightness` | `ApplyConfig` |
 | `playlist` | `set` | `""` (the main list) or one name of at most 64 bytes: no `/`, `\`, `..`, control character, leading `.` or trailing `.` or space | `ApplyConfig`; `ack` may say `pending` |
 | `playlists` | none | | `r`: the `/sets` listing, bounded to fit the panel's 2,048-byte text limit |
-| `formulas` | none | | `r`: the Formulas this panel can play by reference, built in and on its card, bounded to fit the panel's 2,048-byte text limit (5.6) |
+| `formulas` | `after` (optional) | a stem | `r`: the Formulas this panel can play by reference, built in and on its card, a page at a time within the panel's 2,048-byte text limit (5.6) |
+| `formula-add` | `id, stem, name, src_size, src_sha256, psb_size, psb_sha256` | 5.7 | an add, its bytes to follow |
+| `formula-part` | `id, off, data` | 5.7 | the add's bytes; the last one lands it |
 | `send` | `id, name, size, sha256, copy_size, copy_sha256, play` | section 8 | a transfer |
 | `send-cancel` | `id` | | |
 | `controllers` | none | | `r`: `[{k, label, f, added, added_by, last_s}]` |
@@ -318,9 +320,14 @@ other member of `a` is `bad-arg`, so a later controller can tell a panel
 that lacks a later argument.
 
 ```json
-{"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
-{"builtin":[],"card":[["saved-023","Saved"],["saved-024","Saved"]],"more":true,"next":"saved-024"}
+{"abi":3,"psb":true,"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
+{"abi":3,"psb":true,"builtin":[],"card":[["saved-023","Saved"],["saved-024","Saved"]],"more":true,"next":"saved-024"}
 ```
+
+- `abi` and `psb` (a panel that takes `formula-add`, 5.7): the compiled
+  format it plays, and whether it wants the controller's compiled file
+  with the source (true on every board today; a board able to compile
+  while Connect is open would say false and compile the source itself).
 
 - `builtin`: the Formulas built into the firmware, `[stem, name]` each,
   played as `@formula:<stem>`; `name` from its `name "…"` line, else
@@ -357,6 +364,81 @@ that lacks a later argument.
   compiled file costs no lookup), and one read of at most 261 bytes of the
   header of each one looked at; nothing is written, and the panel keeps
   playing. No list is kept between requests.
+
+### 5.7 Adding a Formula: `formula-add`, `formula-part`
+
+A controller adds a Formula to the panel's card (the gallery's "Add to
+panel"): its source and the compiled file the controller made of it for
+the panel's `abi` (5.6), as `/formulas/<stem>.psi` and `<stem>.psb`.
+
+1. `formula-add {id, stem, name, src_size, src_sha256, psb_size,
+   psb_sha256}`: `id` a non-zero 32-bit number; `stem` the web app's save
+   rule, `[a-z0-9-]`, 1 to 40, a letter or digit first; `name` what the
+   source's `name` line says (at most 60 characters after cleaning);
+   `src_size` 1 to 16,384 and `psb_size` 6 to 8,192 (more: `too-big`);
+   both hashes hex. The panel looks for where it lands: the stem, else
+   `<stem>-2` … `<stem>-9` (a stem is taken when its `.psi` or its `.psb`
+   is there). **A taken stem whose source has the signed `src_sha256` is
+   the same Formula: the answer is `r {done: true, stem}` and nothing is
+   written.** None free: `quota`. Otherwise `r {next: 0}`. Refusals:
+   `no-card`, `busy` (a file transfer on the card; another key's add held,
+   10 minutes after its last progress), `quota` (16 adds or 256 KB in a
+   rolling day per panel), `bad-arg`. The same `formula-add` signed again
+   (a reconnect) answers `r {next}` from where it was, or `done` again if
+   it landed; the same key's other add replaces a stalled one.
+2. `formula-part {id, off, data}`: `data` base64url (no padding, canonical)
+   of 1 to 384 bytes (512 characters: the largest such body stays within
+   700 bytes), strictly at the panel's `next`; the stream is the source then
+   the compiled file. Each part's `ack` is `r {next}`. A part out of order
+   (a part sent again, a replay past the counter) is `bad-arg` and nothing
+   is written; another key's is `not-allowed`.
+3. On the last part the panel checks both SHA-256s, that the source is
+   UTF-8 with no NUL, that the compiled file is `PSB` with this player's
+   ABI and that every program in it loads and passes `psb::verify` (behind
+   a heap gate: the compiled bytes, one program and 20 KB for the rest;
+   below it `busy`, the bytes kept for the same `formula-add` signed
+   again); then renames its two part files into
+   place (a rename never replaces a file), dates the `.psb` older than any
+   source, and answers `r {done: true, stem}` (the stem it landed under).
+   A check that fails is `bad-arg`, and nothing is kept.
+
+**The one exception to "no program from a remote controller".** Every other
+path keeps a remote controller's programs off the panel: `play` takes no
+inline Formula (`@formula?psb=…`) and never `~sent`, so a compromised page
+or a hostile relay can choose among programs the panel already has, never
+supply one. `formula-add` is the exception, and what bounds it is:
+
+- **checked, then never on the JIT until the panel's own compiler made it:**
+  the compiled file is loaded and verified like any program from the
+  network (`psb::verify`), and until the next start's mount pass has
+  compiled the source on the panel, the program is drawn only by the
+  bounds-checked VM: its CRC-32 is on the panel's unconfirmed list
+  (`/formulas/.remote`, loaded before anything plays at boot), and the
+  JIT's build path asks that list before anything else
+  (`fx_psi::jit_refusal`). A source that does not compile there is marked
+  as not compiling and never plays again;
+- **create-new only:** two files under `/formulas/`, their names from the
+  stem rule (no separator, no dot), renamed into place where nothing is;
+  nothing is overwritten or deleted, and a different source under a taken
+  stem gets the next free stem;
+- **sizes and counts:** 16 KB of source, 8 KB compiled, 384 bytes a part,
+  16 adds and 256 KB a rolling day, one add at a time;
+- **signed bytes:** every part is a signed command under the session's
+  counter, and both hashes are in the signed `formula-add`: a relay can
+  drop or delay parts, never alter or replay one.
+
+Inline and `~sent` play stay excluded: they would hand the panel a
+program with none of the above (no record, no recompile, nothing on the
+card to check later) for every linked panel at once.
+
+On the VM a heavy Formula costs about a third more than on the JIT (the
+gallery's largest, rift-patrol: ~9.3 against ~7.0 ms a frame by the cost
+model; 4.7 against 3.4 ms in the emulator), well inside a frame. A Formula
+whose compile needs more heap than the panel ever has stays unconfirmed,
+on the VM, for good: on the classic ESP32 that is the gallery's largest
+(rift-patrol's compile needs ~147 KB; the classic has ~93 KB at its mount
+pass), while small ones are compiled at the next start and then may use
+the JIT.
 
 ## 6. Pairing
 
@@ -521,6 +603,8 @@ server can show a controller a false state, never change the panel's.
 | Pairing window | 5 minutes, one use, 3 tries |
 | Guests | 2 at a time, 60 s each |
 | Guest slot `g` | assigned 1 to 255; read 0 to 2^31 - 1 (to 255 up to 1.1.0-beta.4) |
+| A Formula added by remote | 16 KB of source, 8 KB compiled, 384 B a part; 16 adds and 256 KB a day |
+| `formulas` | a listing's first page one in 5 s per panel; 8 pages a listing |
 
 ## 10. Test vectors and mocks
 
@@ -528,7 +612,7 @@ server can show a controller a false state, never change the panel's.
 made from fixed strings (never use one for anything real) and, for each,
 what every implementation must compute: the id and its tag, the register
 body, the key blob and `keys` message, attach signatures, pairing and
-invite MACs (with a label that needs escaping, and one rewritten), the confirm code, version negotiation, acks, and 82 command
+invite MACs (with a label that needs escaping, and one rewritten), the confirm code, version negotiation, acks, and 88 command
 frames, each with what the panel answers (`expect`) and what the server's
 pre-check does (`server`). The cases cover the red list's single-frame
 attacks: replays, unsigned, tampered and re-serialised frames, wrong

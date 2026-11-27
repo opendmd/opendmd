@@ -37,7 +37,7 @@ def main():
     for name, mine in [("max_text_in", odc.MAX_TEXT_IN), ("max_text_out", odc.MAX_TEXT_OUT), ("max_body", odc.MAX_BODY), ("command_head", odc.COMMAND_HEAD), ("max_chunk", odc.MAX_CHUNK), ("max_file", odc.MAX_FILE), ("max_keys", odc.MAX_KEYS), ("max_label_bytes", odc.MAX_LABEL), ("max_n", odc.MAX_SAFE), ("rate_per_key", odc.RATE_PER_KEY), ("rate_per_panel", odc.RATE_PER_PANEL)]:
         check(lim[name] == mine, f"limit {name}")
     for c in v.get("formula_lists", []):
-        lst = odc.FormulaList(c["card"])
+        lst = odc.FormulaList(c["card"], 3 if c.get("add") else None)
         nb = nc = 0
         for stem, name in c["builtin"]:
             if not lst.builtin(stem, name):

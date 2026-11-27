@@ -52,6 +52,8 @@
 pub mod api;
 mod client;
 mod dispatch;
+#[cfg(feature = "psi")]
+mod fadd;
 #[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 mod measure;
 mod pair;
