@@ -84,11 +84,24 @@ pub fn collect(dir: &Path, skip: &[&Path]) -> Result<Vec<PackFile>> {
 
 /// The site's own files, published with its demo, never packed: the web
 /// demo's player, the editor's What costs most and Tidy up and their wasm
-/// module, the Studio's GIF writers (a folder: everything under it). The
-/// site's repository builds them and lays them over its copy of the web
-/// app; none is in this tree's www/. Listed so that a stray copy is never
-/// packed either.
-pub const SITE_ONLY: &[&str] = &["js/demo.js", "js/fcost.js", "pkg-psi-lang/", "pkg-studio/"];
+/// module, the Studio's GIF writers (a folder: everything under it) — the
+/// site's repository builds those and lays them over its copy of the web
+/// app; none is in this tree's www/ — and the converter the site's
+/// /create/ page mounts from this tree (Create Art's view and its web
+/// sources: `js/studio.js`, `studio.css`, `js/find.js`, `find.css`), which
+/// the panel's own web app no longer has. `make web` stages the panel's
+/// copy without any of them (tools/www-panel.py reads this list); listed
+/// here too so that a stray copy is never packed either.
+pub const SITE_ONLY: &[&str] = &[
+    "js/demo.js",
+    "js/fcost.js",
+    "pkg-psi-lang/",
+    "pkg-studio/",
+    "js/studio.js",
+    "studio.css",
+    "js/find.js",
+    "find.css",
+];
 
 pub fn pack(
     dir: &Path,

@@ -3,7 +3,7 @@
 # ///
 """Write the web app's build id: `<www>/js/build.js`, `export const V = '<id>';`.
 
-    uv run tools/www-build-id.py opendmd-web/www
+    uv run tools/www-build-id.py opendmd-web/www [opendmd-web/pkg-art-panel]
 
 The id is the first 16 hex digits of a SHA-256 over every file wasm-pack
 wrote (pkg/, pkg-art/, pkg-psi/: their paths and bytes, `.gz` and dotfiles
@@ -14,6 +14,11 @@ hash, and a browser that kept an earlier build's module (beta.13 served
 them with `max-age=3600`) must never run it with this build's scripts
 (opendmd-notes docs/notes/web-app.md "Module addresses"). `make web` runs this; the file
 is gitignored, served `no-cache` like every script.
+
+The second argument, when given, is the panel's own pkg-art (the art module
+built without its site-only Studio parts, which `make web` packs in place
+of www/pkg-art: tools/www-panel.py): hashed after the three, as
+`pkg-art-panel/...`, so the panel's id changes whenever its module does.
 """
 import hashlib
 import sys
@@ -24,14 +29,15 @@ from pathlib import Path
 DIRS = ("pkg", "pkg-art", "pkg-psi")
 
 
-def build_id(www: Path) -> str:
+def build_id(www: Path, panel_art: Path | None = None) -> str:
     h = hashlib.sha256()
     n = 0
-    for d in DIRS:
-        for p in sorted((www / d).rglob("*")):
+    dirs = [(d, www / d) for d in DIRS] + ([("pkg-art-panel", panel_art)] if panel_art else [])
+    for d, base in dirs:
+        for p in sorted(base.rglob("*")):
             if not p.is_file() or p.suffix == ".gz" or p.name.startswith("."):
                 continue
-            rel = p.relative_to(www).as_posix().encode()
+            rel = (d + "/" + p.relative_to(base).as_posix()).encode()
             data = p.read_bytes()
             h.update(len(rel).to_bytes(4, "little") + rel + len(data).to_bytes(8, "little") + data)
             n += 1
@@ -40,8 +46,8 @@ def build_id(www: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def write(www: Path) -> str:
-    v = build_id(www)
+def write(www: Path, panel_art: Path | None = None) -> str:
+    v = build_id(www, panel_art)
     (www / "js" / "build.js").write_text(
         "// Written by `make web` (tools/www-build-id.py): this build's id, on every\n"
         "// wasm module's address (js/wasm.js). Not committed.\n"
@@ -50,6 +56,6 @@ def write(www: Path) -> str:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise SystemExit(__doc__)
-    print(f"build id {write(Path(sys.argv[1]))}")
+    print(f"build id {write(Path(sys.argv[1]), Path(sys.argv[2]) if len(sys.argv) == 3 else None)}")

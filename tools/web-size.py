@@ -4,7 +4,7 @@
 # ///
 """Print the web app's size, raw and gzipped, and enforce the budget.
 
-    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 786432 --pack-spare 65536] [--unminified]
+    uv run tools/web-size.py opendmd-web/www-panel [--pack opendmd-web/www.pack --pack-limit 786432 --pack-spare 65536] [--unminified]
 
 It measures what ships: `make web`'s output directory (tools/web-minify.py:
 the sources with every script and stylesheet, wasm-pack's glue included,
@@ -29,23 +29,31 @@ which had ~0.6 KB left; 48 KB until the Library's redesign — the Details
 panel, the category tabs, Make art as a view —, +8 KB being ~25 ms of a
 page load from flash; 56 KB until display names and the platform chips,
 2026-10-21, after the panel test and web-ux merges; 57 KB until the UX
-refresh, 2026-10-22, which treats 60 KB as a ceiling). The Studio ("Make art") is loaded only when it
-opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
-`js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
-above. Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
+refresh, 2026-10-22, which treats 60 KB as a ceiling). The art module
+(`pkg-art/`: Add GIFs' fitting, the prepared copy, Smooth motion, tags;
+loaded only when one is first used) has a line of its own: its wasm + glue
+<= 150 KB — the panel's build of it (opendmd-art-web without feature
+`studio`, tools/www-panel.py; 2026-11-27, panel-no-create-art: the site's
+converter's Text step, video, full-colour frames and game-name cleaner
+left out, 149,853 -> 144,047 B gz). Add GIFs' fitting step (`js/fit.js`:
+a picture or a GIF of another size fitted and cropped to 128 x 32, and a
+Formula's Save as GIF; imported when Add GIFs is used or a GIF is saved)
+has a line of its own, <= 4 KB. Create Art (`js/studio.js`, `studio.css`,
+<= 24 KB, and its web sources `js/find.js`, `find.css`, <= 10 KB) left the
+panel's app that day: the website's /create/ mounts them from this tree,
+its repository measures them (tools/site-size.py's create line), and the
+pack never holds them (opendmd-pack www.rs SITE_ONLY; this script fails if
+one is in ROOT). Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
 `boot_show` select, the start-up Formula's picker, `boot_formula`, and the previews of the start-up show) has a line of its own
 too, <= 3 KB (2 KB until the start-up Formula, 2026-11-09: its picker, its
 preview through a pkg-psi instance of its own and the panel's word when it
 fell back took the line from 756 to ~2,000 B gz), and so does Settings' Power card (`js/power.js`: the Maximum brightness
 control and its warning), <= 2 KB, and the Library's Add GIFs and Edit
 details dialogs with Delete (`js/details.js`, imported when first used),
-<= 8 KB, and so does the Library's search of the web (`js/find.js` +
-`find.css`: "GifCities" and "Game art", the results grid, and the game-art
-search Make art's "Find art for a game" shares; imported when a web source
-is first picked or Make art opens), <= 10 KB, and so does Smooth motion
-(`js/smooth.js`: the Library's control, the list, the smoothed copy, Make
-art's save of it; imported by a Library preview on a device, a prepare run,
-or Make art's switch; counted with the page until 2026-10-01), <= 6 KB,
+<= 8 KB, and so does Smooth motion
+(`js/smooth.js`: the Library's control, the list, the smoothed copy;
+imported by a Library preview on a device or a prepare run; counted with
+the page until 2026-10-01), <= 6 KB,
 and so do Settings' Firmware and Security groups (`js/firmware.js`: the
 firmware version, "Update from file…" with its progress and wait for the
 restart, and the API key switch; imported when Advanced is first open),
@@ -158,26 +166,24 @@ WASM_GZ_BUDGET = 116 * 1024
 # refresh (Settings in tabs, the Playlists editor as a screen, 2026-10-22):
 # a hard ceiling — the next feature pays for itself.
 JS_CSS_GZ_BUDGET = 60 * 1024
-# exact() and pipeline::render_exact (the site's Studio's Import in full
-# colour, studio-tidy 2026-11-12, ~1.7 KB gz) are site-only code living in
-# the device's art wasm: the first candidate to gate behind a cargo feature
-# (a site-only build of pkg-art) when this line gets tight.
+# The panel's pkg-art (feature `studio` off: no exact(), render_exact, video,
+# text or cleanGameName, which the site's converter alone uses).
 ART_WASM_GZ_BUDGET = 150 * 1024
-STUDIO_GZ_BUDGET = 24 * 1024
-STUDIO = {"js/studio.js", "studio.css"}
+FIT_GZ_BUDGET = 4 * 1024
+FIT = {"js/fit.js"}
+# The site's, never in the panel's copy (opendmd-pack www.rs SITE_ONLY).
+SITE_FILES = {"js/studio.js", "studio.css", "js/find.js", "find.css", "js/demo.js", "js/fcost.js"}
 BOOT_GZ_BUDGET = 3 * 1024
 BOOT = {"js/boot.js"}
 POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}
 DETAILS_GZ_BUDGET = 8 * 1024
 DETAILS = {"js/details.js"}
-# A GIF from the site's Create Art (js/importgif.js: `#import`, the
+# A GIF from the website, its Studio's Send to panel (js/importgif.js: `#import`, the
 # postMessage checks; loaded only then): a line of its own, <= 2 KB
 # (2026-11-02, branch create-art: ~1.4 KB gz).
 IMPORT_GZ_BUDGET = 2 * 1024
 IMPORT = {"js/importgif.js"}
-FIND_GZ_BUDGET = 10 * 1024
-FIND = {"js/find.js", "find.css"}
 SMOOTH_GZ_BUDGET = 6 * 1024
 SMOOTH = {"js/smooth.js"}
 CARD_GZ_BUDGET = 2 * 1024
@@ -495,7 +501,7 @@ WWW_SIGNATURE_BYTES = 72
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="?", default="opendmd-web/www-dist")
+    ap.add_argument("root", nargs="?", default="opendmd-web/www-panel")
     ap.add_argument("--pack", help="the www pack built from it")
     ap.add_argument("--pack-limit", type=int, default=786_432, help="the www partition, bytes (firmware/partitions.csv)")
     ap.add_argument("--pack-spare", type=int, default=65_536, help="what the signed pack must leave of the partition, bytes")
@@ -505,6 +511,10 @@ def main() -> int:
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
                    and not p.name.startswith("."))
+    site = [p.relative_to(root).as_posix() for p in files if p.relative_to(root).as_posix() in SITE_FILES]
+    if site:
+        print(f"{root} holds the site's own files ({', '.join(site)}): measure the panel's copy (make web: opendmd-web/www-panel)")
+        return 1
     stray = [p for p in files if p.relative_to(root).parts[0] == "art"]
     if stray:
         print(f"{root}/art/ is the art index, which the site publishes (opendmd-web/art-index/, "
@@ -539,16 +549,14 @@ def main() -> int:
             kind = "location"
         elif rel in FSUBMIT:
             kind = "fsubmit"
-        elif rel in STUDIO:
-            kind = "studio"
+        elif rel in FIT:
+            kind = "fit"
         elif rel in BOOT:
             kind = "boot"
         elif rel in POWER:
             kind = "power"
         elif rel in DETAILS:
             kind = "details"
-        elif rel in FIND:
-            kind = "find"
         elif rel in SMOOTH:
             kind = "smooth"
         elif rel in FIRMWARE:
@@ -604,9 +612,9 @@ def main() -> int:
     print()
     ok = True
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
-                         ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
+                         ("art wasm", ART_WASM_GZ_BUDGET), ("fit", FIT_GZ_BUDGET),
                          ("boot", BOOT_GZ_BUDGET),
-                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("keynag", KEYNAG_GZ_BUDGET), ("remote", REMOTE_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),

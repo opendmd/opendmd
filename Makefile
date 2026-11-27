@@ -392,12 +392,19 @@ check-wasm:
 # with every script and stylesheet minified one file at a time, no bundling
 # (tools/web-minify.py running opendmd-webmin: oxc for JS, lightningcss for
 # CSS, pinned in its Cargo.lock), so the sources keep their comments. The
-# .gz files, the pack, the size lines, the mock (web-mock, web-smoke) and
-# the site's /demo/ (the site's repository) read $(WEB_DIST). WEB_MINIFY=0 stages the files as
+# site's /demo/ (the site's repository: /create/ mounts js/studio.js and
+# js/find.js from it) reads $(WEB_DIST). The panel's own copy is
+# $(WEB_PANEL) (gitignored, tools/www-panel.py): $(WEB_DIST) less the
+# site's files (opendmd-pack www.rs SITE_ONLY) and with $(ART_PANEL) as
+# its pkg-art (opendmd-art-web without feature studio: no Create Art on
+# the panel); the pack, the size lines and the mock (web-mock, web-smoke)
+# read that. WEB_MINIFY=0 stages the files as
 # they are, for a debugger (the size lines are then printed, not enforced):
 # opendmd-notes docs/notes/web-app.md "Minified build".
 WEB_WWW := $(WEB)/www
 WEB_DIST := $(WEB)/www-dist
+WEB_PANEL := $(WEB)/www-panel
+ART_PANEL := $(WEB)/pkg-art-panel
 WEB_MINIFY ?= 1
 # The wasm keeps no machine's paths (its panic locations name source files):
 # this tree is /opendmd, the cargo registry /cargo, the toolchain's std
@@ -411,14 +418,17 @@ webmin:
 web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	cd $(WEB) && $(WASM_PACK) build --target web --release --out-dir www/pkg
 	cd $(ART) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
+	@# The panel's pkg-art: the same crate without the site's Studio parts (feature studio), packed in place of the one above.
+	cd $(ART) && $(WASM_PACK) build --target web --release --out-dir ../$(ART_PANEL) -- --no-default-features
 	cd $(PSIWEB) && $(WASM_PACK) build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
+	rm -f $(ART_PANEL)/package.json $(ART_PANEL)/*.d.ts $(ART_PANEL)/README.md $(ART_PANEL)/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	@# pkg-psi-lang/ and pkg-studio/ (the site's wasm) are built by the site's repository now: an old checkout's copies go.
 	rm -rf $(WEB_WWW)/pkg-psi-lang $(WEB_WWW)/pkg-studio
-	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
-	uv run tools/www-build-id.py $(WEB_WWW)
+	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders and the panel's pkg-art.
+	uv run tools/www-build-id.py $(WEB_WWW) $(ART_PANEL)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
 	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json
 	git describe --always --dirty --tags --match 'v*' > $(WEB_WWW)/version.txt
@@ -430,9 +440,10 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	uv run tools/web-minify.py $(WEB_WWW) $(WEB_DIST) $(if $(filter 0,$(WEB_MINIFY)),--no-minify)
 	find $(WEB_DIST) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
 		-exec gzip -9 -n -k -f {} \;
+	uv run tools/www-panel.py $(WEB_DIST) $(ART_PANEL) $(WEB_PANEL) $(if $(filter 0,$(WEB_MINIFY)),--no-minify)
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
-		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) $(if $(filter 0,$(WEB_MINIFY)),--unminified)
+		www ../$(WEB_PANEL) --out ../$(WWW_PACK) --version-file ../$(WEB_PANEL)/version.txt --max-bytes $(WWW_PACK_BYTES)
+	@uv run tools/web-size.py $(WEB_PANEL) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) $(if $(filter 0,$(WEB_MINIFY)),--unminified)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -476,7 +487,7 @@ notices-check-web:
 # Static server for the page; uv, never bare python. Then open
 # http://localhost:8080 — the file/directory picker does the rest.
 web-serve:
-	uv run python -m http.server 8080 -d $(WEB_DIST)
+	uv run python -m http.server 8080 -d $(WEB_PANEL)
 
 # A fake device (JSON API + card files + the built app) for working on the UI
 # without a device: make web-mock ROOT=<card copy>, then open
@@ -601,7 +612,7 @@ clean:
 	cd $(GAL) && cargo clean
 	cd $(WEBMIN) && cargo clean
 	cd $(PSICLI) && cargo clean
-	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB)/www/pkg-psi-lang $(WEB_DIST) $(WWW_PACK) ./target
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB)/www/pkg-psi-lang $(WEB_DIST) $(WEB_PANEL) $(ART_PANEL) $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

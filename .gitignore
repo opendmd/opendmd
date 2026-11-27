@@ -33,6 +33,9 @@ opendmd-web/www/formulas.json
 opendmd-web/www.pack
 # make web's output (tools/web-minify.py): www/ with its scripts and stylesheets minified, and the .gz copies
 opendmd-web/www-dist/
+# The panel's copy of it, which is packed (tools/www-panel.py), and its own pkg-art (wasm-pack's output, opendmd-art-web without feature studio)
+opendmd-web/www-panel/
+opendmd-web/pkg-art-panel/
 
 # Release images (make fw-release)
 dist/

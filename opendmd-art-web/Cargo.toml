@@ -12,6 +12,17 @@ publish = false
 # `render` example (the smoke test's reference output).
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The site's Create Art (opendmd.dev/create/, js/studio.js there): its Text
+# step, the timeline's frames and thumbnails, video, the full-colour frames
+# the Studio's Import takes (`exact`) and the game-name cleaner of its Game
+# art search. On by default (the site's pkg-art, `make test-wasm`); `make
+# web` builds the panel's pack's pkg-art without it (pkg-art-panel/), the
+# panel's own web app having no Create Art: its Add GIFs fits and crops
+# with what is left.
+default = ["studio"]
+studio = []
+
 [dependencies]
 # `follow::clean_game_name` / `console_name` (what a card calls a game and a
 # platform) and `gifslim::recode_gif`, the prepared copy (here rather than
