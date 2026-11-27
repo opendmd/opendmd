@@ -134,6 +134,14 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   them, `&kbps=N` sends card files in 2 KB pieces at that rate (as the
   firmware's `IO_CHUNK` streaming), so a reader that hangs up early is
   measured as a device would see it. web-smoke's thumbnail checks use it.
+- **`--read-delay MS` / `--write-delay MS`** (both 0 by default): a read of
+  a playlist (`GET /sets/<name>.txt`, `/filelist*`) waits a random 0..MS ms
+  before the card is looked at, as one queued behind a GIF on the stream
+  task does; a write (`PUT /api/files/*`, `PUT /api/sets/*`, `DELETE
+  /api/files/*`) waits so long before it is made. A request the web app
+  sent before another may then be answered after it (a read of a playlist
+  answered after its delete is a 404): `WEB_SMOKE_MOCK_ARGS` hands them to
+  web-smoke's single sections.
 - **`GET /api/events`** pushes the Now view's state as the firmware does
   (`events.rs`): a `text/event-stream` with `retry: 3000`, one `data:` event
   (the firmware's fields: the clock, `now_playing`, `paused`, the playlist,
@@ -953,6 +961,15 @@ APP_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
 SETUP_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 CARD_CSP = "sandbox; default-src 'none'"
 CARD_PREFIXES = ("/gifs/", "/cache/", "/sets/", "/formulas/", "/filelist")
+
+
+def is_playlist_read(rel_full: str) -> bool:
+    """A playlist's file (`/sets/<name>.txt`, `/filelist*`; not one of the
+    web app's own lists in /sets/, a dot-file): what --read-delay holds."""
+    if rel_full.startswith("/filelist"):
+        return True
+    name = rel_full[len("/sets/"):] if rel_full.startswith("/sets/") else ""
+    return bool(name) and "/" not in name and not name.startswith(".") and name.endswith(".txt")
 
 
 def card_media_type(rel: str) -> str | None:
@@ -3158,6 +3175,7 @@ class Context:
         # listens when no one does (`--name-query`).
         self.taken: dict[str, str] = {}
         self.name_query = 1.2
+        self.read_delay = self.write_delay = 0.0  # --read-delay, --write-delay (ms)
         # POST /api/card/format: when the simulated format ends (monotonic,
         # 0: none running), and why the last one failed.
         self.format_until = 0.0
@@ -3763,6 +3781,8 @@ def make_handler(ctx: Context, quiet: bool):
                 io["inflight"] += n
                 io["max"] = max(io["max"], io["inflight"])
             try:
+                if ctx.read_delay and is_playlist_read(rel_full):
+                    time.sleep(random.uniform(0, ctx.read_delay) / 1000)
                 fpath = ctx.fs.read_path(rel)
                 if fpath is None:
                     self.send_error_json(404, rel_full)
@@ -5163,7 +5183,13 @@ def make_handler(ctx: Context, quiet: bool):
                 obj = self._install_manifest(MANIFEST_REL, data)
             self.send_json(200, obj)
 
+        def write_delay(self) -> None:
+            """--write-delay: a card write waits a random 0..MS ms first."""
+            if ctx.write_delay:
+                time.sleep(random.uniform(0, ctx.write_delay) / 1000)
+
         def h_sets_put(self, path):
+            self.write_delay()
             path, _, _ = self.path.partition("?")
             name = percent_decode(path[len("/api/sets/"):])
             if not name or "/" in name or ".." in name:
@@ -5215,6 +5241,7 @@ def make_handler(ctx: Context, quiet: bool):
             return obj
 
         def h_files_put(self, path):
+            self.write_delay()
             path, _, _ = self.path.partition("?")
             rel = card_path(percent_decode(path[len("/api/files/"):]))
             if rel is None:
@@ -5260,6 +5287,7 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, {"ok": True, "path": "/" + rel, "bytes": written})
 
         def h_files_delete(self, path):
+            self.write_delay()
             path, _, query = self.path.partition("?")
             rel = card_path(percent_decode(path[len("/api/files/"):]))
             if rel is None:
@@ -5765,6 +5793,10 @@ def parse_args():
     ap.add_argument("--taken", default="other-display=192.0.2.42",
                     help="NAME=IP,... : display names other devices answer to (<name>.local); "
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")
+    ap.add_argument("--read-delay", type=float, default=0, metavar="MS",
+                    help="a GET of a playlist (/sets/<name>.txt, /filelist*) waits a random 0..MS ms before the card is read")
+    ap.add_argument("--write-delay", type=float, default=0, metavar="MS",
+                    help="a card write (PUT /api/files/*, /api/sets/*, DELETE /api/files/*) waits a random 0..MS ms first")
     ap.add_argument("--name-query", type=float, default=1.2,
                     help="seconds a name check listens when no one answers (the firmware's 1.2)")
     ap.add_argument("--variant", choices=sorted(OTA_CURRENT), default="4mb",
@@ -5854,6 +5886,7 @@ def main():
             for p in args.taken.split(",") if p.strip()
         )
         ctx.name_query = args.name_query
+        ctx.read_delay, ctx.write_delay = max(0.0, args.read_delay), max(0.0, args.write_delay)
         mac = parse_mac(args.mac)
         if mac is None:
             sys.exit(f"mock-device: --mac {args.mac!r}: six hex bytes, not all zero, e.g. {MOCK_MAC}")
