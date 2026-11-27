@@ -346,9 +346,10 @@ fn the_examples_are_light_enough_for_the_panel() {
         let most = if ["Endless road", "Wormhole run"].contains(&e.name.as_str()) {
             80
         } else if e.name == "Neon city" {
-            // 90 since its lightning: the struck palette, when a strike
-            // falls and how it flickers, and the tower its bolt picks.
-            90
+            // 100 since its storm: the struck palette and the weather's
+            // own, when a strike falls and how it flickers, the tower its
+            // bolt picks, and the rain's clock and its sheets.
+            100
         } else if e.name == "Rift patrol" {
             // A showcase too, the longest: a shooter that plays itself
             // (four zones' palettes, the world's rules a line each, the
@@ -635,9 +636,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Storm front", 1730, 0x66c4db3c49640df1),
     ("Storm front", 6420, 0x14020362b551311d),
     // road-alts (2026-10-30): Endless road's alternatives.
-    ("Neon city", 0, 0x13e664bf85322932),
-    ("Neon city", 1730, 0xfeb6ace546e7770b),
-    ("Neon city", 6420, 0xde41e747ec3eff17),
+    ("Neon city", 0, 0x4fd128a4c0436164),
+    ("Neon city", 1730, 0xfefb7b482e2860d9),
+    ("Neon city", 6420, 0xdc98d1e122f1e821),
     ("Wormhole run", 0, 0x72b7572f97630448),
     ("Wormhole run", 1730, 0xe9ce3bd5322c9207),
     ("Wormhole run", 6420, 0xbea23f200e4f7996),
