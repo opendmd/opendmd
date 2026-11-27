@@ -1191,7 +1191,8 @@ class Lane:
         ws = await ctl.connect(http)
         await ctl.until("challenge", timeout=30)
         await ws.send_str(odc.dumps({"t": "guest", "pair_id": pid.hex()}))
-        if await ctl.until("guest-ok", timeout=30) is None:
+        ok = await ctl.until("guest-ok", timeout=30)
+        if ok is None:
             return {"closed": await ctl.closed()}
         label = ctl.label if raw_label is None else raw_label
         replies = []
@@ -1200,7 +1201,7 @@ class Lane:
             await ws.send_str(odc.dumps({"t": "pair", "pub": ctl.pub.hex(), "label": label, "mac": m.hex()}))
             replies.append(await ctl.until("paired", timeout=timeout))
         await ws.close()
-        return {"dev": found, "replies": replies}
+        return {"dev": found, "replies": replies, "g": ok.get("g")}
 
     async def inject_pair(self, secret, dev, ctl, g=99):
         """A `pair` with the right MAC put straight onto the panel's socket
@@ -1272,6 +1273,7 @@ class Lane:
         rep = (res.get("replies") or [None])[0]
         self.expect(res.get("dev") == dev and rep and rep.get("k") == g1.k.hex(), "a guest found the panel by pair_id and paired", json.dumps(rep))
         self.expect(bytes.fromhex(rep.get("mac2", "")) == odc.paired_mac(secret, dev, g1.pub), "paired's mac2: the secret, this panel and the key", "")
+        self.expect(odc.is_int(res.get("g")) and rep.get("g") == res.get("g"), "paired echoes the guest's slot g whole", f"guest-ok g {res.get('g')}, paired g {rep.get('g')}")
         said = self.srv.said[mark:]
         ki = next((i for i, m in enumerate(said) if m.get("t") == "keys" and any(e.get("k") == g1.k.hex() for e in m.get("keys", []))), None)
         pi = next((i for i, m in enumerate(said) if m.get("t") == "paired" and m.get("k") == g1.k.hex()), None)
@@ -1360,6 +1362,10 @@ class Lane:
         got = await self.inject_pair(secret5, dev, late)
         self.expect(got.get("err") in ("expired", "closed") and late.k not in rec.keys, "red: a pair after expiry, put on the panel's socket: refused", json.dumps(got))
 
+        # The mock server's slots go past a byte on purpose (GUEST_SLOTS):
+        # the panel answered guests either side of 255, each by its own g.
+        slots = {m.get("g") for m in self.srv.said if m.get("t") == "paired" and odc.is_int(m.get("g"))}
+        self.expect(any(g > 255 for g in slots) and any(g <= 255 for g in slots), "paired answers guests' slots either side of a byte", f"{sorted(slots)}")
         su = ((await self.status()).get("connect") or {}).get("stack_unused")
         self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after pairing (MACs and key stores at the top level): >= 1 KB left", f"{su} B")
         self.report["stack_unused_after_pairing"] = su

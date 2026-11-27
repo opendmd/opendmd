@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 /// A pairing whose MAC checked (the window spent), its key to store.
 pub(super) struct PairStore {
-    g: u8,
+    g: u32,
     public: [u8; 32],
     label: String,
     mac2: [u8; 32],

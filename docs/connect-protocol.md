@@ -159,6 +159,15 @@ refused whole.
 | server → panel | `pair` | a guest's `pair`, with `g` (the guest's slot) added |
 | server → panel | binary `0x01`, `0x02` | relayed from controllers |
 
+**The guest slot `g`.** The server gives each guest a slot `g`, an
+integer it adds to the guest's `pair` (and to `add-req`), sends in
+`guest-ok`, and routes `paired` (and `add-ok`) by. The server **must**
+assign `g` in 1 to 255, distinct among the guests of one panel: panels up
+to 1.1.0-beta.4 read it as one byte and drop a `pair` with a larger one as
+malformed (no `paired` ever comes). Panels after 1.1.0-beta.4 take any
+integer 0 to 2^31 - 1 and echo it unchanged in `paired`; anything else
+(negative, larger, not an integer) is still malformed and dropped.
+
 The server hashes `hello.secret` and compares it with the stored hash;
 else it closes 4403 and the panel waits 15 minutes (Settings says to set
 Remote control up again). A newer panel connection replaces an older one.
@@ -459,6 +468,7 @@ server can show a controller a false state, never change the panel's.
 | Rate | 4 commands a second per controller, 8 per panel |
 | Pairing window | 5 minutes, one use, 3 tries |
 | Guests | 2 at a time, 60 s each |
+| Guest slot `g` | assigned 1 to 255; read 0 to 2^31 - 1 (to 255 up to 1.1.0-beta.4) |
 
 ## 10. Test vectors and mocks
 

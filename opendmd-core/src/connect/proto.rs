@@ -833,14 +833,18 @@ pub fn pair_close(pair_id: &[u8; 10]) -> String {
 
 /// The panel's answer to guest `g`'s `pair`, once the key is stored.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn paired(g: u8, k: &KeyId, mac2: &[u8; 32]) -> String {
+pub fn paired(g: u32, k: &KeyId, mac2: &[u8; 32]) -> String {
     format!(r#"{{"t":"paired","g":{g},"k":"{}","mac2":"{}"}}"#, hex(k), hex(mac2))
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn paired_err(g: u8, err: &str) -> String {
+pub fn paired_err(g: u32, err: &str) -> String {
     format!(r#"{{"t":"paired","g":{g},"err":"{err}"}}"#)
 }
+
+/// The largest guest slot `g` a `pair` may carry (and `paired` echoes):
+/// 2^31 - 1. Relays assign 1 to 255 (protocol 4.1).
+pub const MAX_GUEST_SLOT: u32 = (1 << 31) - 1;
 
 /// The panel's last message under an identity it is dropping.
 pub const FORGET: &str = r#"{"t":"forget"}"#;
@@ -850,11 +854,13 @@ pub const FORGET: &str = r#"{"t":"forget"}"#;
 pub enum ServerMsg {
     /// `watch {on}`: whether a controller is looking.
     Watch(bool),
-    /// A guest's `pair`, relayed; `g`: the guest's slot, echoed in `paired`.
+    /// A guest's `pair`, relayed; `g`: the guest's slot, echoed in `paired`
+    /// (0 to [`MAX_GUEST_SLOT`]: a relay assigns 1 to 255, which panels up
+    /// to 1.1.0-beta.4 read as one byte; this one takes any up to 2^31 - 1).
     /// `label` is as sent: its bytes go into the MAC check
     /// ([`Window::check`](super::pair::Window::check)) and it is cleaned
     /// only after that.
-    Pair { g: u8, public: [u8; 32], label: String, mac: [u8; 32] },
+    Pair { g: u32, public: [u8; 32], label: String, mac: [u8; 32] },
     /// A type this version does not know: ignored.
     Unknown,
 }
@@ -878,7 +884,7 @@ pub fn parse_server_text(text: &[u8]) -> Result<ServerMsg, TextError> {
     match v.get("t").and_then(Value::as_str).ok_or(bad)? {
         "watch" => Ok(ServerMsg::Watch(v.get("on").and_then(Value::as_bool).ok_or(bad)?)),
         "pair" => {
-            let g = v.get("g").and_then(Value::as_int).and_then(|g| u8::try_from(g).ok()).ok_or(bad)?;
+            let g = v.get("g").and_then(Value::as_int).filter(|g| (0..=i64::from(MAX_GUEST_SLOT)).contains(g)).ok_or(bad)? as u32;
             let public = v.get("pub").and_then(Value::as_str).and_then(unhex::<32>).ok_or(bad)?;
             let mac = v.get("mac").and_then(Value::as_str).and_then(unhex::<32>).ok_or(bad)?;
             let label = v.get("label").and_then(Value::as_str).ok_or(bad)?.to_string();
@@ -995,6 +1001,32 @@ mod tests {
         assert_eq!(parse_server_text(b"ping"), Err(TextError::Malformed));
         let big = format!(r#"{{"t":"watch","on":true,"p":"{}"}}"#, "x".repeat(MAX_TEXT_IN));
         assert_eq!(parse_server_text(big.as_bytes()), Err(TextError::TooBig));
+    }
+
+    /// A guest's slot `g`: any integer 0 to 2^31 - 1, echoed whole in
+    /// `paired` (the relay once gave 31-bit slots that a one-byte read
+    /// dropped as malformed, so pairing never answered).
+    #[test]
+    fn pair_slots() {
+        let pair = |g: &str| format!(r#"{{"t":"pair","g":{g},"pub":"{}","label":"phone","mac":"{}"}}"#, "ab".repeat(32), "cd".repeat(32));
+        for (text, want) in [("0", 0), ("1", 1), ("7", 7), ("255", 255), ("256", 256), ("65536", 65536), ("2147483647", MAX_GUEST_SLOT)] {
+            match parse_server_text(pair(text).as_bytes()) {
+                Ok(ServerMsg::Pair { g, public, label, mac }) => {
+                    assert_eq!(g, want, "{text}");
+                    assert_eq!((public, label.as_str(), mac), ([0xab; 32], "phone", [0xcd; 32]));
+                    let back = json::parse(paired(g, &[1; 8], &[2; 32]).as_bytes()).unwrap();
+                    assert_eq!(back.get("g").and_then(Value::as_int), Some(i64::from(want)), "paired {text}");
+                    let back = json::parse(paired_err(g, "bad-mac").as_bytes()).unwrap();
+                    assert_eq!(back.get("g").and_then(Value::as_int), Some(i64::from(want)), "paired_err {text}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        for bad in ["2147483648", "4294967296", "9007199254740991", "-1", "-2147483648", "1.5", "1e2", "-0", "\"1\"", "true", "null", "[1]", "{}"] {
+            assert_eq!(parse_server_text(pair(bad).as_bytes()), Err(TextError::Malformed), "{bad}");
+        }
+        let no_g = format!(r#"{{"t":"pair","pub":"{}","label":"phone","mac":"{}"}}"#, "ab".repeat(32), "cd".repeat(32));
+        assert_eq!(parse_server_text(no_g.as_bytes()), Err(TextError::Malformed));
     }
 
     #[test]

@@ -124,7 +124,7 @@ pub(super) const PAIR_QUEUE: usize = 2;
 pub(super) struct PairReq {
     /// The window it came for (a `pair` for another one is `closed`).
     pub seq: Option<u32>,
-    pub g: u8,
+    pub g: u32,
     pub public: [u8; 32],
     pub label: String,
     pub mac: [u8; 32],

@@ -183,7 +183,7 @@ async def guest_pair(http, base, dev, secret, ctl: Controller, mac=None):
         await ws.send_str(odc.dumps({"t": "pair", "pub": ctl.pub.hex(), "label": ctl.label, "mac": m.hex()}))
         replies.append(await ctl.until("paired"))
     await ws.close()
-    return {"dev": found, "replies": replies}
+    return {"dev": found, "replies": replies, "g": g.get("g")}
 
 
 async def main():
@@ -215,6 +215,7 @@ async def main():
         res = await guest_pair(http, base, dev, secret, a)
         rep = res["replies"][0]
         ok(res["dev"] == dev and rep and rep.get("k") == a.k.hex(), "guest found the panel by pair_id and paired")
+        ok(odc.is_int(res.get("g")) and rep.get("g") == res["g"], f"pairing: paired echoes the guest's slot whole (g {res.get('g')})")
         ok(rep and bytes.fromhex(rep["mac2"]) == odc.paired_mac(secret, dev, a.pub), "the panel's mac2 proves it saw the secret")
         ok(panel.keys[a.k].flags == odc.FLAG_CAN_ADD, "a key paired on the panel may add others")
         res = await guest_pair(http, base, dev, secret, Controller(base, dev, "late"))
