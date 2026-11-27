@@ -93,6 +93,9 @@ category and author, your stars and your tags. From there:
 - **Send to panel** plays it now; afterwards the playlist carries on.
 - **Add to playlist…** puts it in one of your playlists: the one playing
   comes first, or start a new one.
+- **Download GIF** saves the GIF itself, to change it in the
+  [Studio](https://opendmd.dev/studio/#import) ([Changing a GIF already on
+  the card](create-art.md#changing-a-gif-already-on-the-card)).
 - **Edit details…** changes its title, platform, category or author. The
   GIF is renamed on the card and every playlist keeps up.
 - **Delete…** removes it from the card and from every playlist, after
@@ -143,7 +146,8 @@ are counted in the bar: "6 selected · 2 not shown". **Done** leaves Select.
 ### Adding GIFs
 
 Press **+ Add ▾**, then **Add GIFs…**, and pick files from your computer or
-phone: GIFs, or pictures such as PNG or JPEG. A picture, or a GIF that
+phone: GIFs, or pictures such as PNG or JPEG, or drop them on the Library
+or paste a copied picture. A picture, or a GIF that
 isn't 128 × 32, is fitted to the panel first: how it fits and which part
 shows, or, for a GIF, **Add as it is** ([Adding your own
 art](create-art.md)). For each one, give it a title, a platform, a category

@@ -10,7 +10,9 @@ the computer or phone you're using. To find art on the web, use
 ## Adding a picture or a GIF
 
 In the **Library**, press **+ Add ▾**, then **Add GIFs…**, and pick one or
-more files: GIFs, or pictures such as PNG or JPEG.
+more files: GIFs, or pictures such as PNG or JPEG. You can also drop files
+anywhere on the Library, or paste a picture you've copied. (A web address
+dropped or pasted isn't fetched: use **Find art online** for that.)
 
 A GIF that is already 128 × 32, the panel's size, goes straight to its
 details. Anything else is fitted to the panel first, one file at a time:
@@ -38,6 +40,16 @@ press **Add GIF**. **Cancel** leaves that file out.
 
 A Formula's **Save as GIF…** makes a GIF of one loop and opens the same
 details, filled in ([Saving as a GIF](formulas.md#saving-as-a-gif)).
+
+## Changing a GIF already on the card
+
+The display's web app doesn't edit a GIF's frames, colours or timing. To
+trim it, change its speed, add text or recolour it, open it in the
+Studio: in the Library, open the GIF and choose **… › Download GIF**, then
+in the [Studio's Import](https://opendmd.dev/studio/#import) choose that
+file, make your changes and press **Send to panel**. It comes back into
+Add GIFs as a new GIF; **… › Delete…** removes the old one, and **Edit
+details…** changes only its title, platform, category or author.
 
 ## Finding art online
 

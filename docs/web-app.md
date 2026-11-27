@@ -133,7 +133,9 @@ button lands on them.
   platform, category, author and file name, with **Send to panel**, **Add
   to playlist…**, **Favourite** (in the playlist
   chosen beside it), Smooth motion where it applies, **Edit
-  details…** and **Delete…**. **Select** (or a long press on a row, on a
+  details…**, **Download GIF** (the GIF itself, to change it in the
+  website's Studio: the app does not edit a GIF's frames) and
+  **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
   **None**, **Add N to playlist ▾** and **Done**: a tap then picks a row
@@ -278,7 +280,11 @@ button lands on them.
 ## Add GIFs and finding art online
 
 **Add GIFs** (the Library's **+ Add ▾ › Add GIFs…**, on a device) takes
-GIFs and pictures (PNG, JPEG, WebP: whatever the browser decodes). A GIF
+GIFs and pictures (PNG, JPEG, WebP: whatever the browser decodes), also
+dropped anywhere on the page while the Library shows, or pasted (an image
+on the clipboard, while the Library or an Add GIFs sheet shows; files
+dropped or pasted while one is open wait their turn). A dropped or pasted
+address is not fetched: the Find art online hint shows instead. A GIF
 that is already 128x32 goes straight to its details. Anything else gets a
 **fitting step** first (`js/fit.js`, one sheet per file, in turn): the
 picture (an animation's first frame) zoomed with the 128x32 window on it —
