@@ -1278,7 +1278,8 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     take the search along; opened again (it is in the editor already), a
     row taken out while it is read stays out; edited by hand and saved, it
     stops being smart; a refresh under way meanwhile does not write the
-    search back over it; Delete takes its line."""
+    search back over it; Delete waits for a read of it under way, and takes
+    its line."""
     sets = overlay / "sets"
     r = put_text(base + "/api/files/sets/.probe", "x\n")
     check(r.get("path") == "/sets/.probe" and r.get("bytes") == 2 and "entries" not in r,
@@ -1388,8 +1389,28 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     check(len(held) == 1 and got == b + "\n" and "smart-b 2" not in (sets / ".smart").read_text(),
           f"smart: a refresh under way does not write the search back over a hand save ({len(held)} read held, {got!r})")
     delete_path(base, c)
-    sets_do(page, "/sets/smart-b 2.txt", "delete")
+    # Delete waits for a read of the playlist under way (the list's count
+    # of it, here) to be answered: sent after it, the read was a 404 (CI on
+    # main, 2026-11-26: the count a refresh's list started, read the moment
+    # Delete went out). The count's read is held while Delete is asked.
+    held, deletes = [], []
+    page.route("**/sets/smart-b*", lambda r: held.append(r) if is_pb(r) else r.continue_())
+    on_req = lambda r: r.method == "DELETE" and urllib.parse.unquote(r.url).endswith("/api/files" + pb) and deletes.append(r.url)
+    page.on("request", on_req)
+    page.evaluate("import('./js/util.js').then((m) => m.emit('config'))")
+    deadline = time.time() + 20
+    while not held and time.time() < deadline:
+        page.wait_for_timeout(50)
+    sets_do(page, pb, "delete")
+    page.wait_for_timeout(800)
+    early = len(deletes)
+    for r in held:
+        r.continue_()
+    page.unroute("**/sets/smart-b*")
     page.wait_for_selector("#sets-list [data-path='/sets/smart-b 2.txt']", state="detached", timeout=30000)
+    page.remove_listener("request", on_req)
+    check(len(held) == 1 and early == 0 and len(deletes) == 1,
+          f"smart: Delete waits for a read of the playlist under way ({len(held)} read held, {early} deletes sent meanwhile, {len(deletes)} in all)")
     sm = wait_file(sets / ".smart", lambda t: "smart-b 2" not in t)
     check("smart-b 2" not in sm, f"smart: Delete takes its line ({sm!r})")
     page.context.close()
@@ -12141,7 +12162,9 @@ def www_update_pass(browser) -> None:
 
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
-# A section that takes a page gets a fresh one on Now.
+# A section that takes a page gets a fresh one on Now. WEB_SMOKE_MOCK_ARGS adds
+# mock options (e.g. WEB_SMOKE_ONLY=smart WEB_SMOKE_MOCK_ARGS="--read-delay 300
+# --write-delay 100": requests answered out of the order they were sent).
 ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks, "now_formula": now_formula_checks, "now_sent": now_sent_checks, "now_identity": now_identity_checks, "thumbs_dark": thumbs_dark_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks, "events": events_checks}
 # (A sprite from a picture, on its own: WEB_SMOKE_ONLY=psi_import.)
@@ -12153,6 +12176,8 @@ ONLY_BROWSER.update(now_dim=now_dim_checks)
 # (The Library selection after bulk actions: WEB_SMOKE_ONLY=selection, an overlay of its own.)
 ONLY_BROWSER.update(selection=lambda browser, base, errors: selection_checks(browser, base, OUT / "overlay-only", errors))
 ONLY_BROWSER.update(remote=lambda browser, base, errors: remote_pass(browser, errors=errors))
+# (Smart playlists, an overlay of their own: WEB_SMOKE_ONLY=smart.)
+ONLY_BROWSER.update(smart=lambda browser, base, errors: smart_checks(browser, base, OUT / "overlay-only", errors))
 
 
 def only_pass(browser, names: list[str], repeat: int) -> None:
@@ -12167,8 +12192,12 @@ def only_pass(browser, names: list[str], repeat: int) -> None:
     overlay.mkdir(parents=True)
     ota_tmp = tempfile.TemporaryDirectory(prefix="web-smoke-ota-")
     ota = ota_bundles(Path(ota_tmp.name))
+    # (WEB_SMOKE_MOCK_ARGS: more of the mock's options, e.g. "--read-delay 300 --write-delay 100".)
+    extra = os.environ.get("WEB_SMOKE_MOCK_ARGS", "").split()
+    if extra:
+        print(f"  ..   the mock with {extra} (WEB_SMOKE_MOCK_ARGS)")
     proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"]),
-                             "--panel-trial", str(PANEL_TRIAL_S)])
+                             "--panel-trial", str(PANEL_TRIAL_S), *extra])
     passed = {n: 0 for n in names}
     expected0 = list(expected)
     try:

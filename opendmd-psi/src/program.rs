@@ -2097,9 +2097,13 @@ impl Prog {
                             2 => *ns - ns0,
                             _ => then.max(*ns - ns0),
                         };
-                } else if end == 0 && at == start && w != 0 {
-                    // (An `if` with no `else`, its way known: its steps
-                    // only when taken.)
+                } else if end == 0 && at >= start {
+                    // (An `if` with no `else` ends where it would jump to:
+                    // its steps only when taken, if its way is known. One
+                    // whose way is not known, as an `if` in a loop, closes
+                    // there too: left open, it kept the arms around it
+                    // from closing, a guard's not-taken frame costed as
+                    // taken and an outer `else` added to its `then`.)
                     if w == 2 {
                         *ns = ns0;
                     }

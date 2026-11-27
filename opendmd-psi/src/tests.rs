@@ -555,6 +555,48 @@ fn a_frame_costs_the_scenes_and_rows_it_runs() {
     assert!(b > a, "{a} {b}");
 }
 
+/// An `if` inside a loop inside a guarded `if` (Neon city's shape before
+/// it was restructured): the inner arm closes where it ends, so a frame
+/// with the guard off costs what the same Formula without the guarded
+/// block costs, and one with it on the loop's lines.
+#[test]
+fn an_if_in_a_loop_in_a_guarded_if_closes() {
+    let head = "loop 8\ncity = frac(t/8) > 0.5\n";
+    let tail = "\ngray(ink)";
+    let nested = "draw {\n  if city { for k < 40 { if k % 2 { line(k*3, 0, k*3, 31, 0.5) } } }\n  dot(1, 1, 0.5)\n}";
+    let without = "draw {\n  if city { }\n  dot(1, 1, 0.5)\n}";
+    let p = compile(&format!("{head}{nested}{tail}")).unwrap();
+    let q = compile(&format!("{head}{without}{tail}")).unwrap();
+    let mut s = Scratch::<128>::new();
+    let at = |p: &Program, ms: u64, s: &mut Scratch<128>| {
+        let mut inp = Inputs::default();
+        inp.set_ms(p, ms);
+        scene_rows(p, s, &inp, &OWN)
+    };
+    let (off, on) = (at(&p, 1000, &mut s), at(&p, 5000, &mut s));
+    assert_eq!((off.known & 1, off.taken & 1, on.taken & 1), (1, 0, 1));
+    let q_off = at(&q, 1000, &mut s);
+    let (a, b, c) = (
+        p.vm_us_frame(false, &off),
+        p.vm_us_frame(false, &on),
+        q.vm_us_frame(false, &q_off),
+    );
+    assert_eq!(
+        a, c,
+        "guard off: {a} µs, without the block {c} µs (guard on {b})"
+    );
+    assert!(b > a, "{a} {b}");
+    // With an `else`, the estimate is the costlier arm, not both.
+    let then = "for k < 40 { if k % 2 { line(k*3, 0, k*3, 31, 0.5) } }";
+    let other = "for j < 40 { line(j*3, 0, j*3, 31, 0.5) }";
+    let d = |t: &str, e: &str| {
+        let src = format!("{head}draw {{\n  if city {{ {t} }} else {{ {e} }}\n}}{tail}");
+        compile(&src).unwrap().draw_us()
+    };
+    let (both, t, e) = (d(then, other), d(then, ""), d("", other));
+    assert_eq!(both, t.max(e), "both arms {both} µs, then {t}, else {e}");
+}
+
 /// Palettes of 16 colours or fewer that only tweens' halves read take half
 /// a store place each: ten of them fit the store's eight places.
 #[test]

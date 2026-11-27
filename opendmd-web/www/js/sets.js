@@ -66,6 +66,8 @@ export async function mount(el) {
     for (const t of setsList.querySelectorAll('.tag.smart')) { const s = sm.get(t.closest('[data-path]').dataset.path); if (s) sm.summary(s).then((x) => { t.title = 'Built from a search: ' + x; }); }
     counts(rows);
   }
+  // The counts' reads under way, by path (`unread`).
+  const counting = new Map();
   async function counts(rows) {
     // A device's root lists (~400 KB) are not fetched to be counted.
     for (const t = ++ctok; rows.length;) {
@@ -74,7 +76,10 @@ export async function mount(el) {
         if (p.value === app.activeSet && app.status?.entries != null) n.textContent = app.status.entries.toLocaleString();
         continue;
       }
-      const text = await app.text(p.path).catch(() => null);
+      const q = app.text(p.path).catch(() => null);
+      counting.set(p.path, q);
+      const text = await q;
+      if (counting.get(p.path) === q) counting.delete(p.path);
       if (t !== ctok) return;
       if (text != null) n.textContent = lines(text).filter((p) => !gone(p)).length.toLocaleString();
     }
@@ -146,12 +151,20 @@ export async function mount(el) {
       ltok++; ctok++;
       const sm = await smartMod(), g = await import('./gifs.js');
       // (Its text forgotten again after: a refresh's read answered meanwhile keeps it.)
-      await sm.letGo(path, async () => { await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
+      await sm.letGo(path, async () => { await unread(path); await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
       app.texts.delete(path);
       toast(`deleted "${set}"`, 'ok');
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
     loadSets();
   }
+
+  // A playlist about to be deleted: a count of it the list has asked for
+  // answered first. The device may answer requests out of the order they
+  // were sent: a read sent just before the delete and answered after it is
+  // a 404. (The counts stop asking once `ctok` moves, before this. A
+  // refresh's read is not waited for: answered late, it writes nothing,
+  // js/smart.js `letGo`.)
+  const unread = (path) => counting.get(path);
 
   // Rename and Duplicate (no request renames a playlist): its lines and its
   // overrides written under the new name; a rename then moves what names
@@ -187,6 +200,7 @@ export async function mount(el) {
       if (s.rules?.some((r) => r.set === p.value)) await app.src.putSchedule({ ...s, rules: s.rules.map((r) => (r.set === p.value ? { ...r, set: n } : r)) });
     }
     ltok++; ctok++;
+    await unread(p.path);
     await g.deletePlaylist(p.path);
     // (Even one that says nothing any more, such as earlier firmware's lines only.)
     await app.src.deleteFile(fileFor(p.path)).catch((e) => { if (e.status !== 404 && e.name !== 'NotFoundError') throw e; });
