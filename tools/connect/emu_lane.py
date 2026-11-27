@@ -1473,6 +1473,22 @@ class Lane:
                     "formulas: the added Formula listed (from its .psr); abi and psb said", json.dumps({k: fr.get(k) for k in ("abi", "psb")}))
         code, kern, vm = await self._plays(f"/formulas/{self.NEVER}.psi", cmd)
         self.expect(code and vm and not kern, "the added Formula plays on the VM only: no kernel built for it", f"{kern} kernels, {vm} VM lines")
+        # As the look: a remote look's .psr drawn over everything on the VM only.
+        look_src = (REPO / "tools" / "connect" / "lane-look.psi").read_bytes()
+        r = await self.add_formula(cmd, look_src, (Path(self.psb_dir) / "lane-look.psb").read_bytes(), 25, "remote-look")
+        self.expect(r and (r.get("r") or {}).get("stem") == "remote-look", "formula-add: a look", json.dumps(r))
+        mark = self.emu.mark()
+        code, _ = await self.http("PUT", "/api/config", {"look_formula": "/formulas/remote-look.psi"})
+        await asyncio.sleep(12)
+        kern = self.emu.find(re.compile(r"formula: kernel of \d+ B"), mark)
+        vm = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), mark)
+        self.expect(code == 200 and vm and not kern, "a remote program as the look (look_formula): on the VM only, no kernel", f"{code}, {len(kern)} kernels, {len(vm)} VM lines")
+        await self.http("PUT", "/api/config", {"look_formula": ""})
+        # (Gone again on the LAN, its .psr with its .psi: the restart's pass
+        # is left the adds it checks.)
+        await asyncio.sleep(2)
+        await self.http("DELETE", "/api/files" + urllib.parse.quote("/formulas/remote-look.psi"))
+        self.expect(await self._status_code("/formulas/remote-look.psr") == 404, "a LAN delete of the look's source takes its .psr", "")
         r = await self.add_formula(cmd, src, psb, 22, self.NEVER)
         self.expect(r and (r.get("r") or {}).get("stem") == self.NEVER and (r.get("r") or {}).get("done"), "formula-add of the same source again: done, nothing written", json.dumps(r))
         r = await self.add_formula(cmd, src.replace(b"Rift patrol", b"Rift patrol B", 1), psb[:-40], 23, "rift-cut")
@@ -1482,6 +1498,76 @@ class Lane:
         r = await self.add_formula(cmd, ramp, (Path(self.psb_dir) / "ramp.psb").read_bytes(), 24, self.SMALL)
         self.expect(r and (r.get("r") or {}).get("stem") == self.SMALL, "formula-add: a small one, its key colliding with the first's", json.dumps(r))
         await self.http("PUT", "/api/config", {"set": ""})
+        # The add's red cases, then the network worker's stack (the deepest
+        # paths: the nine-hash choice, the failures' logs, a land retried).
+        await self.add_reds(cmd, ramp)
+        su = ((await self.status()).get("connect") or {}).get("stack_unused")
+        self.report["stack_unused_after_add_reds"] = su
+        self.expect(isinstance(su, int) and su >= 1024, "the network worker's stack after the add's red cases: >= 1 KB left (the command set's own floor is about the same)", f"{su} B")
+
+    async def add_reds(self, cmd, ramp):
+        """The add's order of checks and its limits: a key removed on the LAN
+        mid-add takes its part files; the 128-Formula cap; and a key over the
+        day's tally refused with no card read at all."""
+        import hashlib
+        rec = self.rec()
+        dev = next(iter(self.srv.panels))
+        # A second key, added remotely, starts an add; removed on the LAN, its parts go.
+        c = nacl.signing.SigningKey(hashlib.sha256(b"emu-lane add red key").digest())
+        cpub = bytes(c.verify_key)
+        r = await cmd("add-controller", {"pub": cpub.hex(), "label": "adder"})
+        self.expect(r and r.get("ok"), "a second key added for the add's red cases", json.dumps(r))
+        await asyncio.sleep(2.5)
+
+        async def as_c(cc, a_):
+            self._c_n = getattr(self, "_c_n", 3 * 10**13) + 1
+            f = odc.sign_command(c, odc.command_body(dev, bytes.fromhex(self.rec().sess), self._c_n, cc, a_))
+            return await self.injected_ack(f"{cc} from the second key", f, odc.key_id(cpub))
+
+        big = ramp.replace(b"Offline ramp", b"Removed mid-add", 1)
+        rp = (Path(self.psb_dir) / "ramp.psb").read_bytes()
+        args = {"id": 41, "stem": "mid-add", "name": "x", "src_size": len(big), "src_sha256": hashlib.sha256(big).hexdigest(),
+                "psb_size": len(rp), "psb_sha256": hashlib.sha256(rp).hexdigest()}
+        r = await as_c("formula-add", args)
+        part = await self._status_code("/formulas/.add-41.psi.part")
+        code, _ = await self.http("DELETE", f"/api/connect/controllers/{odc.key_id(cpub).hex()}")
+        await asyncio.sleep(4)
+        after = await self._status_code("/formulas/.add-41.psi.part")
+        self.expect(r and r.get("ok") and part == 200 and code == 200 and after == 404, "a key removed on the LAN mid-add: its add and part files go",
+                    f"{json.dumps(r)}, part {part} -> {after}, DELETE {code}")
+        # The cap: 128 Formulas on the card, then an add is quota.
+        have = len([1 for _ in range(1)])
+        st = await self.http("GET", "/api/files?dir=" + urllib.parse.quote("/formulas"))
+        rows = st[1] if isinstance(st[1], list) else (st[1] or {}).get("files", []) if isinstance(st[1], dict) else []
+        n_psi = sum(1 for x in rows if str(x.get("name", "")).endswith(".psi"))
+        fill = [f"/formulas/cap{i:03d}.psi" for i in range(max(0, 128 - n_psi))]
+        for p in fill:
+            await asyncio.to_thread(self._put_bytes, p, b'name "Cap"\ngray(x)\n')
+        r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", b"Over the cap", 1), rp, 42, "over-cap")
+        self.expect(r and r.get("err") == "quota", f"the 129th Formula on the card: quota ({n_psi} there, {len(fill)} put)", json.dumps(r))
+        for p in fill:
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(p))
+        _ = have
+        # Over the day's tally: each formula-add counts; past 16, quota with no card read.
+        mark = self.emu.mark()
+        r = None
+        for i in range(20):
+            r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", f"Tally {i}".encode(), 1), rp, 60 + i, f"tally-{i}")
+            if r and r.get("err") == "quota":
+                break
+        looked = self.emu.find(re.compile(r"formula-add: looked on the card for (\S+)"), mark)
+        last = looked[-1][1].group(1) if looked else None
+        self.expect(r and r.get("err") == "quota" and last != f"tally-{i}", f"over the day's tally: quota after {i} more, with no card read for the refused one",
+                    f"{json.dumps(r)}; last looked for {last}")
+        # (A LAN user may start the day again: both slots deleted. The panel's
+        # own copy stays full until its next start reads the card.)
+        for slot in (".add-day.a", ".add-day.b"):
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(f"/formulas/{slot}"))
+        await asyncio.sleep(2.2)
+        r = await self.add_formula(cmd, ramp.replace(b"Offline ramp", b"Still full", 1), rp, 90, "still-full")
+        self.expect(r and r.get("err") == "quota", "...and stays so in RAM until the next start", json.dumps(r))
+        for j in range(i + 1):
+            await self.http("DELETE", "/api/files" + urllib.parse.quote(f"/formulas/tally-{j}.psi"))
 
     async def _plays(self, path, cmd=None):
         """Play `path` (by remote with `cmd`, else on the LAN); (ok, kernels
@@ -1546,11 +1632,14 @@ class Lane:
         (no card at boot, then the retry loop: as if put in later): the remote
         program still plays on the VM only, with nothing kept anywhere but its
         file's name."""
-        for label, n in (("a late mount (the boot's second attempt)", 1), ("a card mounted after the boot (the retry loop)", 6)):
+        # As the start-up show too (read at the card's mount, on each path).
+        code, _ = await self.http("PUT", "/api/config", {"boot_show": "short", "boot_formula": f"/formulas/{self.NEVER}.psi"})
+        self.expect(code == 200, "the remote program as the start-up show (boot_formula)", f"{code}")
+        for label, n in (("a plain restart (the show reads the card in time)", None), ("a late mount (the boot's second attempt)", 1), ("a card mounted after the boot (the retry loop)", 6)):
             self.emu.resets_allowed += 1
             self._restart_mark = self.emu.mark()
             try:
-                await self.http("POST", f"/api/reboot?sd_fail={n}")
+                await self.http("POST", "/api/reboot" + (f"?sd_fail={n}" if n else ""))
             except Exception:  # noqa: BLE001
                 pass
             await self.wait(f"back after the restart ({label})", lambda: self._uptime_below(300), 900, every=3)
@@ -1559,6 +1648,16 @@ class Lane:
                 st = await self.status()
                 return (st.get("sd") or {}).get("mounted") is True
             await self.wait(f"the card mounted ({label})", mounted, 900, every=3)
+            shown = self.emu.find(re.compile(r"boot show: the card's formula read at"), self._restart_mark)
+            if shown:
+                vm0 = self.emu.find(re.compile(r"formula: on the VM \(added by remote"), self._restart_mark)
+                k0 = self.emu.find(re.compile(r"formula: kernel of \d+ B"), self._restart_mark)
+                self.expect(vm0 and not k0, f"{label}: the start-up show of the remote program on the VM only", f"{len(k0)} kernels, {len(vm0)} VM lines")
+            else:
+                # (A card mounted after the show's wait: the show goes on as it
+                # was, the card's Formula from the next start.)
+                self.expect(n is not None, f"{label}: the card came after the show's wait (its Formula from the next start)", "")
+                self.report.setdefault("boot_show_not_taken", []).append(label)
             ok, kern, vm = await self._plays(f"/formulas/{self.NEVER}.psi")
             self.expect(ok and vm and not kern, f"{label}: the remote program plays on the VM only", f"{kern} kernels, {vm} VM lines")
 

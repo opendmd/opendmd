@@ -401,10 +401,16 @@ as an orphan or beside its own compile.
    add signed again (a reconnect: `r {next}` from where it was, or `done`
    again if it landed), another key's add under way (`busy`, until 10
    minutes after its last progress; a landed add holds nothing), the day's
-   tally (`quota`: 16 adds or 256 KB a day per panel, kept on the card in
-   `/formulas/.add-day` so a restart does not reset it; the day is the
-   panel's clock's, and with no clock the tally stands until a clock shows
-   a new day; a tally it cannot read counts as a full day). In the pass:
+   tally (`quota`: 16 `formula-add`s past the rate, refused ones included,
+   or 256 KB a day per panel; counted before the card is read for one;
+   kept on the card in two slots, `/formulas/.add-day.a` and `.b`, written
+   in turn, so neither a restart nor a write cut short resets it; the day
+   is the panel's clock's and starts again only on a later day; a tally
+   made with no clock carries into the first day a clock shows, and with
+   no clock it never starts again; only missing slots are a fresh day, and
+   an empty or unreadable one is a full day). The same add's checks tried
+   again once all its bytes are in are rated like a new add (one in 2 s);
+   at most one taken stem's source is hashed per add. In the pass:
    at most 128 Formulas on the card (`quota`). Also refused: `no-card`,
    `busy` (a LAN transfer or update on the card), `bad-arg`. The same
    key's other add replaces its stalled one; a key removed, remotely or on
@@ -459,6 +465,21 @@ supply one. `formula-add` is the exception, and what bounds it is:
 - **signed bytes:** every part is a signed command under the session's
   counter, and both hashes are in the signed `formula-add`: a relay can
   drop or delay parts, never alter or replay one.
+
+**The residual risk, accepted for now.** Once the panel has compiled a
+remotely added Formula's *source* (at its next start, or when a LAN user
+merely opens the web app, which prepares it), that attacker-chosen source,
+compiled by the trusted compiler, runs on the JIT. The page's
+gallery-only rule is advisory: the panel cannot know the gallery, and any
+paired key can send any source. So the compiler's and the JIT's soundness
+on arbitrary *valid* source becomes reachable remotely by any paired key.
+What bounds it: only a paired key (a pairing on the panel or by an
+invitation from one) can add at all; 16 adds and 256 KB a day; 16 KB of
+source and 8 KB compiled; 128 Formulas on the card; the compiler's own
+limits and checks (`psi::MAX_SOURCE`, the heap and stack gates, its
+errors) and the JIT's self-check of every kernel against the VM before it
+draws. The feature stays off in releases until the owner decides with this
+in view.
 
 Inline and `~sent` play stay excluded: they would hand the panel a
 program with none of the above (no record, no recompile, nothing on the

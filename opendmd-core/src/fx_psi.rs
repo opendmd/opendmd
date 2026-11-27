@@ -2977,6 +2977,55 @@ mod tests {
         assert!(card_program(broken, f).is_err(), "an unreadable .psb is no reason to play the .psr");
     }
 
+    /// Tripwire (beside the behavioural checks: the emulator lane plays
+    /// `.psr` programs as effects, looks and start-up shows and asserts no
+    /// kernel is built): the JIT is built in one place in the core,
+    /// `jit::Jit::kernel_for`, after its first gate `jit_refusal(vm_only)`;
+    /// both its callers pass their `vm_only`; and in the firmware only the
+    /// measuring probes (never a release, never a card program) call it.
+    #[test]
+    fn the_jit_is_built_in_one_place_behind_the_vm_gate() {
+        fn code(path: &std::path::Path) -> String {
+            std::fs::read_to_string(path).unwrap().lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+        }
+        fn rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    rs(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let emit = concat!("jit::", "emit(");
+        let mut files = Vec::new();
+        rs(&root.join("src"), &mut files);
+        rs(&root.join("../firmware/src"), &mut files);
+        let callers: Vec<String> = files
+            .iter()
+            .filter(|p| code(p).contains(emit))
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let mut callers = callers;
+        callers.sort();
+        assert_eq!(callers, ["fx_psi.rs", "paint_probe.rs", "psi_probe.rs"], "who builds a kernel");
+        let fx = code(&root.join("src/fx_psi.rs"));
+        assert_eq!(fx.matches(emit).count(), 1, "one build in the core");
+        let k = fx.find(concat!("fn kernel_", "for(")).unwrap();
+        let g = fx[k..].find(concat!("super::jit_refusal", "(vm_only)")).map(|x| x + k).expect("the gate in kernel_for");
+        let e = fx.find(emit).unwrap();
+        assert!(k < g && g < e, "the gate before the build");
+        assert_eq!(fx.matches(concat!(".kernel_", "for(")).count(), 2, "two callers");
+        assert_eq!(fx.matches(concat!(", self.vm_", "only)")).count(), 2, "both pass vm_only");
+        for p in ["psi_probe.rs", "paint_probe.rs"] {
+            let main = code(&root.join("../firmware/src/main.rs"));
+            let module = p.trim_end_matches(".rs");
+            assert!(main.contains(&format!("#[cfg(feature = \"{}\")]\nmod {module};", module.replace('_', "-"))), "{p}: a probe feature's only");
+        }
+    }
+
     /// A program read from a `.psr`, driven to where the JIT would be
     /// built: the JIT's first gate (`jit_refusal`, the first thing
     /// `jit::Jit::kernel_for` asks) refuses it, as an effect, a look, a

@@ -42,7 +42,10 @@ fn dir() -> String {
     format!("{}/formulas", config::SD_MOUNT)
 }
 
-const TALLY_FILE: &str = ".add-day";
+/// The day's tally's two slots, written in turn (the newer, by its seq,
+/// counts): a restart mid-write leaves the other whole (the torn one reads
+/// as a full day).
+const TALLY_SLOTS: [&str; 2] = [".add-day.a", ".add-day.b"];
 
 fn part_path(id: u32, p: Part) -> String {
     format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psr" })
@@ -63,17 +66,24 @@ fn today() -> Option<u64> {
     crate::clock::unix_valid().and_then(|t| u64::try_from(t).ok()).map(|t| t / 86_400)
 }
 
-/// The tally as the card keeps it (none yet: a fresh day; unreadable: a full one).
+/// The tally as the card keeps it: both slots missing, a fresh day; one
+/// unreadable (or the card failing), a full day; else the newer.
 pub(super) fn load_tally() -> Tally {
-    match std::fs::read_to_string(format!("{}/{TALLY_FILE}", dir())) {
-        Ok(t) => Tally::parse(&t),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Tally::default(),
-        Err(_) => Tally::parse("x"),
+    let slot = |n: &str| match std::fs::read_to_string(format!("{}/{n}", dir())) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    };
+    match (slot(TALLY_SLOTS[0]), slot(TALLY_SLOTS[1])) {
+        (Ok(a), Ok(b)) => Tally::from_slots(a.as_deref(), b.as_deref()),
+        _ => Tally::FULL,
     }
 }
 
+/// Into the slot its seq names (the other one keeps the last tally whole).
 fn save_tally(t: &Tally) -> bool {
-    std::fs::write(format!("{}/{TALLY_FILE}", dir()), t.text()).is_ok()
+    let _ = std::fs::create_dir_all(dir());
+    std::fs::write(format!("{}/{}", dir(), TALLY_SLOTS[(t.seq % 2) as usize]), t.text()).is_ok()
 }
 
 /// The add's directory pass: the stems taken (lower case) and how many
@@ -123,13 +133,17 @@ fn target(args: &AddArgs) -> Result<Result<String, String>, Refusal> {
     if sources >= fadd::MAX_FORMULAS {
         return Err(Refusal::Quota);
     }
+    log::info!("formula-add: looked on the card for {}", args.stem);
+    // (At most one file hashed: the first taken stem whose source has the
+    // signed length. Others are taken, and passed.)
+    let mut hashed = false;
     for stem in fadd::stem_choices(&args.stem) {
         let here: Vec<u32> = taken.iter().filter(|(s, _)| *s == stem).map(|&(_, n)| n).collect();
         if here.is_empty() {
             return Ok(Ok(stem));
         }
-        // Hashed only when its length is the signed source's.
-        if here.contains(&args.src_size) {
+        if !hashed && here.contains(&args.src_size) {
+            hashed = true;
             let f = std::fs::File::open(format!("{}/{stem}.psi", dir())).map_err(|_| Refusal::Busy)?;
             if fadd::sha256_of(f).ok() == Some(args.src_sha256) {
                 return Ok(Err(stem));
@@ -194,8 +208,11 @@ fn psb_ok(psb: &[u8]) -> Result<bool, ()> {
 /// most) in one block, and what CPU0's other card work leaves for the
 /// player and the network (`card_formulas`' 20 KB).
 fn room(psb_size: usize) -> bool {
-    crate::state::free_heap() as usize >= psb_size + 12 * 1024 + 20 * 1024 && crate::state::largest_free_block() >= 12 * 1024
+    crate::state::free_heap() as usize >= psb_size + CHECK_STACK + 12 * 1024 + 20 * 1024 && crate::state::largest_free_block() >= 12 * 1024
 }
+
+/// The checks' task's stack (the program loads and the source's pass).
+const CHECK_STACK: usize = 8 * 1024;
 
 impl Client {
     /// A turn's housekeeping: a stale add's part files go now.
@@ -232,6 +249,11 @@ impl Client {
             }
             Pre::New => {}
         }
+        // The attempt counted before the card is read for it (fails closed:
+        // no tally kept, no add).
+        if !save_tally(&self.adds.tally) {
+            return Err(Refusal::NoCard);
+        }
         let stem = match target(&args)? {
             Err(stem) => return Ok(done(&stem)),
             Ok(stem) => stem,
@@ -239,10 +261,10 @@ impl Client {
         if let Some(old) = self.adds.begin(k, args, stem, now) {
             remove_parts(old);
         }
-        // The day's tally first (fails closed: no part file without it).
+        // Its bytes on the tally (fails closed: no part file without it).
         if !save_tally(&self.adds.tally) {
             self.adds.drop_held();
-            return Err(Refusal::Busy);
+            return Err(Refusal::NoCard);
         }
         let _busy = crate::cache_builder::busy();
         for p in [Part::Source, Part::Psb] {
@@ -303,14 +325,25 @@ impl Client {
             // Kept: the same formula-add signed again tries again.
             return Err(Refusal::Busy);
         }
+        // The card is this add's from its first read to its last rename.
+        let _busy = crate::cache_builder::busy();
         let mut psb = Vec::new();
         let read = psb.try_reserve_exact(psb_size).is_ok()
             && std::fs::File::open(part_path(id, Part::Psb)).and_then(|f| f.take(psb_size as u64 + 1).read_to_end(&mut psb)).is_ok();
         if !read {
             return Err(Refusal::Busy);
         }
-        let checked = if psb.len() == psb_size && source_ok(&part_path(id, Part::Source)) { psb_ok(&psb) } else { Ok(false) };
-        drop(psb);
+        // The checks (the source's pass, the program's loads) on a task of
+        // their own: not on the network worker's stack (a few KB left).
+        let src_path = part_path(id, Part::Source);
+        let run = crate::psi_stack::run_with_prio(CHECK_STACK, Some(1), move || {
+            if psb.len() == psb_size && source_ok(&src_path) { psb_ok(&psb) } else { Ok(false) }
+        });
+        let Some((checked, left)) = run else {
+            // (No task to check on: the heap. Kept, tried again.)
+            return Err(Refusal::Busy);
+        };
+        log::info!("formula-add: checked on a task of its own ({left} B of its stack left)");
         if checked.is_err() {
             return Err(Refusal::Busy);
         }
@@ -322,7 +355,6 @@ impl Client {
         }
         let d = dir();
         let (psr_to, psi_to) = (format!("{d}/{stem}{REMOTE_EXT}"), format!("{d}/{stem}.psi"));
-        let _busy = crate::cache_builder::busy();
         // The program first, as a `.psr` (VM only), then its source; a rename
         // never replaces a file. Either step failing leaves nothing that plays
         // on the JIT, and nothing at all from this add.
