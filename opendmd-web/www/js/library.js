@@ -13,7 +13,7 @@ import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
 import { authorOf, addOne, offerPlaylist, targetMenu } from './gifs.js';
-import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE, unreachable } from './util.js';
+import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE, unreachable, enc, base } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;
@@ -44,8 +44,8 @@ export async function mount(el) {
       h('p.cap', { style: 'margin:0 8px 4px' }, 'On opendmd.dev: search, convert, then send it here')), r.right - 250, r.bottom + 4);
   } }, '+ Add ▾');
   // Nothing on the player matches: the same words, online.
-  const webQ = h('b'), webGo = findLink('lib-web-go', 'txt', 'Find art online ↗');
-  const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ', webGo);
+  const webQ = h('b'), webGo = findLink('lib-web-go', 'txt', 'Find art online ↗'), webMsg = h('span');
+  const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, webMsg, webGo);
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -182,6 +182,8 @@ export async function mount(el) {
     actions(btn, 'lib-d-menu', [
       ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, fav, (x) => x.w > 1)],
       app.device && ['lib-d-edit', 'Edit details…', edit],
+      // (To change the GIF itself: download it and open it in the website's Studio.)
+      app.device && ['lib-d-dl', 'Download GIF', () => h('a', { href: enc(current.path), download: base(current.path) }).click()],
       app.device && ['lib-d-del', 'Delete…', remove, '.danger']], label(current.e));
   }
   async function inList(btn, patch, is) {
@@ -251,6 +253,7 @@ export async function mount(el) {
     grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply) < 2);
     grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
+    webMsg.replaceChildren('Nothing here matches “', webQ, '”. ');
     webGo.href = online();
     webHint.hidden = !text || st.busy || st.matched > 0;
     tree.el.hidden = !webHint.hidden; // no empty box under the hint
@@ -321,7 +324,10 @@ export async function mount(el) {
   };
   // Add GIFs: the files (GIFs, pictures), each that is not a 128 × 32 GIF
   // fitted to the panel first (js/fit.js), then their details (js/details.js).
-  async function addGifs(picked, inits = []) {
+  // One at a time: files dropped or pasted while it is open wait their turn.
+  let adding = Promise.resolve();
+  const addGifs = (picked, inits) => (adding = adding.then(() => addNow(picked, inits)).catch(() => {}));
+  async function addNow(picked, inits = []) {
     const ok = picked.map((f, i) => [f, inits[i]]).filter(([f]) => /\.gif$/i.test(f.name) || f.type.startsWith('image/'));
     if (!ok.length) { toast('choose GIFs or pictures', 'bad'); return; }
     const fit = await import('./fit.js');
@@ -383,6 +389,38 @@ export async function mount(el) {
     if (tree.dirty) tree.load().then(() => { const it = current && tree.rows.find((x) => x.path === current.path); if (it) preview(it); });
     else tree.refresh(); // the thumbnails switch may have changed
   };
+  // Drop or paste (on a device): picture and GIF files go to Add GIFs; an
+  // address or text is not fetched here (the website does that): the
+  // Find art online hint says so.
+  const media = (fs) => [...(fs || [])].filter((f) => f.type.startsWith('image/') || /\.gif$/i.test(f.name));
+  const notHere = () => {
+    webMsg.textContent = 'Only files from this device are added here; for a picture on a web page, ';
+    webGo.href = online();
+    webHint.hidden = false;
+    webHint.scrollIntoView?.({ block: 'nearest' });
+  };
+  const take = (dt) => {
+    const fs = media(dt?.files);
+    if (fs.length) addGifs(fs);
+    else if (dt && /^(https?:|www\.)/i.test((dt.getData('text/uri-list') || dt.getData('text/plain') || '').trim())) notHere();
+    else return false;
+    return true;
+  };
+  const onPaste = (e) => {
+    // (Text into a field stays text; an image, or an address pasted on the page, is ours.)
+    if (media(e.clipboardData?.files).length || !/INPUT|TEXTAREA/.test(e.target.tagName)) { if (take(e.clipboardData)) e.preventDefault(); }
+  };
+  if (app.device) {
+    // (Anywhere on the page while the Library shows, its sheets included: a
+    // file dropped there would otherwise replace the page.)
+    // (Once per page: a view mounted again lets the last one's go.)
+    el._drop?.abort();
+    const signal = (el._drop = new AbortController()).signal;
+    const on = () => el.classList.contains('on'), over = (v) => grid.classList.toggle('drop', v);
+    addEventListener('dragover', (e) => { if (on()) { e.preventDefault(); over(true); } }, { signal });
+    addEventListener('dragleave', (e) => { if (!e.relatedTarget) over(false); }, { signal });
+    addEventListener('drop', (e) => { if (!on()) return; e.preventDefault(); over(false); take(e.dataTransfer); }, { signal });
+  }
   // Another card (swapped while the page was open): its folders, if shown.
   on('card', () => { if (el.classList.contains('on')) { playlists(); again(); } });
   return {
@@ -397,8 +435,9 @@ export async function mount(el) {
       gif?.then(({ file, init }) => (app.device ? addGifs([file], [init]) : toast('Send it to your panel’s own address: this isn’t one', 'bad')),
         (e) => toast(`Couldn’t add that GIF: ${e.message || e}`, 'bad'));
       // A card swapped since the last look shows in the status: one request.
-      if (app.device) app.refreshStatus().catch(() => {});
+      if (app.device) { app.refreshStatus().catch(() => {}); addEventListener('paste', onPaste); }
     },
+    hide() { removeEventListener('paste', onPaste); },
     // #library/<Category>: that folder open at the top, the others closed.
     async sub(sub) {
       if (!sub) return;

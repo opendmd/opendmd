@@ -5579,6 +5579,7 @@ def mock_pass(browser) -> None:
             urllib.request.urlopen(urllib.request.Request(base + "/api/files" + p, method="DELETE"), timeout=30).read()
         details_checks(page, base, overlay)
         fit_checks(page, base, overlay)
+        drop_checks(page, overlay)
         formulas_checks(browser, base, errors)
         psi_sprite_phone(browser, base, errors)
         psi_import_checks(browser, base, errors)
@@ -9578,6 +9579,63 @@ def fit_checks(page: Page, base: str, overlay: Path) -> None:
     no_leaks(page, "add gifs")
 
 
+def drop_or_paste(page: Page, files: list[Path], text: str = "", paste: bool = False) -> None:
+    """Files (and/or an address) dropped on the Library's list, or pasted on
+    the page, as a DataTransfer of real Files."""
+    fs = [[f.name, base64.b64encode(f.read_bytes()).decode(), "image/gif" if f.suffix == ".gif" else "image/png"] for f in files]
+    page.evaluate("""([fs, text, paste]) => { const dt = new DataTransfer();
+        for (const [n, b64, t] of fs) dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], n, { type: t }));
+        if (text) { dt.setData('text/uri-list', text); dt.setData('text/plain', text); }
+        if (paste) { document.body.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt })); return; }
+        const el = document.querySelector('#lib-list');
+        for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt })); }""",
+                  [fs, text, paste])
+
+
+def drop_checks(page: Page, overlay: Path) -> None:
+    """Drop and paste into Add GIFs: a dropped PNG fitted first; a dropped
+    128x32 GIF straight to its details and onto the card; a PNG and a GIF
+    dropped together through the same steps (one sheet, then both in the
+    details); a pasted picture; a dropped address not fetched: the Find
+    art online hint instead."""
+    fixture = OUT / "fit-fixture.png"
+    small = OUT / "drop-small.gif"
+    anim_fixture(small, 3, 128, 32, 100)
+    goto_view(page, "library")
+    pick_cat(page, "Consoles")
+    drop_or_paste(page, [fixture])
+    d = fit_ready(page)
+    check(d.get("mode") == "fit" and "fit-fixture.png" in page.inner_text("#fit-what"), "drop: a dropped picture opens Add GIFs' fitting step")
+    page.click("#fit-cancel")
+    drop_or_paste(page, [small])
+    page.wait_for_selector("#dl .dl-item", timeout=30000)
+    check(page.locator("#fit").count() == 0, "drop: a dropped 128x32 GIF goes straight to its details")
+    got = dl_add(page, "Dropped Bar", "SNES", overlay)
+    check(got.read_bytes() == small.read_bytes(), f"drop: and onto the card as it is ({got.name})")
+    drop_or_paste(page, [fixture, small])
+    fit_ready(page)
+    page.click("#fit-next")
+    page.wait_for_selector("#dl .dl-item", timeout=30000)
+    names = page.eval_on_selector_all("#dl .dl-item .cap.mono:not(.dl-name)", "els => els.map(e => e.textContent)")
+    check(names == ["fit-fixture.gif", "drop-small.gif"], f"drop: two files dropped go through the same steps ({names})")
+    page.click("#dl-cancel")
+    drop_or_paste(page, [fixture], paste=True)
+    fit_ready(page)
+    check(True, "drop: a pasted picture opens Add GIFs' fitting step")
+    page.click("#fit-cancel")
+    hits: list[str] = []
+    page.route("https://example.com/**", lambda r: (hits.append(r.request.url), r.abort()))
+    drop_or_paste(page, [], text="https://example.com/cat.gif")
+    page.wait_for_selector("#lib-web:not([hidden])", timeout=5000)
+    t = page.inner_text("#lib-web")
+    page.wait_for_timeout(500)
+    check(t.startswith("Only files from this device are added here") and t.endswith("Find art online ↗") and not hits
+          and page.locator("#fit, #dl").count() == 0, f"drop: an address is not fetched, the hint offers the Studio ('{t}', {hits})")
+    page.unroute("https://example.com/**")
+    shot(page, "drop-address", "laptop")
+    no_leaks(page, "library (drop)")
+
+
 def online_checks(page: Page) -> None:
     """Find art online: the Library's + Add ▾ (Add GIFs…, Find art online ↗,
     a plain link to the website's Studio's Import in a new tab), and a
@@ -9709,10 +9767,17 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     for sel in ("#lib-play", "#lib-d-add", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
     page.click("#lib-d-more")
-    for sel in ("#lib-d-fav", "#lib-d-edit", "#lib-d-del"):
+    for sel in ("#lib-d-fav", "#lib-d-edit", "#lib-d-dl", "#lib-d-del"):
         check(page.is_visible(sel), f"details: {sel} in the … menu")
     check(page.locator("#lib-d-hide").count() == 0, "details: no Hide in… in the … menu")
     check("danger" in (page.get_attribute("#lib-d-del", "class") or ""), "details: Delete… is destructive in the menu")
+    # Download GIF: the GIF itself (to change it in the website's Studio).
+    with page.expect_download() as dl:
+        page.click("#lib-d-dl")
+    f = OUT / "details-download.gif"
+    dl.value.save_as(f)
+    check(dl.value.suggested_filename == known.rsplit("/", 1)[1] and f.read_bytes() == (CARD / known.lstrip("/")).read_bytes(),
+          f"details: Download GIF saves the GIF itself ({dl.value.suggested_filename})")
     page.keyboard.press("Escape")
     no_leaks(page, "library (details)")
     shot(page, "library-details", "laptop")
