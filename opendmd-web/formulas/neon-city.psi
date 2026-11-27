@@ -1,7 +1,8 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Neon city"
-about "A night drive through a neon megacity: crowding towers lined with neon, a holo screen, rain on a wet road"
+about "A night drive through a neon megacity: towers lined with neon, a holo screen, rain on a wet road, lightning overhead"
+control lightning 0..1 = .5 "Lightning" -- 0: none; 1: a storm in every shower
 loop forever
 smooth
 
@@ -13,8 +14,11 @@ smooth
 -- catches the haze. Four lanes, a dashed cyan middle line and neon kerbs;
 -- the car is dark, with a red light bar and a cyan glow under it. It
 -- always drizzles, and now and then a shower comes through: slanted rain
--- streaks, as 16-bit consoles drew it, and the road wetter. Each play starts elsewhere, in
--- another city.
+-- streaks, as 16-bit consoles drew it, and the road wetter. With the
+-- showers comes lightning, behind the towers: the sky and the far row
+-- flicker a cold blue, the near towers stand black against them, and
+-- some strikes show their bolt, forked, coming down on a roof. Each play
+-- starts elsewhere, in another city.
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
@@ -26,6 +30,17 @@ palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   #34123a, lane #8090b0, kerb #e0207a, rain #6878a8, car #303850,
   glass #5878a8, red #ff2030, violet #a040ff, magenta #ff40ff,
   pink #ff2a9a, cyan #20f0ff, white #fff
+
+-- The same colours, in the same places, as lightning lights them: the
+-- sky's ramp a cold blue, the far row lit from behind, the wet asphalt
+-- catching a little of it; the first is the bolt's afterimage (black
+-- until then). The near towers, the street and all that is painted stay
+-- as they are, and nothing below the horizon but the wet asphalt changes:
+-- the flash keeps to the sky.
+palette struck = bolt #f0f4ff, #2a3a78, #34448a, #404e98, #4e58a4, #6060ac,
+  #8a5cac, #b060a8, #6c70c4, #08060e, #90e8ff, #120c1c, #1a1224, #0e0a16,
+  #130e1c, #2c2048, #382a54, #8090b0, #e0207a, #6878a8, #303850, #5878a8,
+  #ff2030, #a040ff, #ff40ff, #ff2a9a, #20f0ff, #fff
 
 -- Across the road, left to right, in 30ths of its half width (the middle
 -- at 31): 3 kerb, 1 asphalt, 2 a lane line, 4 the middle line; past
@@ -77,10 +92,64 @@ holo = floor(t*3)
 -- much of the rain is falling now
 shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
 
+-- Lightning, as weather: every 4 seconds are a slot that may hold one
+-- strike, likelier the harder it rained as the slot began (few in a
+-- drizzle, most slots of a downpour) and the higher the control, at its
+-- own moment in the slot (so two are never less than 1.6 s apart).
+-- `since` is the seconds since it struck: below 0 before it, and all
+-- through a slot without one.
+slot = floor(t/4)%4096
+chance = lightning * (clamp(noise(slot/5 + seed*50, 4, 0)*2.5 - .6, .3, 1)*1.6 + .1)
+since = hash(slot, seed + 1) < chance ? (frac(t/4) - .05 - hash(slot, seed + 2)*.6) * 4 : -1
+
+-- How brightly it lights the sky, in 25ths of a second from the strike:
+-- a flash, a dip and a second flash, then the afterglow dying away over
+-- half a second (one strike in three flickers a third time); each strike
+-- of its own strength
+table flicker = 1, .3, .2, .85, .5, .38, .3, .24, .19, .15, .11, .08, .05,
+  .03, .01, 0
+tick = clamp(since*25, -1, 15)
+third = (hash(slot, seed + 3) < .34) * (floor(tick) == 7) * .3
+glow = (since >= 0) * (.6 + hash(slot, seed + 4)*.4) * (mix(flicker[tick], flicker[tick + 1], frac(tick)) + third)
+
+-- The scene's colours this frame: the city's, towards the struck ones by
+-- the glow (worked out once a frame: the pixels pay nothing for it)
+palette lit = tween(city, struck, glow)
+
+-- The bolt comes down on a near tower in view: of three picked across
+-- the panel, the one with the lowest roof (`roof`, its row), and only
+-- when that leaves some sky over it; else the strike is sheet lightning,
+-- the flicker alone. Its ink is 1 for the two flashes (drawn white), then
+-- a half until the afterglow has all but gone (drawn as the afterimage,
+-- fading with it).
+fn roofOf(id) = 31 - floor(hash(id%22, seed)*13 + 21.9999)
+towerA = firstTower + 1 + floor(hash(slot, seed + 5) * 5)
+towerB = firstTower + 6 + floor(hash(slot, seed + 6) * 5)
+towerC = firstTower + 11 + floor(hash(slot, seed + 7) * 5)
+roofA = roofOf(towerA)
+roofB = roofOf(towerB)
+roof = max(max(roofA, roofB), roofOf(towerC))
+target = roofA == roof ? towerA : (roofB == roof ? towerB : towerC)
+boltInk = (since >= 0 and roof > 5) * ((since < .2) + (since < .44)) / 2
+
 draw {
+  -- The bolt, in ink (the pixels put it behind the near towers): from the
+  -- top of the panel down to just over the roof in three jagged strokes,
+  -- and a branch off the first bend, away from the roof, that dies out
+  -- in the air; the lower the roof, the wider it wanders
+  if boltInk {
+    hit = floor(target*8 + towerLeft) + 3
+    bendX = hit + (hash(slot, seed + 8) - .5)*roof
+    kinkX = hit + (hash(slot, seed + 9) - .5)*roof*.5
+    line(bendX + (hash(slot, seed + 10) - .5)*roof*.6, 0, bendX, roof*.35, boltInk)
+    line(bendX, roof*.35, kinkX, roof*.7, boltInk)
+    line(kinkX, roof*.7, hit, roof - 1, boltInk)
+    line(bendX, roof*.35, bendX + (bendX < hit ? -2 - roof*.3 : 2 + roof*.3), roof*.62, boltInk)
+  }
+
   -- Painted, back to front: the rain under everything else, then the
   -- car, then the neon and the holo screen. (Each colour is its place in
-  -- the palette.)
+  -- the palette: the city's own, so lightning leaves the paint alone.)
 
   -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
   -- one slant, spread evenly across and each at its own height, falling
@@ -156,10 +225,14 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 -- lit window. Each number's colour is the street's below the horizon
 -- (the asphalt wet near the horizon, where it shows the haze) and the
 -- sky's above it; what is painted goes over it (the road's cyan lines
--- are the window's colour).
+-- are the window's colour). The bolt's ink, in eighths, adds 4 (its
+-- afterimage) or 8 (the bolt, white) above the horizon: over the sky and
+-- the far row it shows, and the near row and its windows hide it.
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
-pal(city, pick(across[px*scale + start] + towers,
+pal(lit, pick(across[px*scale + start] + towers + ink(8),
     below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
     below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
     below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
-    below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt))
+    below ? (stripe ? city.kerb : city.window) : city.window,
+    below ? (stripe ? city.window : city.asphalt) : struck.bolt, struck.bolt, city.nearTower, city.window,
+    city.white, city.white, city.nearTower, city.window))
