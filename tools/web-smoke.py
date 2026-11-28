@@ -1967,6 +1967,51 @@ def stop_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
                 delete_path(base, q)
 
 
+def pill_checks(browser, base: str, errors: list[str]) -> None:
+    """The header's status pill: off Now it names what plays (a dot that
+    says live), Paused, Panel not reachable (and back); on Now, playing, it
+    is hidden. A playlist's ▶ plays it; Now's Playing from switches back."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library")
+    page.wait_for_selector("#pill .dot.ok", timeout=30000)
+    t = page.inner_text("#pill")
+    check(t and t != "Nothing playing" and "/" not in t and ".gif" not in t, f"pill: off Now, what plays, by title ({t!r})")
+    refresh = "() => import('./js/state.js').then((m) => m.app.refreshStatus()).catch(() => {})"
+    post_json(base + "/api/pause", {})
+    try:
+        page.evaluate(refresh)
+        page.wait_for_function("document.querySelector('#pill').textContent === 'Paused'", timeout=10000)
+        check(True, "pill: Paused")
+    finally:
+        post_json(base + "/api/pause", {})
+    expected.append("/api/")
+    page.route("**/api/**", lambda r: r.abort())
+    page.evaluate(refresh)
+    page.wait_for_function("document.querySelector('#pill').textContent === 'Panel not reachable' && !!document.querySelector('#pill .dot.bad')", timeout=10000)
+    check(True, "pill: Panel not reachable, a red dot")
+    page.unroute("**/api/**")
+    page.evaluate(refresh)
+    page.wait_for_selector("#pill .dot.ok", timeout=15000)
+    expected.remove("/api/")
+    check(page.inner_text("#pill") not in ("Panel not reachable", "Paused"), "pill: back once the panel answers")
+    goto_view(page, "now")
+    page.wait_for_timeout(1000)
+    check(page.is_hidden("#pill") and page.is_hidden("#now-conn"), "pill: on Now, playing, no pill (Now says it), and no second dot")
+    # ▶ on a playlist, then Playing from back to All files.
+    goto_view(page, "sets")
+    page.click("#sets-list [data-path='/filelist.xmas'] .play")
+    c = wait_config(base, lambda c: c["set"] == "filelist.xmas")
+    check(c["set"] == "filelist.xmas", "playlists: ▶ plays it")
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-from').textContent.startsWith('Christmas')", timeout=20000)
+    page.click("#now-from")
+    page.click("#now-from-menu [data-path='/filelist.txt']")
+    c = wait_config(base, lambda c: c["set"] == "")
+    page.wait_for_function("document.querySelector('#now-from').textContent.startsWith('All files')", timeout=20000)
+    check(c["set"] == "", "now: Playing from switches back to All files")
+    page.context.close()
+
+
 def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Many GIFs moved, renamed and deleted at once (Select › More ▾:
     js/details.js's bulk dialogs, js/refs.js), in a fresh browser: three
@@ -5607,6 +5652,7 @@ def mock_pass(browser) -> None:
         relink_checks(browser, base, overlay, errors)
         tidy_checks(browser, base, overlay, errors)
         stop_checks(browser, base, overlay, errors)
+        pill_checks(browser, base, errors)
         selection_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.

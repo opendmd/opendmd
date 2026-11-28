@@ -240,12 +240,13 @@ export const app = {
     if (this.building) { toast('The display is still reading a playlist: try again in a moment', 'bad'); return false; }
     try {
       toast(`Switching to “${p.label}”…`);
+      this.switching = p.label; // (the status pill says so while the display reads it)
       const r = await this.src.putConfig({ set: p.value });
       await this.refreshStatus();
       await this.refreshConfig();
       toast(`Playing “${p.label}” · ${(r.entries ?? this.status?.entries ?? 0).toLocaleString()} GIFs`, 'ok');
       return true;
-    } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : `Couldn’t play “${p.label}”: ${e.message}`, 'bad'); return false; }
+    } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : `Couldn’t play “${p.label}”: ${e.message}`, 'bad'); return false; } finally { this.switching = null; }
   },
 
   go(view) { location.hash = '#' + view; },
