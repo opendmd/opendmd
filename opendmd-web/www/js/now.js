@@ -17,7 +17,7 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav, actions } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
+import { h, clear, on, emit, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
 // whenever Recently played is wanted; the slim one (`?now=1`, one segment:
@@ -401,6 +401,7 @@ function mountDevice(el) {
     nocard = !sd.mounted && !np.path && !!(sd.attempts || sd.error);
     still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
+    emit('now', s);
     follow_(np.path, fkey(np.path, np), np);
   }
 
@@ -439,6 +440,7 @@ function mountDevice(el) {
       good();
     } catch (e) {
       conn.className = 'dot bad';
+      if (unreachable(e)) emit('link', false);
       conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
       // (No mirror: the desk scene's page shows the panel, the app still says it lost it.)
       if (shownPath || app.noMirror) cap.textContent = UNREACH;

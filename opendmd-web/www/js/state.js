@@ -164,7 +164,8 @@ export const app = {
     fullAt = performance.now();
     if (!this.src?.config) return null;
     const was = this.cardKey, seq = ++this.stAsked;
-    const st = await this.src.status(recent);
+    let st;
+    try { st = await this.src.status(recent); } catch (e) { if (unreachable(e)) emit('link', false); throw e; }
     // Replies can land out of order (the Now poll, a return to the tab and a
     // view's own refresh are each a request): one asked before the latest
     // applied is its caller's to read, not the app's current status. Taken

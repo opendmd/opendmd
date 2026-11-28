@@ -103,6 +103,8 @@ if (found) {
   const s = found.status;
   // The device's name; its address and version are in Settings → About.
   $('#where').textContent = s.hostname || 'OpenDMD display';
+  // What the panel is doing, on every view (js/pill.js).
+  (await import('./js/pill.js')).pill();
   // No API key: one banner offering to set one (js/keynag.js), gone once set.
   on('config', (c) => { if (c && c.api_key_set === false) import('./js/keynag.js').then((m) => m.show()); else $('#keynag')?.remove(); });
   // Power-safe (the ESP32-S3's brownout-loop guard, `reset_note` "power-safe: …"):
