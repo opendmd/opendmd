@@ -89,7 +89,7 @@ export async function mount(el) {
     onError: (m) => toast(m, 'bad'),
     extra(it) {
       const u = tg && app.tags.get(it.path);
-      return [glyphs(ov.get(it.path), tg?.isFav(u)), tg && tg.bits(u), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
+      return [glyphs(ov.get(it.path)), tg && tg.bits(u), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
     },
     onUpdate: counted,
   });
@@ -260,9 +260,11 @@ export async function mount(el) {
       pv.clear();
       cap.textContent = 'Pick a GIF to see it here';
     }
-    // Shown of every GIF on the card (not only the open folders'); "+" while a folder has never been listed.
-    count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${(text ? st.pool : st.all).toLocaleString()}${!text && st.some ? '+' : ''}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
-    count.title = !text && st.some ? 'GIFs on the card: more in folders not opened yet' : '';
+    // Shown of every GIF on the card (not only the open folders'); while a
+    // folder has never been listed in this browser, that total isn't known.
+    count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…')
+      : (!text && st.some ? `${st.shown.toLocaleString()} shown · more in folders not opened yet` : `${st.shown.toLocaleString()} of ${(text ? st.pool : st.all).toLocaleString()}`)
+        + (st.bad ? ' · some folders couldn’t be read: type again to retry' : ''));
     count.classList.toggle('bad', !!st.err);
     favs();
     unseen();
@@ -356,7 +358,7 @@ export async function mount(el) {
   const addGifs = (picked, inits) => (adding = adding.then(() => addNow(picked, inits)).catch(() => {}));
   async function addNow(picked, inits = []) {
     const ok = picked.map((f, i) => [f, inits[i]]).filter(([f]) => /\.gif$/i.test(f.name) || f.type.startsWith('image/'));
-    if (!ok.length) { toast('choose GIFs or pictures', 'bad'); return; }
+    if (!ok.length) { toast('Choose GIFs or pictures', 'bad'); return; }
     const fit = await import('./fit.js');
     const got = await fit.fitAll(ok.map((x) => x[0]), ok.map((x) => x[1]));
     if (!got.length) return;
