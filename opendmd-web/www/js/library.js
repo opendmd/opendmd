@@ -300,7 +300,7 @@ export async function mount(el) {
     const none = ['lib-none', 'Select none', () => { app.selection.clear(); sync(); }];
     if (!paths.length) { actions(btn, 'lib-bulk', [none], 'Nothing selected'); return; }
     actions(btn, 'lib-bulk', [none,
-      ['lib-bulk-fav', '♥ Favourite', () => tagsMod().then((m) => m.bulkFav(paths, done))],
+      ['lib-bulk-fav', '♥ Favourite', () => tagsMod().then((m) => m.bulkFav(paths, done)), '.sep'],
       ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
       app.device && ['lib-bulk-move', 'Move to folder…', () => bulk('bulkMove', paths)],
       app.device && ['lib-bulk-rename', 'Rename…', () => bulk('bulkRename', paths)],
@@ -309,7 +309,8 @@ export async function mount(el) {
   // Done, the selection clears; stopped halfway, what was not reached (the
   // GIF that failed and those after it) stays selected, to try again.
   async function bulk(fn, paths) {
-    const r = await (await import('./details.js'))[fn](paths, opts());
+    const shown = new Set(tree.res.map((x) => x.path));
+    const r = await (await import('./details.js'))[fn](paths, { ...opts(), hidden: paths.filter((p) => !shown.has(p)).length });
     if (!r) return;
     // (Only what this batch was given: a GIF ticked while it ran stays.)
     const left = new Set(r.left);

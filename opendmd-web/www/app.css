@@ -94,7 +94,9 @@ button.grip{border:0;padding:0 4px;min-height:28px;cursor:grab;touch-action:none
 .bar>i{display:block;height:100%;background:var(--acc);width:0}
 details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .selbar{position:sticky;bottom:0;background:var(--bg2);border:1px solid var(--acc);border-radius:var(--r);padding:8px 12px;margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:nowrap}.selbar>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.selbar>button{flex:none}.selbar .sh{display:none}
-@media (max-width:760px){.selbar{bottom:66px;padding:8px;gap:6px}.selbar .lg{display:none}.selbar .sh{display:inline}#lib-sel-off{display:none}}
+@media (max-width:760px){.selbar{bottom:66px;padding:8px;gap:6px}.selbar .lg{display:none}.selbar .sh{display:inline}.selbar>button{min-height:44px;min-width:44px}}
+@media (max-width:600px){#lib-list .vrow .tag{display:none}}
+.menu .mi.sep{border-top:1px solid var(--line);border-radius:0;margin-top:4px;padding-top:8px}
 .log{max-height:200px;overflow:auto;font-size:13px}
 #toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9}
 @media (max-width:760px){#toasts{left:12px;right:12px;bottom:74px}}

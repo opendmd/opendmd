@@ -1915,6 +1915,58 @@ def tidy_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     delete_path(base, "/sets/tidy-a.txt")
 
 
+def stop_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """A bulk move shows its progress ("Moving 1 of 4 GIFs…", a bar, Stop);
+    another batch begun meanwhile is refused; Stop lets the GIF under way
+    finish and leaves the ones not reached selected, the toast saying so.
+    On a phone the bar still says how many selected GIFs aren't shown."""
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    gs = [f"/gifs/Stop_Smoke/MD_Stop_Smoke_{i:02d}.gif" for i in range(1, 5)]
+    for p in gs:
+        put_bytes(base + "/api/files" + p, src)
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library/Stop_Smoke")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gs[0])}]", timeout=30000)
+    page.evaluate("ps => import('./js/state.js').then((m) => ps.forEach((p) => m.app.selection.add(p)))", gs)
+    page.click("#lib-select")
+    page.route("**/api/files/move", lambda r: (time.sleep(1.2), r.continue_()))
+    page.evaluate("() => { window.prompt = () => 'Stop_Dest'; }")
+    page.click("#lib-sel-more")
+    page.click("#lib-bulk-move")
+    page.select_option("#bm-folder", "\n")
+    page.click("#bm-ok")
+    page.wait_for_selector("#bulk-prog", timeout=20000)
+    t = page.inner_text("#bulk-prog")
+    check(t.startswith("Moving 1 of 4 GIFs") and page.is_visible("#bulk-stop"), f"stop: the progress line ({t!r})")
+    refused = page.evaluate("() => import('./js/details.js').then((m) => m.busy())")
+    check(refused is True, "stop: a second batch while one runs is refused")
+    page.click("#bulk-stop")
+    page.wait_for_selector("#bulk-prog", state="detached", timeout=30000)
+    t = last_toast(page, "ok")
+    left = page.evaluate("() => import('./js/state.js').then((m) => [...m.app.selection])")
+    m = re.match(r"Stopped: moved (\d) of 4\. The rest are still selected", t)
+    check(bool(m) and 1 <= int(m.group(1)) < 4 and sorted(left) == gs[int(m.group(1)):],
+          f"stop: Stop ends it after the GIF under way, the rest still selected ('{t}', {len(left)} left)")
+    page.unroute("**/api/files/move")
+    page.context.close()
+    # A phone: the bar's "not shown" stays.
+    phone = new_page(browser, "phone", errors)
+    phone.goto(base + "/#library/Stop_Smoke")
+    phone.wait_for_selector("#lib-list .vdir", timeout=30000)
+    phone.evaluate("ps => import('./js/state.js').then((m) => ps.forEach((p) => m.app.selection.add(p)))", ["/gifs/Consoles/" + p.rsplit("/", 1)[1] for p in gs[:1]] + gs[-1:])
+    phone.click("#lib-select")
+    phone.fill("#lib-search", "no such smoke gif")
+    phone.wait_for_timeout(800)
+    phone.wait_for_selector("#lib-sel-off", state="visible", timeout=10000)
+    check("not shown" in phone.inner_text("#lib-sel-off"), f"stop: on a phone the bar says how many aren't shown ('{phone.inner_text('#lib-sel-off')}')")
+    phone.context.close()
+    for p in gs:
+        for d in ("/gifs/Stop_Smoke/", "/gifs/Stop_Dest/"):
+            q = d + p.rsplit("/", 1)[1]
+            if (overlay / q.lstrip("/")).exists():
+                delete_path(base, q)
+
+
 def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Many GIFs moved, renamed and deleted at once (Select › More ▾:
     js/details.js's bulk dialogs, js/refs.js), in a fresh browser: three
@@ -5554,6 +5606,7 @@ def mock_pass(browser) -> None:
         tags_checks(browser, base, overlay, errors)
         relink_checks(browser, base, overlay, errors)
         tidy_checks(browser, base, overlay, errors)
+        stop_checks(browser, base, overlay, errors)
         selection_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.

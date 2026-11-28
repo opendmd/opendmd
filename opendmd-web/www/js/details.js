@@ -454,10 +454,12 @@ export async function bulkRename(paths, opts) {
 
 // Delete…: the confirm names what goes (a few titles, how many more, the
 // folders), never only a count.
-export async function bulkDelete(paths) {
-  const n = paths.length, few = paths.slice(0, 5).map((p) => `“${label(app.wasm.parsePath(p))}”`).join(', ');
+// (`opts.hidden`: how many of them the list doesn't show now; said too.)
+export async function bulkDelete(paths, opts = {}) {
+  if (busy()) return null;
+  const n = paths.length, hid = opts.hidden ? `\n${opts.hidden.toLocaleString()} of them ${opts.hidden === 1 ? 'isn’t' : 'aren’t'} shown in the list now.` : '', few = paths.slice(0, 5).map((p) => `“${label(app.wasm.parsePath(p))}”`).join(', ');
   const dirs = [...new Set(paths.map((p) => niceName(p.split('/')[2])))], where = dirs.length > 4 ? `${dirs.slice(0, 4).join(', ')} and ${dirs.length - 4} more folders` : dirs.join(', ');
-  if (!confirm(`Delete ${n.toLocaleString()} GIF${n === 1 ? '' : 's'} from the card?\n\n${few}${n > 5 ? ` and ${(n - 5).toLocaleString()} more` : ''}\nFrom ${dirs.length === 1 ? 'the folder' : 'the folders'} ${where}.\n\n${n === 1 ? 'It is' : 'They are'} taken out of every playlist too. This can’t be undone.`)) return null;
+  if (!confirm(`Delete ${n.toLocaleString()} GIF${n === 1 ? '' : 's'} from the card?\n\n${few}${n > 5 ? ` and ${(n - 5).toLocaleString()} more` : ''}\nFrom ${dirs.length === 1 ? 'the folder' : 'the folders'} ${where}.${hid}\n\n${n === 1 ? 'It is' : 'They are'} taken out of every playlist too. This can’t be undone.`)) return null;
   return batch(paths.map((from) => ({ from, to: null })), 'Deleted');
 }
 
