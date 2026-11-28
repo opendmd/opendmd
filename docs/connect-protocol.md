@@ -502,7 +502,8 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
 Sent by the panel only while watched: on change, at most one every 2 s on
 the classic, and one every 30 s. The events snapshot through a field mask,
 about 250 to 400 bytes: `now_playing {path, title, elapsed_ms, next,
-kept_s, seed, sent}`, `paused`, `brightness`, `max_brightness`, `set`,
+kept_s, seed, sent}` (`kept_s` `0` while what plays was played by hand and
+stays until something else plays, as `/api/status`; absent otherwise), `paused`, `brightness`, `max_brightness`, `set`,
 `context.state`, `transfer`, `fw`, `name`, `id`. Never heap, card or
 network internals. The server passes it to every attached controller and
 keeps none of it. Like an `ack`, status is not authenticated: a hostile
@@ -539,8 +540,9 @@ server can show a controller a false state, never change the panel's.
   `/gifs/Sent/`, checks both SHA-256s at the end and that the GIF is a GIF
   and the copy a prepared copy (a GIF89a with its `OPENDMD1LZW` hint at a
   cap of at most 9, `docs/cache-format.md`), renames the GIF into place,
-  moves the copy to its place under `/cache/`, and plays the GIF once if
-  `play` (then the playlist carries on). It lands in no playlist.
+  moves the copy to its place under `/cache/`, and plays the GIF if
+  `play`, kept until something else plays as a LAN `POST /api/play`
+  (then the playlist carries on). It lands in no playlist.
 - **The last `credit`** of a transfer says how it ended. Landed (after the
   last card write and both hash checks): `{id, upto: <total>, k, done:
   true, name}`, `name` the file name it was saved under in `/gifs/Sent/`

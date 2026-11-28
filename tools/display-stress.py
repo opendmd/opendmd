@@ -30,8 +30,8 @@ alongside the late frames.
     P="@formula?psb=$(psi build --base64 tools/fixtures/iram-light.psi)"
     uv run tools/display-stress.py HOST --path "$P" --jit off --loads uploads
 
-Plays a bundled Formula with `/api/play` (`formula_keep` set to `hold` for
-the run, put back after), lets it settle, then samples
+Plays a bundled Formula with `/api/play` (kept on the panel until something
+else plays, as anything played by hand), lets it settle, then samples
 `/api/status` `scan.beam` (raced frames, late frames, late pairs, writes)
 and `now_playing.formula` (frame µs, frame ms) over two phases of
 `--seconds` each:
@@ -41,8 +41,11 @@ and `now_playing.formula` (frame µs, frame ms) over two phases of
    `poll`, `/api/status` polled `--status-hz` times a second (the rate
    achieved is reported: a device that answers slowly gets fewer);
    `configs`, a `PUT /api/config` every `--config-every` s that changes a setting
-   (`dwell_max`, toggled between two values: a real NVS write when it is
-   written, nothing the held Formula reacts to); `uploads`, a file of
+   (`dwell_max`, toggled between two values: nothing the kept Formula
+   reacts to, and a real NVS write when it is written, which while a
+   Formula plays is held up to a minute and then made just after a frame,
+   `opendmd_core::save_hold`: a run of a minute or more counts those
+   writes); `uploads`, a file of
    `--upload-kb` KB written to the card and deleted, over and over
    (`/opendmd-stress.bin`).
 
@@ -52,8 +55,8 @@ raced frames are within the idle phase's + 0.5, its deadline misses within
 idle's + 2 per 40 s, and its frame ms (the governor's step) the same. The
 frame µs change (each phase's exact mean render) is reported, not judged:
 a slowdown that only uses headroom passes. Prints both phases and
-the verdict; `--json OUT` keeps the numbers. Puts `dwell_max` and
-`formula_keep` back at the end, whatever happens (retried, and checked by
+the verdict; `--json OUT` keeps the numbers. Puts `dwell_max` back at
+the end, whatever happens (retried, and checked by
 reading `/api/config` back; exits 2 with a loud message if they did not take),
 and deletes the file.
 """
@@ -222,7 +225,7 @@ def main():
     a = ap.parse_args()
     dev = Device(a.host)
     cfg = dev.config()
-    keep, dwell_max = cfg.get("formula_keep", "turn"), int(cfg.get("dwell_max", 30))
+    dwell_max = int(cfg.get("dwell_max", 30))
     jit_before = cfg.get("formula_jit")
     path = a.path or f"@formula:{a.formula}"
     label = a.formula if not a.path else "path"
@@ -232,10 +235,8 @@ def main():
     stop = threading.Event()
     saved = []
     try:
-        first = {"formula_keep": "hold"}
         if a.jit:
-            first["formula_jit"] = a.jit == "on"
-        dev.req("PUT", "/api/config", first)
+            dev.req("PUT", "/api/config", {"formula_jit": a.jit == "on"})
         for k in range(a.runs):
             stop.clear()
             runs.append(one_run(dev, a, path, names, dwell_max, stop, saved))
@@ -246,10 +247,14 @@ def main():
             print(f"{label} run {k + 1}: verdict", "PASS" if r["pass"] else "FAIL")
     finally:
         stop.set()
-        want = {"dwell_max": dwell_max, "formula_keep": keep} | (
+        want = {"dwell_max": dwell_max} | (
             {"formula_jit": jit_before} if a.jit and jit_before is not None else {}
         )
         restored = restore(dev, want)
+        try:  # the Formula it played is kept: back to the playlist
+            dev.req("POST", "/api/skip", {})
+        except Exception:
+            pass
         for f in [STRESS_FILE] + saved:
             try:
                 dev.req("DELETE", "/api/files" + f)

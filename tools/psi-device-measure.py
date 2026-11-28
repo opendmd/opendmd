@@ -1,7 +1,7 @@
 # /// script
 # dependencies = []
 # ///
-"""Play each Formula on a device and record its now_playing.formula timing."""
+"""Play each Formula on a device and record its now_playing.formula timing; Skip back to the playlist at the end."""
 import json, sys, time, urllib.request, pathlib
 HOST = sys.argv[1]; OUT = sys.argv[2]; PATHS = sys.argv[3:]
 def req(method, path, body=None):
@@ -37,4 +37,9 @@ for p in PATHS:
     r = {"name": name, "status": st, **samples[-1], "frame_us_all": [x["frame_us"] for x in samples], "beam": beam}
     rows.append(r)
     print(f"{name:40} us={r['frame_us_all']} ms={r['frame_ms']} beam={r['beam_us']} jit={r['jit']} heap={r['heap']} write/frame={beam['write_us_per_frame']} pair/frame={beam['pair_us_per_frame']} look={r['look']} glow={r['glow']}")
+# Each Formula played is kept on the panel until something else plays: back to the playlist.
+try:
+    req("POST", "/api/skip", {})
+except Exception as e:
+    print("skip back to the playlist failed:", e)
 pathlib.Path(OUT).write_text(json.dumps(rows, indent=1))

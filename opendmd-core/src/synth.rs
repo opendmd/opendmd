@@ -783,6 +783,16 @@ impl<R: Read> SynthSource<R> {
         }
     }
 
+    /// A `loop forever` Formula: one with no loop to finish, whose turn in
+    /// a playlist is the longest time ([`crate::engine::DwellPolicy`]).
+    pub fn endless(&self) -> bool {
+        #[cfg(feature = "psi")]
+        if let Spec::Fx(crate::fx::Fx::Psi(f)) = &self.spec {
+            return f.program().forever();
+        }
+        false
+    }
+
     /// A formula on screen takes `path`'s formula in place, keeping its
     /// clock and memory (no transition, no restart): a live edit or
     /// another Formula played over it, as `how` says (what the governor

@@ -114,11 +114,16 @@ class Panel:
     def debug(self):
         return self._req("GET", "/api/debug/connect")
 
-    def play(self, path: str):
+    def skip(self):
+        """`POST /api/skip`: back to the playlist (what a play put on the panel
+        is kept until something else plays)."""
+        return self.play(None)
+
+    def play(self, path: str | None):
         req = urllib.request.Request(
-            self.base + "/api/play",
+            self.base + ("/api/play" if path is not None else "/api/skip"),
             method="POST",
-            data=json.dumps({"path": path}).encode(),
+            data=json.dumps({"path": path} if path is not None else {}).encode(),
             headers={"Content-Type": "application/json", "User-Agent": "opendmd-connect-device"},
         )
         if self.key:
@@ -433,6 +438,10 @@ def start_phase(run: Run, phase: str, args, probe: bool = False):
     if phase in plays:
         code = run.panel.play(plays[phase])
         print(f"  played {plays[phase]} ({code})", flush=True)
+    elif plays and not args.interactive:
+        # An earlier phase's play is kept on the panel: this one plays the playlist.
+        code = run.panel.skip()
+        print(f"  back to the playlist ({code})", flush=True)
     if args.settle_s > 0:
         run.sample_for(args.settle_s, phase=f"{phase}:settle")
 

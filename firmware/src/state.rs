@@ -289,10 +289,14 @@ pub struct Status {
     /// What plays next, once the engine has picked it (`Engine::ahead_path`;
     /// empty until then).
     pub next: String,
-    /// A Formula sent to the panel and kept there (`formula_keep`): the
-    /// ordinal of its start and its seconds (`0`: until something else
-    /// plays). Reported only while that start is on screen.
-    pub kept: Option<(u64, u32)>,
+    /// A GIF or Formula played by hand and kept on the panel until
+    /// something else plays (`opendmd_core::hand_picked`): its start and
+    /// path (`opendmd_core::keep`, the rule). Reported only while that
+    /// start is on screen.
+    pub kept: Option<opendmd_core::keep::Kept>,
+    /// A kept start the last rebuild of the same playlist let go, to play
+    /// again, kept, before the new engine's first tick (`rebuild`).
+    pub carry: Option<String>,
     /// The `seed` the Formula on screen opened with (Q16.16, 0..1), set
     /// at each start (`Engine::seed`); `None` for anything else.
     pub seed: Option<i32>,
@@ -412,6 +416,7 @@ impl Status {
             title: String::new(),
             next: String::new(),
             kept: None,
+            carry: None,
             seed: None,
             sent: None,
             paused: false,

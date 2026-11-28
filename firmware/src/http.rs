@@ -798,12 +798,6 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     if let Some(v) = patch.beta_updates {
         next.beta_updates = v;
     }
-    if let Some(v) = &patch.formula_keep {
-        match opendmd_core::FormulaKeep::from_name(v) {
-            Some(k) => next.formula_keep = k,
-            None => return Err(PatchErr::bad("formula_keep must be turn, 1m, 5m or hold")),
-        }
-    }
     if let Some(v) = &patch.api_key {
         if !v.is_empty() && !opendmd_core::access::valid_key(v) {
             return Err(PatchErr::bad(&format!(
@@ -862,7 +856,8 @@ fn wifi_changes(s: &Settings, patch: &ConfigPatch) -> bool {
 }
 
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
-/// is left as it was.
+/// is left as it was, and a key not here is ignored (an older web app's
+/// `formula_keep`: what is played by hand stays until something else plays).
 #[derive(serde::Deserialize, Default)]
 pub struct ConfigPatch {
     pub(crate) wifi_ssid: Option<String>,
@@ -916,9 +911,6 @@ pub struct ConfigPatch {
     pub(crate) formula_arena: Option<bool>,
     /// "Get beta updates" (the web app's update feed); kept, nothing else.
     pub(crate) beta_updates: Option<bool>,
-    /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
-    /// `hold` (until something else plays).
-    pub(crate) formula_keep: Option<String>,
     /// WiFi at all: `on` or `off` (`Settings::network`), in effect at the
     /// next boot.
     pub(crate) network: Option<String>,
@@ -3108,13 +3100,13 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let _ = write!(out, "{}}}", looks());
 }
 
-/// `now_playing`'s `,"kept_s":N` while a Formula sent to the panel is kept
-/// there (`formula_keep`): for `N` seconds from its start (`elapsed_ms`),
-/// `0` until something else plays; empty otherwise.
-fn kept_json(s: &Status) -> String {
-    match s.kept {
-        Some((ordinal, secs)) if ordinal == s.ordinal => format!(r#","kept_s":{secs}"#),
-        _ => String::new(),
+/// `now_playing`'s `,"kept_s":0` while a GIF or Formula played by hand is
+/// kept on the panel (`opendmd_core::hand_picked`): `0`, until something
+/// else plays; empty otherwise.
+fn kept_json(s: &Status) -> &'static str {
+    match &s.kept {
+        Some(k) if k.on_screen(s.ordinal) => r#","kept_s":0"#,
+        _ => "",
     }
 }
 
@@ -3557,7 +3549,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
+            r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"api_key_set":{},"card_speed":"{}","#,
             r#""beta_updates":{},"network":"{}","#,
             r#""lat":{},"lon":{}}}"#
         ),
@@ -3593,7 +3585,6 @@ fn settings_json(s: &Settings) -> String {
         s.panel_split,
         s.formula_jit,
         s.formula_arena,
-        s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
         s.beta_updates,

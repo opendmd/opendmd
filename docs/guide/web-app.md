@@ -34,7 +34,9 @@ Settings › Panel.
 
 **Recently played**, under the preview, lists what the panel showed last,
 even while no page was open. Tap one to play it again. **Replay** restarts
-what is on now, and **Previous** steps back one at a time.
+what is on now, and **Previous** steps back one at a time. What you play
+from Recently played, or with Replay, stays until you change it; Previous
+gives what it brings back its usual time.
 
 On a computer the keyboard works too: **Space** pauses and resumes, **→**
 skips and **←** goes back, as Previous does.
@@ -99,7 +101,8 @@ them.
 Click a GIF to open its details, with a preview and its title, platform,
 folder and author, and your tags. From there:
 
-- **Play now** plays it now; afterwards the playlist carries on.
+- **Play now** plays it now and keeps it on the panel, looping, until you
+  skip it, play something else or go back to the playlist.
 - **Add to playlist…** puts it in one of your playlists: the one playing
   comes first, or start a new one.
 - **Download GIF** saves the GIF itself, to change it in the
@@ -251,8 +254,8 @@ tune how it plays in that playlist. On a phone, long-press it in a
 playlist.
 
 - **Play less often** plays it less.
-- **Play longer or loop…** keeps it on screen twice as long or for a
-  number of seconds, or plays it a set number of times.
+- **Play longer or loop…** keeps it on screen twice as long (twice as many
+  loops) or for a number of seconds, or plays it a set number of times.
 
 These are per playlist. A favourite (the heart on Now, **♡ Favourite** in the
 Library) is a tag for the whole card that also plays the GIF more often in
@@ -278,14 +281,22 @@ or the ones you picked. **Choose…** reads the playlist and lists the
 platforms with how many GIFs each has, with the rare ones behind **+N more** and a box to find
 one. Tap the ones you want and press **Only these**, or **All platforms**.
 
-**Each GIF stays** sets the shortest and longest time a GIF is on (3 to
-30 seconds unless you change them), and **Shuffle** mixes the order. With
+**Each GIF or Formula stays** sets the shortest and longest time a GIF or
+a Formula in a playlist is on (1 and 30 seconds unless you change them). It plays
+whole loops until the shortest time has passed, and is cut off at the
+longest. A Formula that goes on without repeating (`loop forever`) stays
+for the longest time. **Shuffle** mixes the order. With
 Shuffle off the playlist plays in order and carries on where it was when you
 add or remove GIFs, after another playlist has played for a while (a
 schedule, Follow RePlayOS) and after a restart or an update; only cutting
-the power starts it from the top again. **A Formula you
-show on the panel stays** for one turn, 1 or 5 minutes, or until you change
-it.
+the power starts it from the top again. A GIF or Formula you play
+yourself (Play now, a Recently played one, Replay, Show on panel, Remote
+control) stays, looping, until you skip it, play something else or go back
+to the playlist. Now says **Kept on the panel until you change it**, with
+**Back to the playlist**. It stays through a pause, a favourite, and an
+edit of the playlist that's playing. Choosing another playlist ends it, and
+so does the panel turning off for the night: in the morning the playlist
+plays.
 
 ### Panel
 

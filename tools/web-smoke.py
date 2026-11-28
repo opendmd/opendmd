@@ -3983,12 +3983,12 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-18:] == ["attract", "look", "glow", "look_formula", "boot_show", "boot_formula",
-                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "lat", "lon",
+    check(list(cfg0)[-17:] == ["attract", "look", "glow", "look_formula", "boot_show", "boot_formula",
+                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "api_key_set", "lat", "lon",
                               "panel", "panel_now", "panel_next", "panel_trial_s"]
-          and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
+          and not {"look_formula_name", "look_blend", "look_amount", "formula_keep"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/boot_formula/panel_sync/panel_split/"
-          f"formula_jit/formula_arena/formula_keep/api_key_set/lat/lon, then the panel keys, end the object ({list(cfg0)[-18:]})")
+          f"formula_jit/formula_arena/api_key_set/lat/lon, then the panel keys, end the object; no formula_keep ({list(cfg0)[-17:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
@@ -7826,7 +7826,6 @@ def now_formula_checks(browser, base: str, errors: list[str]) -> None:
     playlist of Formulas shows them by name in Now's Recently played and
     the playlist editor; nowhere `@formula…`, a .psi path or the player's
     own error."""
-    put_json(base + "/api/config", {"formula_keep": "hold"})
     post_json(base + "/api/play", {"path": "@formula:time-gate"})
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#now")
@@ -7974,7 +7973,6 @@ def now_formula_checks(browser, base: str, errors: list[str]) -> None:
     check(page.eval_on_selector("#now-panel", "c => c.dataset.loops") == "0", "now formula: sent from elsewhere since: not previewed as this page's")
     page.context.close()
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/now-card.psi", method="DELETE"), timeout=30)
-    put_json(base + "/api/config", {"formula_keep": "hold"})
     post_json(base + "/api/play", {"path": "@formula:time-gate"})
     # One this browser can't find (the bundled list empty): plain words.
     page = new_page(browser, "laptop", errors)
@@ -8005,7 +8003,6 @@ def now_formula_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
     # A playlist of Formulas: by name in Recently played and the editor.
     gif = card_gifs()[0]
-    put_json(base + "/api/config", {"formula_keep": "turn"})
     put_text(base + "/api/sets/nowpsi", "\n".join([gif, "@formula:time-gate", "@formula:starfield", ""]))
     put_json(base + "/api/config", {"set": "nowpsi"})
     deadline = time.time() + 40
@@ -8045,7 +8042,6 @@ def now_sent_checks(browser, base: str, errors: list[str]) -> None:
     after 20 s on a panel whose position runs behind its clock (the mock
     at 0.97); paused, Now left and come back to; a live edit in the editor
     (the panel starting it over) followed."""
-    put_json(base + "/api/config", {"formula_keep": "hold"})
     get_json(base + "/mock/rate?r=0.97")
     srcs = {e["stem"]: e["src"] for e in json.loads(FORMULAS_JSON.read_text())}
     try:
@@ -8095,7 +8091,6 @@ def now_sent_checks(browser, base: str, errors: list[str]) -> None:
         page.context.close()
     finally:
         get_json(base + "/mock/rate?r=1")
-        put_json(base + "/api/config", {"formula_keep": "turn"})
 
 
 def now_identity_checks(browser, base: str, errors: list[str]) -> None:
@@ -8105,79 +8100,67 @@ def now_identity_checks(browser, base: str, errors: list[str]) -> None:
     the panel's sent Formula as this page's only while those bytes are this
     page's send (not by its start and name: one sent from elsewhere in place,
     nameless, is not this page's; the same bytes sent again are)."""
-    put_json(base + "/api/config", {"formula_keep": "hold"})
     src_a = "loop forever\ngray(frac(x + t/8 + seed))"
     src_b = "loop forever\ngray(frac(y + t/8 + seed))"
+    page = new_page(browser, "laptop", errors)
+    bodies: list[bytes] = []
+    page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
+    page.goto(base + "/#formulas")
+    formula_editor(page, src_a)
+    clear_toasts(page)
+    page.click("#psi-ed-show")
+    last_toast(page, "ok")
+    np = get_json(base + "/api/status")["now_playing"]
+    want = zlib.crc32(bodies[-1]) if bodies else None
+    check(np.get("path", "").startswith("@formula:~sent") and np.get("sent") == want,
+          f"now identity: the status' sent is the CRC-32 of the bytes sent ({np.get('sent')}, want {want})")
+    seed = np.get("seed")
+    check(isinstance(seed, int) and 0 <= seed < 65536, f"now identity: a Formula on screen has its seed, 0..1 in Q16.16 ({seed!r})")
+    goto_view(page, "now")
+    mine = f"(c => c.dataset.src?.startsWith('@formula:~sent') && +c.dataset.len == {len(src_a)} && c.dataset.loops == '1')(document.querySelector('#now-panel'))"
     try:
-        page = new_page(browser, "laptop", errors)
-        bodies: list[bytes] = []
-        page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
-        page.goto(base + "/#formulas")
-        formula_editor(page, src_a)
-        clear_toasts(page)
-        page.click("#psi-ed-show")
-        last_toast(page, "ok")
-        np = get_json(base + "/api/status")["now_playing"]
-        want = zlib.crc32(bodies[-1]) if bodies else None
-        check(np.get("path", "").startswith("@formula:~sent") and np.get("sent") == want,
-              f"now identity: the status' sent is the CRC-32 of the bytes sent ({np.get('sent')}, want {want})")
-        seed = np.get("seed")
-        check(isinstance(seed, int) and 0 <= seed < 65536, f"now identity: a Formula on screen has its seed, 0..1 in Q16.16 ({seed!r})")
-        goto_view(page, "now")
-        mine = f"(c => c.dataset.src?.startsWith('@formula:~sent') && +c.dataset.len == {len(src_a)} && c.dataset.loops == '1')(document.querySelector('#now-panel'))"
-        try:
-            page.wait_for_function(mine, timeout=15000)
-        except PlaywrightTimeoutError:
-            pass
-        d = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len, c.dataset.seed]")
-        check(d == ["1", len(src_a), str(seed)], f"now identity: this page's send previewed with the panel's seed ({d}, want {['1', len(src_a), str(seed)]})")
-        # Another, nameless, sent from elsewhere over it in place (the same
-        # start, the same title): not this page's.
-        other = page.evaluate("(src) => import('./js/psikit.js').then((m) => Array.from(m.program(src)))", src_b)
-        page.wait_for_timeout(2200)  # this page's send over 2 s old: no waiting for it
-        post_bytes(base + "/api/play/formula", bytes(other))
-        np2 = get_json(base + "/api/status")["now_playing"]
-        check(np2.get("ordinal") == np.get("ordinal") and np2.get("title") == np.get("title") and np2.get("sent") == zlib.crc32(bytes(other)),
-              f"now identity: sent from elsewhere in place: the same start and title, its own sent ({np2})")
-        no = "(c => c.dataset.loops == '0' && document.querySelector('#now-cap').textContent == 'Preview not available for this Formula')(document.querySelector('#now-panel'))"
-        try:
-            page.wait_for_function(no, timeout=8000)
-        except PlaywrightTimeoutError:
-            pass
-        d = (page.eval_on_selector("#now-panel", "c => c.dataset.loops"), page.eval_on_selector("#now-cap", "e => e.textContent"))
-        check(d == ("0", "Preview not available for this Formula"), f"now identity: another sent in place is not previewed as this page's ({d})")
-        # This page's bytes again, from elsewhere: its identity, so this page's.
-        post_bytes(base + "/api/play/formula", bodies[-1])
-        try:
-            page.wait_for_function(mine, timeout=8000)
-        except PlaywrightTimeoutError:
-            pass
-        d = (page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len]"), page.eval_on_selector("#now-cap", "e => e.textContent"))
-        check(d == (["1", len(src_a)], ""), f"now identity: this page's bytes sent again: previewed as this page's ({d})")
-        page.context.close()
-    finally:
-        put_json(base + "/api/config", {"formula_keep": "turn"})
+        page.wait_for_function(mine, timeout=15000)
+    except PlaywrightTimeoutError:
+        pass
+    d = page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len, c.dataset.seed]")
+    check(d == ["1", len(src_a), str(seed)], f"now identity: this page's send previewed with the panel's seed ({d}, want {['1', len(src_a), str(seed)]})")
+    # Another, nameless, sent from elsewhere over it in place (the same
+    # start, the same title): not this page's.
+    other = page.evaluate("(src) => import('./js/psikit.js').then((m) => Array.from(m.program(src)))", src_b)
+    page.wait_for_timeout(2200)  # this page's send over 2 s old: no waiting for it
+    post_bytes(base + "/api/play/formula", bytes(other))
+    np2 = get_json(base + "/api/status")["now_playing"]
+    check(np2.get("ordinal") == np.get("ordinal") and np2.get("title") == np.get("title") and np2.get("sent") == zlib.crc32(bytes(other)),
+          f"now identity: sent from elsewhere in place: the same start and title, its own sent ({np2})")
+    no = "(c => c.dataset.loops == '0' && document.querySelector('#now-cap').textContent == 'Preview not available for this Formula')(document.querySelector('#now-panel'))"
+    try:
+        page.wait_for_function(no, timeout=8000)
+    except PlaywrightTimeoutError:
+        pass
+    d = (page.eval_on_selector("#now-panel", "c => c.dataset.loops"), page.eval_on_selector("#now-cap", "e => e.textContent"))
+    check(d == ("0", "Preview not available for this Formula"), f"now identity: another sent in place is not previewed as this page's ({d})")
+    # This page's bytes again, from elsewhere: its identity, so this page's.
+    post_bytes(base + "/api/play/formula", bodies[-1])
+    try:
+        page.wait_for_function(mine, timeout=8000)
+    except PlaywrightTimeoutError:
+        pass
+    d = (page.eval_on_selector("#now-panel", "c => [c.dataset.loops, +c.dataset.len]"), page.eval_on_selector("#now-cap", "e => e.textContent"))
+    check(d == (["1", len(src_a)], ""), f"now identity: this page's bytes sent again: previewed as this page's ({d})")
+    page.context.close()
 
 
 def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
-    """Keep on the panel (config `formula_keep`): on the Formulas page and in
-    Settings › Playback; a Formula shown on the panel stays past the mock's
-    dwell (`now_playing.kept_s`), through a live edit; Now says so and Back
-    to the playlist ends it; a GIF sent to the panel is never kept; one
-    minute shows the time left."""
+    """What is played by hand stays until changed (opendmd_core::
+    hand_picked): a Formula shown on the panel past the mock's dwell
+    (`now_playing.kept_s` 0), through a live edit; Now says so and Back to
+    the playlist ends it; a GIF played from the Library too. No Keep on the
+    panel setting anywhere; an older app's `formula_keep` PUT is ignored."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     open_formulas(page)
     page.click("#psi-ex .psi-tile >> nth=0")
-    opts = page.eval_on_selector_all("#psi-keep option", "els => els.map(e => [e.value, e.textContent])")
-    check(opts == [["turn", "One turn"], ["1m", "1 minute"], ["5m", "5 minutes"], ["hold", "Until I change it"]]
-          and page.input_value("#psi-keep") == "turn" and page.inner_text("#psi-keep-row").startswith("Keep on the panel"),
-          f"keep: Keep on the panel in the Formula's details, one turn by default ({opts})")
-    page.select_option("#psi-keep", "hold")
-    deadline = time.time() + 5
-    while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "hold":
-        time.sleep(0.2)
-    check(get_json(base + "/api/config")["formula_keep"] == "hold", "keep: choosing Until I change it saves formula_keep=hold")
+    check(page.locator("#psi-keep, #psi-keep-row").count() == 0, "keep: no Keep on the panel in the Formula's details")
     bodies: list[bytes] = []
     page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
     clear_toasts(page)
@@ -8205,35 +8188,22 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     st = get_json(base + "/api/status")["now_playing"]
     check(st["ordinal"] != ordinal and not st["path"].startswith("@formula") and "kept_s" not in st,
           f"keep: Back to the playlist moves on and the keep ends ({st['path'][:40]})")
-    # A GIF sent to the panel is never kept.
+    # A GIF played by hand is kept too, past the dwell; Now offers the way back.
     gif = card_gifs()[0]
     post_json(base + "/api/play", {"path": gif})
+    time.sleep(5)
     st = get_json(base + "/api/status")["now_playing"]
-    check(st["path"] == gif and "kept_s" not in st, "keep: a GIF sent to the panel plays one turn as before")
-    # One minute: the time left on Now.
-    put_json(base + "/api/config", {"formula_keep": "1m"})
-    post_json(base + "/api/play", {"path": "@formula:starfield"})
     page.wait_for_selector("#now-kept:not([hidden])", timeout=5000)
-    page.wait_for_function("/^Kept on the panel: [01]:\\d\\d left$/.test(document.querySelector('#now-kept-text').textContent)", timeout=5000)
-    t = page.inner_text("#now-kept-text")
-    check(get_json(base + "/api/status")["now_playing"].get("kept_s") == 60 and t in ("Kept on the panel: 1:00 left", "Kept on the panel: 0:59 left", "Kept on the panel: 0:58 left"),
-          f"keep: a minute shows the time left ('{t}')")
-    # Settings › Playback has the same setting (a fresh load: the minute was set by the API).
-    page.goto("about:blank")
-    page.goto(base + "/#settings/play")
-    page.wait_for_selector("#st-keep", timeout=10000)
-    check(page.input_value("#st-keep") == "1m", f"keep: Settings › Playback shows it ({page.input_value('#st-keep')})")
-    page.select_option("#st-keep", "turn")
-    deadline = time.time() + 5
-    while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "turn":
-        time.sleep(0.2)
-    check(get_json(base + "/api/config")["formula_keep"] == "turn", "keep: Settings › Playback saves it (back to one turn)")
-    try:
-        put_json(base + "/api/config", {"formula_keep": "forever"})
-        refused = False
-    except Exception as e:  # noqa: BLE001 (the mock's 400)
-        refused = "400" in str(e)
-    check(refused, "keep: formula_keep refuses a value it doesn't know")
+    check(st["path"] == gif and st.get("kept_s") == 0 and page.inner_text("#now-kept-text") == "Kept on the panel until you change it",
+          f"keep: a GIF played by hand stays past the dwell, kept until changed ({st['path'][:40]}, kept_s {st.get('kept_s')})")
+    # An older app's setting: taken without an error, changing nothing.
+    put_json(base + "/api/config", {"formula_keep": "1m"})
+    check("formula_keep" not in get_json(base + "/api/config") and get_json(base + "/api/status")["now_playing"].get("kept_s") == 0,
+          "keep: an older app's formula_keep PUT is taken and changes nothing; GET has no formula_keep")
+    goto_view(page, "settings/play")
+    page.wait_for_selector("#st-tab-play", timeout=10000)
+    check(page.locator("#st-keep").count() == 0 and "Each GIF or Formula stays" in page.inner_text("#st-tab-play"),
+          "keep: Settings › Playback has no keep setting, and says Each GIF or Formula stays")
     post_json(base + "/api/skip", {})
     page.context.close()
 
@@ -8621,7 +8591,10 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     check(2 <= len(sent) <= 6 and all(p.get("live") is True for _, p in sent) and min(gaps, default=1) > 0.15
           and sent[-1][1].get("a") == "1" and st["ordinal"] == ordinal and st["path"] == SENT + "?a=1",
           f"formulas panel: 60 slider moves in {time.time() - t0:.1f} s -> {len(sent)} live edits, gaps {[round(g, 2) for g in gaps]}, the last a=1 on the panel (ordinal {st['ordinal']})")
-    # The playlist moves on (the mock's 4 s dwell): a change stops following, quietly.
+    # The playlist moves on (a Formula picked by hand is kept until
+    # something else plays: Skip): a change stops following, quietly.
+    check(st.get("kept_s") == 0, f"formulas panel: the shown Formula is kept until changed (kept_s {st.get('kept_s')!r})")
+    post_json(base + "/api/skip", {})
     deadline = time.time() + 10
     while time.time() < deadline and get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"):
         time.sleep(0.3)
@@ -8652,7 +8625,6 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     # Hold it on the panel for the next two checks: a loaded machine can take
     # longer than the mock's 4 s dwell to fill 22 KB, and the playlist would
     # move on under the edit (a new ordinal, a 409).
-    put_json(base + "/api/config", {"formula_keep": "hold"})
     n0 = len(plays)
     page.click("#psi-ed-show")
     t = last_toast(page, "ok")
@@ -8670,7 +8642,6 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     check(len(plays) > n0 + 1 and plays[-1][1]["live"] is True and st["ordinal"] == ordinal and st["title"] == "Endless road V2b"
           and not page.eval_on_selector_all("#toasts .toast.bad", "els => els.length"),
           f"formulas panel: its edit follows it there, live (ordinal {st['ordinal']} vs {ordinal}, {st['title']}, {len(plays) - n0} plays, live {plays[-1][1].get('live')})")
-    put_json(base + "/api/config", {"formula_keep": "turn"})
     recent = get_json(base + "/api/status?recent=1").get("recent") or []
     check(not any(str(x).startswith(SENT) for x in recent), "formulas panel: a Formula shown from the editor stays out of Recently played")
     # A short heap on the panel: asked again after Retry-After, then shown.

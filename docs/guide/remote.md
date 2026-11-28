@@ -135,8 +135,9 @@ off for now (see below). On a board that supports it, in the
 1. Make your GIF, or find one with the Studio's **Import**, then press
    **Send to panel**.
 2. Under **Send to**, pick your display.
-3. Leave **Play it as soon as it arrives** ticked to see it straight away,
-   and press **Send**.
+3. Leave **Play it as soon as it arrives** ticked to see it straight away
+   (it stays on the panel until you skip it or play something else), and
+   press **Send**.
 
 The GIF goes into the **Sent** folder on the display's SD card. It isn't
 added to a playlist, so add it to one from the web app at home if you want

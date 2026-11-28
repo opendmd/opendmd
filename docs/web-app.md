@@ -558,10 +558,10 @@ the device's API in the page: the settings, the schedule and the status
 card's files, renames and deletes, overrides, and the playback cache's
 records. So **Settings** is the device's, every tab and control; the Library
 has Play now, Add GIFs, Edit details and Delete; Playlists plays one;
-Formulas has Show on panel, Keep on the panel and the start-up show. What
+Formulas has Show on panel and the start-up show. What
 the settings change shows on the demo's panel: brightness (the schedule's
 and night mode's too), colour, glow, the transition, the Formula look drawn
-over every frame, how long each GIF stays, the playlist, platforms and
+over every frame, how long each GIF or Formula stays, the playlist, platforms and
 shuffle, the start-up show, and the schedule banner with Wake and Resume.
 Panel timing is tried and kept as on a player, with nothing to see.
 Firmware updates, WiFi, restarting from Settings, testing the panel and

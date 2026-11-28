@@ -14,7 +14,10 @@ Several client threads at once, each with random short delays:
   RePlayOS on or off, with `follow_host` the dead address (no ARP answer:
   the poll's connect times out), the Pi (`--pi`: refused while RePlayOS is
   down, answering when it is up) — interleaved with `POST /api/play` of
-  a small Formula (`@formula?src=..`), a title card (`@card:..`) and a GIF, `GET /api/status`, and now and then a
+  a small Formula (`@formula?src=..`), a title card (`@card:..`) and a GIF
+  (each kept on the panel until something else plays), `POST /api/skip`
+  back to the playlist (so the playlist advances between plays, as it did
+  when a play lasted one turn), `GET /api/status`, and now and then a
   `POST /api/follow/test`;
 - **download**: `GET` of a large GIF (> 1 MB), read whole, or dropped part
   way (the detached request's close path);
@@ -34,8 +37,9 @@ stops at the end of `--minutes`, at the first connection failure (unless
 uptime going forwards is reported as such), or at a reboot (`uptime_secs`
 going backwards, or `reset_reason` changing), and prints what every thread
 was doing. The Follow settings found at the start are put back at the end
-(`follow`, `follow_host`; the code is never touched), and the upload files
-are deleted (and their directory).
+(`follow`, `follow_host`; the code is never touched), the upload files
+are deleted (and their directory), and a last Skip puts the playlist back
+on (a play is kept until something else plays).
 
 Pass: "PASS" on the last line, no reboot, 0 connection failures; see the
 summary for per-endpoint counts, p50/p99/max latency, and the device's own
@@ -187,8 +191,8 @@ def control(dev, args, gifs):
     follow = True
     while not STOP.is_set():
         op = random.choices(
-            ["config", "formula", "card", "gif", "status", "test"],
-            weights=[4, 3, 2, 2, 4, 1],
+            ["config", "formula", "card", "gif", "status", "test", "skip"],
+            weights=[4, 3, 2, 2, 4, 1, 3],
         )[0]
         try:
             if op == "config":
@@ -207,6 +211,10 @@ def control(dev, args, gifs):
                 st, _, ms, _ = request(dev, "POST", "/api/play", body=json.dumps({"path": path}),
                                        headers={"Content-Type": "application/json"})
                 record("control", "POST /api/play", st, ms, path)
+            elif op == "skip":
+                # What a play put on the panel is kept: back to the playlist.
+                st, _, ms, _ = request(dev, "POST", "/api/skip")
+                record("control", "POST /api/skip", st, ms)
             elif op == "status":
                 status(dev)
             elif op == "test":
@@ -387,6 +395,8 @@ def main():
         for k in range(3):
             request(dev, "DELETE", f"/api/files/stress/up-{k}.bin")
         request(dev, "DELETE", "/api/files/stress")
+        # The last play is kept on the panel: back to the playlist.
+        request(dev, "POST", "/api/skip")
         st, data, _, _ = request(dev, "GET", "/api/status")
         WATCH.see(json.loads(data))
     except (OSError, http.client.HTTPException) as e:

@@ -642,6 +642,14 @@ impl<R: Read + io::Seek> FrameSource<R> {
         }
     }
 
+    /// A `loop forever` Formula ([`SynthSource::endless`](crate::synth::SynthSource::endless)).
+    pub fn endless(&self) -> bool {
+        match &self.dec {
+            Dec::Synth(s) => s.endless(),
+            _ => false,
+        }
+    }
+
     /// The `seed` of the Formula it plays ([`SynthSource::seed`](crate::synth::SynthSource::seed)).
     #[cfg(feature = "psi")]
     pub fn seed(&self) -> Option<i32> {

@@ -177,7 +177,7 @@ function mountDevice(el) {
   bright.ceil(app.config?.max_brightness);
   // (The link's state: the header's pill says it; kept, hidden, for tools/web-smoke.py.)
   const conn = h('span.dot', { id: 'now-conn', hidden: true });
-  // A Formula kept on the panel (`now_playing.kept_s`, Formulas › Keep on the panel): how long, and the way back.
+  // A GIF or Formula played by hand, kept on the panel until changed (`now_playing.kept_s`): the way back.
   const keptText = h('span.grow', { id: 'now-kept-text' });
   const keptRow = h('div.row', { id: 'now-kept', hidden: true, style: 'margin-top:8px' }, keptText,
     h('button.sm', { id: 'now-unkeep', onclick: skip }, 'Back to the playlist'));
@@ -400,9 +400,8 @@ function mountDevice(el) {
     // (A GIF's; a Formula or a title card next says nothing.)
     const nx = np.next;
     nextEl.textContent = nx && !drawn(nx) ? ` · Next: ${label(app.wasm.parsePath(nx))}` : '';
-    const kept = np.kept_s, left = Math.ceil(Math.max(0, kept * 1000 - np.elapsed_ms) / 1000);
-    keptRow.hidden = kept == null;
-    keptText.textContent = kept == null ? '' : kept ? `Kept on the panel: ${(left / 60) | 0}:${String(left % 60).padStart(2, '0')} left` : 'Kept on the panel until you change it';
+    keptRow.hidden = np.kept_s == null;
+    keptText.textContent = keptRow.hidden ? '' : 'Kept on the panel until you change it';
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);

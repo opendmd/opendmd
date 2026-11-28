@@ -239,11 +239,14 @@ fn first_frame_heap(gif: &Stream) -> usize {
     }
 }
 
-/// How long one GIF holds the display.
+/// How long one file holds the display: a playlist's shortest (`min`) and
+/// longest (`max`) times and its loops.
 ///
-/// A GIF ends its turn once it has looped `min_loops` times *and* `min` has
-/// elapsed, or unconditionally at `max`. Short loops therefore repeat rather
-/// than flickering past, and a 10-minute GIF still yields.
+/// A file ends its turn at the end of the first loop that has looped
+/// `min_loops` times *and* left `min` behind, or unconditionally at `max`
+/// (mid-loop). Short loops therefore repeat rather than flickering past,
+/// and a 10-minute GIF still yields. A `loop forever` Formula has no loop
+/// to finish: it stays for `max` (`Playing::dwell`).
 #[derive(Clone, Copy, Debug)]
 pub struct DwellPolicy {
     pub min: Duration,
@@ -295,52 +298,17 @@ impl DwellPolicy {
     }
 }
 
-/// How long a Formula sent to the panel (`/api/play`) stays on it: the
-/// panel's `formula_keep` setting. Played as a one-off dwell override
-/// ([`Engine::play_now_with`]), so the Formula keeps animating; Next, another
-/// play or a playlist change ends it as it would any file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum FormulaKeep {
-    /// One turn of the configured dwell, as any file. The default.
-    #[default]
-    Turn,
-    Minute,
-    FiveMinutes,
-    /// Until something else is played (or Next).
-    Hold,
-}
-
-impl FormulaKeep {
-    pub fn from_name(s: &str) -> Option<FormulaKeep> {
-        Some(match s {
-            "turn" => FormulaKeep::Turn,
-            "1m" => FormulaKeep::Minute,
-            "5m" => FormulaKeep::FiveMinutes,
-            "hold" => FormulaKeep::Hold,
-            _ => return None,
-        })
-    }
-
-    pub fn name(self) -> &'static str {
-        ["turn", "1m", "5m", "hold"][self as usize]
-    }
-
-    /// The seconds it is kept for, `0` until changed; `None` for one turn.
-    pub fn secs(self) -> Option<u32> {
-        match self {
-            FormulaKeep::Turn => None,
-            FormulaKeep::Minute => Some(60),
-            FormulaKeep::FiveMinutes => Some(300),
-            FormulaKeep::Hold => Some(0),
-        }
-    }
-
-    /// The override to play it under (`Hold`: `u32::MAX` s, ~136 years).
-    pub fn dwell(self) -> Option<Override> {
-        self.secs().map(|s| Override {
-            dwell: Some(Dwell::Secs(if s == 0 { u32::MAX } else { s })),
-            ..Override::default()
-        })
+/// How long a file picked by hand stays on the panel (the web app's Play,
+/// `/api/play` and `/api/play/formula`, Remote control's play and its sent
+/// GIFs, the Formula editor's Show on panel): a GIF or a Formula, until
+/// something else plays (another play, Next or Previous, a playlist
+/// change), looping and animating all the while. Played as a one-off
+/// override ([`Engine::play_now_with`]): `dwell` of `u32::MAX` s (~136
+/// years), so the cap never comes.
+pub fn hand_picked() -> Override {
+    Override {
+        dwell: Some(Dwell::Secs(u32::MAX)),
+        ..Override::default()
     }
 }
 
@@ -717,6 +685,38 @@ struct Playing {
 }
 
 impl Playing {
+    /// The dwell policy it plays under, of the configured `base`. A `loop
+    /// forever` Formula has no loop to finish, so it stays for the longest
+    /// time (`min` raised to `max`); an override's `dwell` bends that as
+    /// any file's, and its `loops` (nothing to count) is left out.
+    /// Anything else: `base` bent by its override.
+    ///
+    /// `dwell=<k>x` (Twice as long) is k times its usual turn in whole
+    /// loops, once a loop's length is known: its usual loops (those that
+    /// leave `min` behind, `min_loops` at least) times k, rounded up, with
+    /// `max` scaled by k as the cap. (Before the first loop ends, `min` and
+    /// `max` scaled by k.)
+    fn dwell(&self, base: DwellPolicy) -> DwellPolicy {
+        let endless = self.gif.endless();
+        let base = if endless { DwellPolicy { min: base.max, ..base } } else { base };
+        let Some(mut ov) = self.timed else {
+            return base;
+        };
+        if endless {
+            ov.loops = None;
+        }
+        let mut d = base.with_override(&ov);
+        if let (Some(Dwell::Times(k)), None) = (ov.dwell, ov.loops) {
+            if !self.loop_len.is_zero() {
+                let usual = base.min.as_nanos().div_ceil(self.loop_len.as_nanos()).max(u128::from(base.min_loops)).max(1);
+                let n = (usual as f64 * f64::from(k)).ceil();
+                d.min_loops = if n >= f64::from(u32::MAX) { u32::MAX } else { (n as u32).max(1) };
+                d.min = Duration::ZERO;
+            }
+        }
+        d
+    }
+
     /// A frame of `delay` was just decoded: move the file's position past
     /// the previous one.
     fn advance(&mut self, delay: Duration) {
@@ -770,6 +770,15 @@ impl Playing {
             floor: Duration::ZERO,
             linger: false,
         }
+    }
+
+    /// A new turn from `now` for the file on screen, which carries on
+    /// ([`runs_on`]).
+    fn renew(&mut self, now: Duration) {
+        self.started_at = now;
+        self.loops = 0;
+        self.floor = Duration::ZERO;
+        self.linger = false;
     }
 
     /// A loop just ended at `now`: note its length.
@@ -844,6 +853,13 @@ impl Playing {
         };
         by_time.max(by_loop).saturating_sub(WAKE_SLACK).min(cap)
     }
+}
+
+/// Whether a turn that is over runs on instead: the playlist's only entry
+/// (not one played by hand), a `loop forever` Formula, nothing holding the
+/// sequence. Opening it again would only start it over with a new seed.
+fn runs_on(entries: usize, hold: bool, p: &Playing) -> bool {
+    entries == 1 && !hold && p.index != OFF_PLAYLIST && p.gif.endless()
 }
 
 /// Whether a turn that is over waits on its last frame for the next file
@@ -1168,12 +1184,9 @@ impl Engine {
     }
 
     /// The dwell policy the file on screen plays under: the configured one,
-    /// bent by its override.
+    /// bent by its override (`Playing::dwell`).
     pub fn current_dwell(&self) -> DwellPolicy {
-        match self.current.as_ref().and_then(|p| p.timed.as_ref()) {
-            Some(ov) => self.dwell.with_override(ov),
-            None => self.dwell,
-        }
+        self.current.as_ref().map_or(self.dwell, |p| p.dwell(self.dwell))
     }
 
     /// Reseed and rewind the scheduler, dropping whatever is on screen.
@@ -1258,6 +1271,12 @@ impl Engine {
     /// and the scheduler picks the next entry at the next tick).
     pub fn play_now(&mut self, path: &str, now: Duration) -> io::Result<()> {
         self.play_now_with(path, now, None)
+    }
+
+    /// [`play_now_with`](Self::play_now_with) as a file picked by hand
+    /// plays: kept until something else plays ([`hand_picked`]).
+    pub fn play_by_hand(&mut self, path: &str, now: Duration) -> io::Result<()> {
+        self.play_now_with(path, now, Some(hand_picked()))
     }
 
     /// [`play_now`](Self::play_now), with `ov` bending this one play's
@@ -1833,12 +1852,18 @@ impl Engine {
                 return Ok(TickOutcome::Idle);
             }
 
-            let dwell = match &playing.timed {
-                Some(ov) => self.dwell.with_override(ov),
-                None => self.dwell,
-            };
+            let dwell = playing.dwell(self.dwell);
             // Hard cap: never let one GIF hold the panel past `max`.
             if now.saturating_sub(playing.started_at) >= dwell.max {
+                if runs_on(self.catalog.len(), self.hold, playing) {
+                    // The only entry, a `loop forever` Formula: it runs on
+                    // (its clock, its seed), a new turn, nothing opened.
+                    playing.renew(now);
+                    if let Some(index) = self.ahead.take_pick() {
+                        self.scheduler.give_back(index);
+                    }
+                    continue;
+                }
                 if self.hold {
                     playing.done = true;
                     return Ok(TickOutcome::Idle);
@@ -1918,11 +1943,26 @@ impl Engine {
                     // End of stream: loop the same file or move on.
                     playing.loops += 1;
                     playing.looped(now);
+                    // (Its loop's length is known now: `dwell=<k>x` counts loops.)
+                    let dwell = playing.dwell(self.dwell);
                     let elapsed = now.saturating_sub(playing.started_at);
                     // (A loop's last frame may be decoded up to
                     // `WAKE_SLACK` early: a loop of exactly `min` is enough.)
                     let done = playing.loops >= dwell.min_loops
                         && elapsed + WAKE_SLACK >= dwell.min.max(playing.floor);
+                    if done && runs_on(self.catalog.len(), self.hold, playing) {
+                        playing.renew(now);
+                        if let Some(index) = self.ahead.take_pick() {
+                            self.scheduler.give_back(index);
+                        }
+                        if !self.restart_current() {
+                            self.current = None;
+                            if !self.open_next(now) {
+                                return Ok(TickOutcome::Exhausted);
+                            }
+                        }
+                        continue;
+                    }
                     if done && self.hold {
                         // Hold the last frame; the reader stays open (it
                         // would be rewound if the file were played again).
@@ -2334,10 +2374,10 @@ mod tests {
         assert_eq!(c.get(0, 0).r, 255, "the new sliders");
     }
 
-    /// A Formula kept on the panel (`FormulaKeep`): it outlives the
-    /// configured dwell and keeps animating (never held on a last frame);
-    /// a live edit keeps it kept; one minute ends at a minute; Next ends a
-    /// hold.
+    /// A Formula picked by hand ([`hand_picked`]): it outlives the
+    /// configured dwell and keeps animating (never held on a last frame),
+    /// through a live edit; Next ends it. A Formula played with no
+    /// override gets one turn.
     #[cfg(feature = "psi")]
     #[test]
     fn a_kept_formula_outlives_the_dwell_and_keeps_animating() {
@@ -2367,35 +2407,24 @@ mod tests {
             }
             (frames, stayed)
         };
-        assert_eq!(FormulaKeep::Turn.dwell(), None);
-        assert_eq!(FormulaKeep::from_name("5m"), Some(FormulaKeep::FiveMinutes));
-        assert_eq!(FormulaKeep::Hold.name(), "hold");
-
-        // One minute: on at 59 s, through a live edit at 30 s; gone by 62 s.
         let a = crate::fx_psi::path("gray(t)", "");
         let b = crate::fx_psi::path("rgb(t, 0, 0)", "");
+
+        // On after twenty minutes, through a live edit, still drawing; Next ends it.
         let mut t = 0;
-        e.play_now_with(&a, Duration::ZERO, FormulaKeep::Minute.dwell()).unwrap();
+        e.play_by_hand(&a, Duration::ZERO).unwrap();
         e.note_sent();
         let (frames, stayed) = run(&mut e, &mut t, 30_000, &a);
         assert!(stayed && frames > 100, "{frames}");
-        let keep = FormulaKeep::Minute.dwell();
-        e.retune(&b, Duration::from_millis(t), keep, crate::fx_psi::Retune::Edit).unwrap().unwrap();
-        let (frames, stayed) = run(&mut e, &mut t, 89_000, &b);
-        assert!(stayed && frames > 100, "kept through the live edit: {frames}");
-        run(&mut e, &mut t, 92_000, "");
-        assert_eq!(e.now_playing().unwrap().path, gif, "the playlist again");
-
-        // Until I change it: on after twenty minutes, still drawing; Next ends it.
-        e.play_now_with(&a, Duration::from_millis(t), FormulaKeep::Hold.dwell()).unwrap();
+        e.retune(&b, Duration::from_millis(t), Some(hand_picked()), crate::fx_psi::Retune::Edit).unwrap().unwrap();
         let end = t + 20 * 60_000;
-        let (frames, stayed) = run(&mut e, &mut t, end, &a);
-        assert!(stayed && frames > 1000, "{frames}");
+        let (frames, stayed) = run(&mut e, &mut t, end, &b);
+        assert!(stayed && frames > 1000, "kept through the live edit: {frames}");
         e.skip();
         run(&mut e, &mut t, end + 100, "");
-        assert_eq!(e.now_playing().unwrap().path, gif);
+        assert_eq!(e.now_playing().unwrap().path, gif, "the playlist again");
 
-        // Without a keep a Formula gets one turn (the hard cap, 10 s).
+        // Without an override a Formula gets one turn (the hard cap, 10 s).
         e.play_now(&a, Duration::from_millis(t)).unwrap();
         let start = t;
         run(&mut e, &mut t, start + 11_000, "");
@@ -2729,7 +2758,7 @@ mod tests {
         e.tick(Duration::ZERO, &mut c).unwrap();
         let gate = crate::fx_psi::path("rgb(x, y, 0)", "name=Time+gate");
         let road = crate::fx_psi::path("rgb(y, x, 0)", "name=Endless+road");
-        let keep = FormulaKeep::Minute.dwell();
+        let keep = Some(hand_picked());
         e.play_now_with(&gate, Duration::from_millis(100), keep)
             .unwrap();
         let mut t = 100;
@@ -3334,6 +3363,188 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(base.with_override(&fav).min, base.min);
+    }
+
+    /// How a Formula's turn is timed, as a table: (what the Formula's loop
+    /// is × the playlist's shortest and longest times × the entry's
+    /// override × in a playlist or picked by hand) → the time it stays on
+    /// screen, in ms. The engine ticks every 10 ms, so a turn ends up to a
+    /// tick after its time; a hand-picked one is looked at 6 minutes on.
+    #[cfg(feature = "psi")]
+    mod time_on_screen {
+        use super::*;
+        use crate::overrides::Dwell;
+
+        pub(super) const F: &str = "/formulas/f.psi";
+        const GIF: &str = "/gifs/Consoles/NES_A_01.gif";
+        /// Past this, a turn is reported as lasting "for good" (`u64::MAX`).
+        const LOOK: u64 = 6 * 60_000;
+
+        /// (what, a Formula's source or a GIF's bytes, a GIF, the dwell,
+        /// how it plays, the ms wanted).
+        pub(super) type Row<'a> = (&'a str, &'a [u8], bool, DwellPolicy, How, u64);
+
+        pub(super) enum How {
+            Playlist(Option<Override>),
+            ByHand,
+        }
+
+        /// The ms `first` (a Formula's source, or a GIF's bytes with
+        /// `gif`) stays on screen.
+        pub(super) fn on_screen(first: &[u8], gif: bool, dwell: DwellPolicy, how: How) -> u64 {
+            let path = if gif { "/gifs/Consoles/NES_F_01.gif" } else { F };
+            let mut files = vec![(path, first.to_vec()), (GIF, one_pixel_gif(255, 0, 0))];
+            if !gif {
+                files.push(("/formulas/f.psb", crate::synth::psi_build(std::str::from_utf8(first).unwrap())));
+            }
+            let mut e = engine_with(
+                &files,
+                &format!("{GIF}\n{path}\n"),
+                dwell,
+            );
+            e.set_transition(Transition::NONE);
+            let mut c = Canvas::new();
+            // The GIF first, then `path` from 1 s.
+            let t0: u64 = 1_000;
+            let mut t = 0;
+            while t < t0 {
+                e.tick(Duration::from_millis(t), &mut c).unwrap();
+                t += 10;
+            }
+            match how {
+                How::Playlist(ov) => {
+                    if let Some(ov) = ov {
+                        let mut o = Overrides::new();
+                        o.push(1, ov);
+                        e.set_overrides(&o);
+                    }
+                    e.skip();
+                }
+                How::ByHand => e.play_by_hand(path, Duration::from_millis(t0)).unwrap(),
+            }
+            // Its start: the first tick that shows it (its ordinal, as
+            // the same file may come up again next).
+            let mut start = None;
+            loop {
+                e.tick(Duration::from_millis(t), &mut c).unwrap();
+                let np = e.now_playing();
+                if start.is_none() {
+                    start = np.as_ref().filter(|p| p.path == path).map(|p| p.ordinal);
+                }
+                let on = start.is_some() && np.map(|p| p.ordinal) == start;
+                if t > t0 + 20 && !on {
+                    return t - t0;
+                }
+                if t - t0 > LOOK {
+                    return u64::MAX;
+                }
+                // A minute on, a coarser step (a turn is cut at its longest
+                // within it; one picked by hand is only looked at).
+                t += if t - t0 > 65_000 { 250 } else { 10 };
+            }
+        }
+
+        pub(super) fn secs(s: u32) -> Option<Override> {
+            Some(Override { dwell: Some(Dwell::Secs(s)), ..Override::default() })
+        }
+        pub(super) fn times(k: f32) -> Option<Override> {
+            Some(Override { dwell: Some(Dwell::Times(k)), ..Override::default() })
+        }
+        pub(super) fn loops(n: u16) -> Option<Override> {
+            Some(Override { loops: Some(n), ..Override::default() })
+        }
+    }
+
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formulas_time_on_screen() {
+        use time_on_screen::*;
+        let d = |min: u64, max: u64| DwellPolicy {
+            min: Duration::from_secs(min),
+            max: Duration::from_secs(max),
+            min_loops: 1,
+        };
+        const FOREVER: &str = "loop forever\ngray(frac(t))";
+        const L4: &str = "loop 4\ngray(frac(t/4))";
+        const L04: &str = "loop 0.4\ngray(frac(t/0.4))";
+        const L60: &str = "loop 60\ngray(frac(t/60))";
+        const NONE: &str = "gray(frac(t/8))";
+        let gif4 = frames_gif(40, 10); // 4 s
+        let gif05 = frames_gif(5, 10); // 0.5 s
+        const FOR_GOOD: u64 = u64::MAX;
+        // (what, source, GIF, dwell, how, wanted ms)
+        let rows: Vec<Row> = vec![
+            ("forever", FOREVER.as_bytes(), false, d(1, 30), How::Playlist(None), 30_000),
+            ("loop 4", L4.as_bytes(), false, d(1, 30), How::Playlist(None), 4_000),
+            ("loop 0.4", L04.as_bytes(), false, d(1, 30), How::Playlist(None), 1_200),
+            ("loop 60", L60.as_bytes(), false, d(1, 30), How::Playlist(None), 30_000),
+            ("no loop line", NONE.as_bytes(), false, d(1, 30), How::Playlist(None), 8_000),
+            ("forever, 5..20", FOREVER.as_bytes(), false, d(5, 20), How::Playlist(None), 20_000),
+            ("loop 4, 5..20", L4.as_bytes(), false, d(5, 20), How::Playlist(None), 8_000),
+            ("loop 60, 5..20", L60.as_bytes(), false, d(5, 20), How::Playlist(None), 20_000),
+            ("forever dwell=10", FOREVER.as_bytes(), false, d(1, 30), How::Playlist(secs(10)), 10_000),
+            ("forever dwell=45", FOREVER.as_bytes(), false, d(1, 30), How::Playlist(secs(45)), 45_000),
+            ("forever dwell=2x", FOREVER.as_bytes(), false, d(1, 30), How::Playlist(times(2.0)), 60_000),
+            ("forever loops=3", FOREVER.as_bytes(), false, d(1, 30), How::Playlist(loops(3)), 30_000),
+            ("loop 4 dwell=10", L4.as_bytes(), false, d(1, 30), How::Playlist(secs(10)), 12_000),
+            ("loop 4 loops=3", L4.as_bytes(), false, d(1, 30), How::Playlist(loops(3)), 12_000),
+            ("loop 4 dwell=2x", L4.as_bytes(), false, d(1, 30), How::Playlist(times(2.0)), 8_000),
+            ("loop 0.4 dwell=2x", L04.as_bytes(), false, d(1, 30), How::Playlist(times(2.0)), 2_400),
+            ("GIF 4 s dwell=2x", &gif4, true, d(1, 30), How::Playlist(times(2.0)), 8_000),
+            ("GIF 0.5 s dwell=2x", &gif05, true, d(1, 30), How::Playlist(times(2.0)), 2_000),
+            ("loop 60 dwell=2x", L60.as_bytes(), false, d(1, 30), How::Playlist(times(2.0)), 60_000),
+            ("GIF 4 s", &gif4, true, d(1, 30), How::Playlist(None), 4_000),
+            ("GIF 0.5 s", &gif05, true, d(1, 30), How::Playlist(None), 1_000),
+            ("by hand: forever", FOREVER.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
+            ("by hand: loop 4", L4.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
+            ("by hand: loop 60", L60.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
+            ("by hand: GIF 4 s", &gif4, true, d(1, 30), How::ByHand, FOR_GOOD),
+            ("by hand: GIF 0.5 s", &gif05, true, d(1, 30), How::ByHand, FOR_GOOD),
+        ];
+        let mut bad = Vec::new();
+        for (what, src, gif, dwell, how, want) in rows {
+            let got = on_screen(src, gif, dwell, how);
+            let show = |v: u64| if v == FOR_GOOD { "for good".to_string() } else { format!("{v} ms") };
+            eprintln!("{what:>20}: {:>10}  (wanted {})", show(got), show(want));
+            // Up to a tick or two late (and a 250 ms step past a minute).
+            let slack = if want > 65_000 { 260 } else { 40 };
+            if !(got >= want && got <= want.saturating_add(slack)) {
+                bad.push(format!("{what}: {} (wanted {})", show(got), show(want)));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// A playlist of one `loop forever` Formula runs on: one start, one
+    /// seed, past several of its turns; a `loop 4` one alone starts again
+    /// each turn as any file.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_lone_endless_formula_runs_on() {
+        let one = |src: &str| {
+            let mut e = engine_with(
+                &[(time_on_screen::F, src.as_bytes().to_vec()), ("/formulas/f.psb", crate::synth::psi_build(src))],
+                &format!("{}\n", time_on_screen::F),
+                DwellPolicy { min: Duration::from_secs(1), max: Duration::from_secs(10), min_loops: 1 },
+            );
+            e.set_transition(Transition::NONE);
+            let mut c = Canvas::new();
+            let mut starts = std::collections::BTreeSet::new();
+            let mut seeds = std::collections::BTreeSet::new();
+            let mut t = 0;
+            while t < 35_000 {
+                e.tick(Duration::from_millis(t), &mut c).unwrap();
+                if let Some(p) = e.now_playing() {
+                    starts.insert(p.ordinal);
+                }
+                seeds.extend(e.seed());
+                t += 20;
+            }
+            (starts.len(), seeds.len())
+        };
+        assert_eq!(one("loop forever\ngray(frac(t + seed))"), (1, 1), "one start, one seed over 35 s of 10 s turns");
+        let (starts, _) = one("loop 4\ngray(frac(t/4))");
+        assert!(starts >= 8, "a loop 4 Formula alone: a start a turn ({starts})");
     }
 
     fn twice_ov() -> Override {

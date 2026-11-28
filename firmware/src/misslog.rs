@@ -11,7 +11,7 @@ use std::sync::Mutex;
 pub struct Miss {
     pub late_ms: u64,
     pub cause: usize,
-    pub phases: [u32; 7],
+    pub phases: [u32; 8],
     pub transitioning: bool,
     pub advance_us: u32,
     pub step_us: u32,
@@ -41,7 +41,7 @@ pub struct Miss {
 /// Late frames while a transfer shared the card (`net` & 3), by cause
 /// (`frametime::CAUSES` order), and the file switches made meanwhile (each
 /// opened in its frame: nothing is opened ahead during a transfer).
-static IN_TRANSFER: [std::sync::atomic::AtomicU32; 8] = [const { std::sync::atomic::AtomicU32::new(0) }; 8];
+static IN_TRANSFER: [std::sync::atomic::AtomicU32; 9] = [const { std::sync::atomic::AtomicU32::new(0) }; 9];
 static SWITCHES_IN_TRANSFER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// What [`Miss::net`] says now (the main task; atomics only).
@@ -74,7 +74,7 @@ static RECENT: Mutex<([Option<Miss>; 8], usize)> = Mutex::new(([None; 8], 0));
 /// The main task, at a deadline miss (rare: a lock taken only then).
 pub fn note(m: Miss) {
     if m.net & 3 != 0 {
-        IN_TRANSFER[m.cause.min(7)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        IN_TRANSFER[m.cause.min(8)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     if let Ok(mut g) = RECENT.try_lock() {
         let k = g.1 % 8;
@@ -83,7 +83,7 @@ pub fn note(m: Miss) {
     }
 }
 
-/// `,"recent":[{late_ms, cause, open, read, decode, blit, log, other, wake,
+/// `,"recent":[{late_ms, cause, open, read, decode, blit, log, other, wake, settings,
 /// transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us,
 /// kind, open_index_us, open_path_us, open_builder_us, open_catalog_us}]`, oldest first.
 pub fn json() -> String {
@@ -99,10 +99,10 @@ pub fn json() -> String {
         first = false;
         let p = m.phases;
         out.push_str(&format!(
-            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{},"card_wait_us":{},"card_xfer_us":{},"kind":"{}","open_index_us":{},"open_path_us":{},"open_builder_us":{},"open_catalog_us":{},"net":{},"heap":{}}}"#,
+            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"settings":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{},"card_wait_us":{},"card_xfer_us":{},"kind":"{}","open_index_us":{},"open_path_us":{},"open_builder_us":{},"open_catalog_us":{},"net":{},"heap":{}}}"#,
             m.late_ms,
-            opendmd_core::frametime::CAUSES[m.cause.min(7)],
-            p[0], p[1], p[2], p[3], p[4], p[5], p[6],
+            opendmd_core::frametime::CAUSES[m.cause.min(8)],
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
             m.transitioning, m.advance_us, m.step_us, m.at_s, m.card_wait_us, m.card_xfer_us, m.kind, m.open_index_us, m.open_path_us, m.open_builder_us, m.open_catalog_us, m.net, m.heap
         ));
     }

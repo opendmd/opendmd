@@ -91,6 +91,9 @@ WIFI = "ssid=demo,chan=6,psk=demo-password"
 # The reference is the least of every earlier spell (never above the first spell's, which was the
 # reference before: no leak passes now that failed then).
 LOAD_S, QUIET_S, QUIET_MORE_S = 30, 60, 300
+# The kept soak: a GIF played by hand for this many of its loops, a Formula for this many
+# seconds of device time, each within KEPT_WALL_S of wall time.
+KEPT_GIF_LOOPS, KEPT_FORMULA_S, KEPT_WALL_S = 1000, 300, 1500
 BURST_ROUNDS = [2, 2, 2, 5, 5, 5]
 ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # RX_BUFFERS (found by this lane, 2026-11-03; fixed in net-wedge): two uploads at once got the
@@ -612,6 +615,9 @@ class Lane:
             self.events(emu, api)
             if self.a.connections > 1:
                 self.bursts(emu, api)
+            self.kept_rules(emu, api)
+            if os.environ.get("EMU_API_SOAK", "1") != "0":
+                self.kept_soak(emu, api)
             self.load_rounds(emu, api)
             self.cache_delete(emu, api)
             self.odm_delete(emu, api)
@@ -1015,8 +1021,8 @@ class Lane:
         short = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
         name = lambda b: b[6:6 + b[5]].decode()
         self.expect(len(long) * 4 // 3 > 6144, "sent", f"--long-psb is {len(long)} B: it fits a path")
-        # (Kept until changed: the JIT's waits below outlast a turn of the dwell.)
-        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (Kept until changed, as every Formula picked by hand: the JIT's
+        # waits below outlast a turn of the dwell.)
         jit = lambda s: (s["now_playing"].get("formula") or {}).get("jit") or {}
         def jit_off(what):
             # (The status says the last kernel's word until the new
@@ -1044,6 +1050,13 @@ class Lane:
                               and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the long Formula playing")
         np = st["now_playing"]
         self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
+        # Kept until something else plays (opendmd_core::hand_picked): kept_s 0.
+        self.expect(np.get("kept_s") == 0, "sent", f"now_playing.kept_s {np.get('kept_s')!r}, wanted 0 (until changed)")
+        # A setting changed while it plays: held, then saved within a minute
+        # (device time) and a frame (opendmd_core::save_hold), though it stays.
+        b0 = int(api.json("GET", "/api/config")[1]["brightness"])
+        save_mark, save_up = emu.mark(), int(api.status()["uptime_secs"])
+        api.json("PUT", "/api/config", {"brightness": b0 - 1 if b0 > 1 else b0 + 1})
         # Its identity (Connect P1 F0): the CRC-32 of the bytes sent, and the
         # seed it opened with.
         seed = np.get("seed")
@@ -1094,11 +1107,22 @@ class Lane:
         np = api.status()["now_playing"]
         self.expect(np["ordinal"] == ordinal, "sent", "a refused one moved the panel on")
         self.expect(np.get("sent") == zlib.crc32(short), "sent", f"after the refused ones, sent {np.get('sent')}: not the bytes on screen's")
+        # Still the same start after all of that (the JIT's waits: far past
+        # a turn of the dwell), and still kept.
+        self.expect(np.get("kept_s") == 0, "sent", f"the sent Formula after the edits: kept_s {np.get('kept_s')!r}")
+        # (Up to 5 minutes wall for the minute of device time; the Formula stays kept meanwhile.)
+        emu.wait_for(re.compile(r"settings: saved \(held while a Formula played\)"), 300, save_mark,
+                     "the brightness change saved within a minute while the Formula stays kept")
+        held = int(api.status()["uptime_secs"]) - save_up
+        np2 = api.status()["now_playing"]
+        self.expect(np2["ordinal"] == ordinal and np2.get("kept_s") == 0 and 55 <= held <= 75, "sent",
+                    f"the save came {held} s (device time) after the change, the Formula still kept ({np2['ordinal']} vs {ordinal}, kept_s {np2.get('kept_s')!r})")
+        api.json("PUT", "/api/config", {"brightness": b0})
         api.json("POST", "/api/skip")
-        self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
+        st = self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
+        self.expect("kept_s" not in st["now_playing"], "sent", f"kept_s {st['now_playing'].get('kept_s')!r} after Next")
         api.call("POST", "/api/play/formula?live=1", long, want=(409,))
-        api.json("PUT", "/api/config", {"formula_keep": "turn"})
-        self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
+        self.ok("sent", f"kept (kept_s 0) past the edits, a brightness change saved {held} s in while kept; a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
                 f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on; "
                 f"the JIT on after the show, the edits ({made} kernel made) and a=30: {first}, {after}, {wide}")
 
@@ -1117,8 +1141,8 @@ class Lane:
             api.json("POST", "/api/play", body)
             _, m = emu.wait_for(rx, 30, mark, f"the retune's start ({what})")
             return "edited" if m.group(1) else "played", int(m.group(2)), int(m.group(3))
-        # (Kept until changed: its turn must not end between the steps.)
-        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (A Formula picked by hand is kept until changed: its turn does not
+        # end between the steps.)
         # (Its start on the console, not in /api/status: at dwell_min 1 it plays once, ~1 s
         # of device time, ~0.4 s wall, and a status poll every 0.5 s missed it twice.)
         mark = emu.mark()
@@ -1154,7 +1178,6 @@ class Lane:
         api.call("POST", "/api/play", {"path": light, "live": True}, want=(409,))
         self.expect(not emu.find(rx, mark), "governor", "a live edit after Previous retuned the Formula on screen")
         self.expect(api.status()["now_playing"]["ordinal"] == back, "governor", "the 409 moved the panel on")
-        api.json("PUT", "/api/config", {"formula_keep": "turn"})
         self.ok("governor", f"light over heavy at its own rate ({light_ms} ms frames), heavy over light slow ({heavy_ms}), "
                 f"a live edit kept the level; a live edit after Previous put a Formula back: 409")
 
@@ -1541,7 +1564,117 @@ class Lane:
 
     # -- the load -------------------------------------------------------------
 
+    def kept_rules(self, emu, api):
+        """What a kept start survives and what ends it (opendmd_core::keep), and settings
+        saved at once while nothing draws (opendmd_core::save_hold): a pause and its resume
+        keep it (the same start); a brightness change while paused with a Formula kept is
+        written at once, not held a minute; an override written to the playing playlist
+        (a favourite on Now) and a reindex play it again, kept; another playlist ends it."""
+        gif = self.card_gif
+        on = lambda s: s["now_playing"]
+        api.json("POST", "/api/play", {"path": gif})
+        st = self.wait_status(api, lambda s: on(s)["path"] == gif and on(s).get("kept_s") == 0, 60, "the GIF played by hand, kept")
+        ordinal = on(st)["ordinal"]
+        # A pause and a resume: the same start, still kept.
+        api.json("POST", "/api/pause")
+        self.wait_status(api, lambda s: s.get("paused") is True, 30, "paused")
+        time.sleep(2)
+        api.json("POST", "/api/pause")
+        st = self.wait_status(api, lambda s: s.get("paused") is False, 30, "resumed")
+        time.sleep(3)
+        np = api.status()["now_playing"]
+        self.expect(np["ordinal"] == ordinal and np["path"] == gif and np.get("kept_s") == 0, "kept rules",
+                    f"a pause and a resume ended the kept GIF: {np['path']} ordinal {np['ordinal']} (was {ordinal}), kept_s {np.get('kept_s')!r}")
+        # Paused with a Formula kept: a brightness change is written at once.
+        api.json("POST", "/api/play", {"path": "@formula:starfield"})
+        self.wait_status(api, lambda s: on(s)["path"] == "@formula:starfield" and on(s).get("kept_s") == 0, 60, "the Formula kept")
+        api.json("POST", "/api/pause")
+        self.wait_status(api, lambda s: s.get("paused") is True, 30, "paused over the Formula")
+        b0 = int(api.json("GET", "/api/config")[1]["brightness"])
+        mark, up0 = emu.mark(), int(api.status()["uptime_secs"])
+        api.json("PUT", "/api/config", {"brightness": b0 - 1 if b0 > 1 else b0 + 1})
+        emu.wait_for(re.compile(r"settings: saved \(held while a Formula played\)"), 120, mark, "the brightness saved while paused over a kept Formula")
+        held = int(api.status()["uptime_secs"]) - up0
+        self.expect(held < 20, "kept rules", f"paused over a Formula, a brightness change waited {held} s (device time) to be saved")
+        api.json("PUT", "/api/config", {"brightness": b0})
+        api.json("POST", "/api/pause")
+        self.wait_status(api, lambda s: s.get("paused") is False, 30, "resumed over the Formula")
+        # An override written to the playing playlist (as a favourite tapped on Now): kept.
+        api.json("POST", "/api/play", {"path": gif})
+        self.wait_status(api, lambda s: on(s)["path"] == gif and on(s).get("kept_s") == 0, 60, "the GIF kept again")
+        mark = emu.mark()
+        api.call("PUT", "/api/files/filelist.meta", f"{gif}\tw=3\n".encode(), timeout=120)
+        emu.wait_for(re.compile(r"overrides installed"), 120, mark, "the override installed")
+        st = self.wait_status(api, lambda s: s.get("index_state") == "ready" and on(s)["path"] == gif and on(s).get("kept_s") == 0, 60,
+                              "the kept GIF after the override (played again, kept)")
+        time.sleep(4)
+        np = api.status()["now_playing"]
+        self.expect(np["path"] == gif and np.get("kept_s") == 0, "kept rules", f"an override ended the kept GIF: {np['path']}, kept_s {np.get('kept_s')!r}")
+        self.expect(bool(emu.find(re.compile(r"keep: .* kept across the rebuild"), mark)), "kept rules", "no `keep: … kept across the rebuild` line after the override")
+        api.call("DELETE", "/api/files/filelist.meta", want=(200, 404))
+        # A reindex: kept.
+        mark = emu.mark()
+        api.json("POST", "/api/reindex", timeout=180)
+        self.wait_status(api, lambda s: s.get("index_state") == "ready", 180, "the reindex done")
+        time.sleep(4)
+        np = api.status()["now_playing"]
+        self.expect(np["path"] == gif and np.get("kept_s") == 0, "kept rules", f"a reindex ended the kept GIF: {np['path']}, kept_s {np.get('kept_s')!r}")
+        # Another playlist: the keep ends.
+        _, r = api.json("PUT", "/api/config", {"set": "filelist.hall"}, timeout=120)
+        st = self.wait_status(api, lambda s: (s.get("manifest") or "").endswith("filelist.hall") and s.get("index_state") == "ready" and on(s)["path"] != gif, 120, "Halloween playing")
+        self.expect("kept_s" not in on(st), "kept rules", f"another playlist kept {on(st)}")
+        _, r = api.json("PUT", "/api/config", {"set": ""}, timeout=120)
+        self.wait_status(api, lambda s: (s.get("manifest") or "").endswith("filelist.txt") and s.get("index_state") == "ready", 120, "All files again")
+        self.ok("kept rules", f"{gif} kept through a pause and a resume, an override (a favourite) and a reindex; a brightness change paused over a kept Formula saved in {held} s; another playlist ended the keep")
+
+    def kept_soak(self, emu, api):
+        """What is played by hand stays (opendmd_core::hand_picked): a GIF kept for
+        KEPT_GIF_LOOPS loops and a Formula for KEPT_FORMULA_S s of device time, each the same
+        start all the while (`kept_s` 0), with the heap flat while kept (the census's samples
+        of the soak's last part against its first's; none is steady: a kept file opens
+        nothing ahead). EMU_API_SOAK=0 leaves it out."""
+        def loop_ms(b):
+            t, i = 0, 0
+            while (i := b.find(b"\x21\xf9\x04", i)) >= 0:
+                d = b[i + 4] | b[i + 5] << 8
+                t, i = t + (100 if d == 0 else max(d * 10, 20)), i + 8
+            return t
+        root = self.a.emu_dir / "card" / "root" / "gifs" / "Other"
+        name, ms = min(((p.name, loop_ms(p.read_bytes())) for p in sorted(root.glob("*.gif"))[:6]), key=lambda x: x[1])
+        results = []
+        for what, path, until_ms in (("GIF", f"/gifs/Other/{name}", KEPT_GIF_LOOPS * ms), ("Formula", "@formula:starfield", KEPT_FORMULA_S * 1000)):
+            api.json("POST", "/api/play", {"path": path})
+            st = self.wait_status(api, lambda s: s["now_playing"]["path"] == path and s["now_playing"].get("kept_s") == 0, 60, f"the kept {what} on screen")
+            ordinal, up0 = st["now_playing"]["ordinal"], int(st["uptime_secs"])
+            mark = emu.mark()
+            end = time.time() + KEPT_WALL_S
+            np = st["now_playing"]
+            while time.time() < end:
+                emu.check()
+                np = api.status()["now_playing"]
+                self.expect(np["ordinal"] == ordinal and np.get("kept_s") == 0, "kept soak",
+                            f"the kept {what} moved on or lost its keep: ordinal {np['ordinal']} (was {ordinal}), kept_s {np.get('kept_s')!r}")
+                if np["elapsed_ms"] >= until_ms:
+                    break
+                time.sleep(5)
+            self.expect(np["elapsed_ms"] >= until_ms, "kept soak", f"the kept {what} reached {np['elapsed_ms']} ms of {until_ms} in {KEPT_WALL_S} s wall")
+            samples = [(int(m[1]), int(m[2])) for _, m in emu.find(CENSUS, mark)]
+            self.expect(len(samples) >= 4, "kept soak", f"{len(samples)} census lines while the {what} was kept: is this an emu-census image?")
+            half = len(samples) // 2
+            (b0, y0), (b1, y1) = [(min(c[0] for c in part), min(c[1] for c in part)) for part in (samples[:half], samples[half:])]
+            self.expect(b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES, "kept soak",
+                        f"the heap grew while the {what} was kept: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B ({len(samples)} samples)")
+            up = int(api.status()["uptime_secs"]) - up0
+            loops = f"{np['elapsed_ms'] // ms} loops of {ms} ms, " if what == "GIF" else ""
+            results.append(f"{what} {path}: {loops}{np['elapsed_ms'] // 1000} s on screen ({up} s uptime), one start, kept_s 0; heap least {b0} -> {b1} blocks, {y0} -> {y1} B over {len(samples)} samples")
+        api.json("POST", "/api/skip")
+        self.ok("kept soak", "; ".join(results))
+
     def load_rounds(self, emu, api):
+        # Back to the playlist: the card GIF `bursts` played by hand is kept until
+        # something else plays, and the census's steady point is a next file ready ahead.
+        api.json("POST", "/api/skip")
+        self.wait_status(api, lambda s: "kept_s" not in s["now_playing"], 30, "the playlist again (nothing kept)")
         raws = []
         # Whether the image marks its samples (`steady true/false`, emu-census builds since the
         # steady point): then spells are compared by their steady samples alone.

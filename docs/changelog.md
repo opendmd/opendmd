@@ -20,6 +20,25 @@ it can be written ahead. Write for a panel's owner: GIFs, Formulas, playlists,
 the web app. No internals.
 -->
 
+## 1.1.0-beta.5 · 2026-11-28
+
+What you play yourself stays on the panel until you change it, and
+Formulas that never repeat get their full turn in a playlist.
+
+- A GIF or Formula you play yourself now stays on the panel, looping, until
+  you skip it, play something else or go back to the playlist, instead of
+  playing once and moving on. That covers **Play now**, Recently played,
+  **Show on panel** in the editor and Remote control. Now says **Kept on
+  the panel until you change it**, with **Back to the playlist**. The
+  **Keep on the panel** setting is gone.
+- In a playlist, a Formula that goes on without repeating (Endless road,
+  Neon city, Rift patrol and others) now stays for the playlist's longest
+  time, 30 seconds unless you change it, instead of about a second.
+  Formulas with a loop still play whole loops, as GIFs do. The setting is
+  now called **Each GIF or Formula stays**.
+- A setting you change while a Formula is on the panel is saved within a
+  minute, so cutting the power no longer loses it.
+
 ## 1.1.0-beta.4 · 2026-11-26
 
 Short GIFs play once, Remote control no longer switches itself off after
