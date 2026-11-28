@@ -4,7 +4,7 @@ On the first page every picture stood still. To make one move, the colour line r
 
 ## Time and the loop
 
-`t` is the time of the frame being drawn, in seconds since the loop began. A `loop 4` line near the top makes the loop 4 seconds long, so `t` counts from 0 to 4 and then starts again. Without a `loop` line the loop is 8 seconds. It can be anything from 0.1 to 3,600 seconds. In a playlist the loop is also the least time the Formula plays for, and a GIF saved from it is one loop long.
+`t` is the time of the frame being drawn, in seconds since the loop began. A `loop 4` line near the top makes the loop 4 seconds long, so `t` counts from 0 to 4 and then starts again. Without a `loop` line the loop is 8 seconds. It can be anything from 0.1 to 3,600 seconds. In a playlist a Formula plays one whole loop and then the playlist moves on, unless the loop is shorter than a second or longer than 30 ([Time and loops](psi.md#time-and-loops) has the rule). A GIF saved from it is one loop long.
 
 ```psi
 name "Slide"
@@ -12,13 +12,13 @@ loop 4
 hsv(x + t/4, 1, 1)
 ```
 
-As `t` goes from 0 to 4, `t/4` goes from 0 to 1. That moves the hue once round the whole colour wheel, so when the loop starts again the colours are exactly where they began, and there is no jump.
+As `t` goes from 0 to 4, `t/4` goes from 0 to 1. That moves the hue once round the colour wheel, so when the loop starts again the colours are where they began and nothing jumps.
 
-`t/4` in a 4-second loop has a name of its own, `phase`: where the frame is in the loop, from 0 at its start to 1 at its end, whatever the loop's length. `hsv(x + phase, 1, 1)` draws the same frames as `hsv(x + t/4, 1, 1)` here, and keeps going round once a loop if you change `loop 4` to `loop 6`. `phase` doesn't exist in `loop forever`, which has no loop. `phase` and `smooth` (below) are new in OpenDMD 1.1: if your panel says the name is unknown, update it (Settings › Update).
+`t/4` in a 4-second loop has a name of its own, `phase`: where the frame is in the loop, from 0 at its start to 1 at its end, whatever the loop's length. `hsv(x + phase, 1, 1)` draws the same frames as `hsv(x + t/4, 1, 1)` here, and keeps going round once a loop if you change `loop 4` to `loop 6`. `phase` doesn't exist in `loop forever`, which has no loop. `phase` and `smooth` (below) need OpenDMD 1.1 or later. An older display says the name is unknown.
 
 ## Waves
 
-`sin(v)` makes a smooth wave between −1 and 1. Psi measures it in turns: the wave goes round once as `v` goes from 0 to 1. There is no pi to multiply by.
+`sin(v)` makes a smooth wave between −1 and 1. Psi measures angles in turns: the wave goes round once as `v` goes from 0 to 1. A full circle is 1, where other languages use 360 or 2π.
 
 ```psi
 name "Breathe"
@@ -77,7 +77,7 @@ This reads as a control called `speed`, going from 0 to 2, starting at 1, with t
 
 ## How often it is drawn
 
-The display draws its picture again each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh unless it asks for every one, with a `smooth` line at the top.
+The display redraws the panel about 100 to 125 times a second, depending on the panel. Each of these is called a refresh. A Formula is drawn on every 2nd refresh, or on every refresh if it has a `smooth` line at the top.
 
 ```psi
 name "Fast sweep"
@@ -86,13 +86,13 @@ loop 1
 gray(abs(x - phase) < 0.02)
 ```
 
-Drawn every refresh, a fast line looks smoother. It moves at the same speed either way, because `t` is always the time of the frame being drawn: a faster rate only draws more of the moments in between. The display keeps every refresh only for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Panel) it draws Formulas every 2nd refresh.
+Drawn on every refresh, the line takes smaller steps and looks smoother. It crosses the panel in the same one second either way, because `t` is the real time of each frame. The display only draws on every refresh for a Formula that is light for the panel, and only with **Phosphor glow** (Settings › Panel) off.
 
-The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". A heavy one moves less smoothly on the display, because the display draws it less often: every 4th refresh, or fewer. A Formula that is far too heavy isn't played at all. The page [How Psi thinks](psi.md) explains what makes a Formula heavy.
+The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". The display draws a heavy one on every 4th or 8th refresh, so it moves less smoothly. One estimated at more than 40 ms a frame isn't played at all. [What makes a Formula heavy](psi.md#what-makes-a-formula-heavy) explains the ratings.
 
-## Never the same twice
+## A Formula that doesn't repeat
 
-`loop forever` makes a Formula that doesn't repeat. `t` keeps growing for as long as it plays.
+With `loop forever` there is no loop. `t` keeps growing for as long as the Formula plays.
 
 ```psi
 name "Drift"
@@ -100,7 +100,7 @@ loop forever
 hsv(frac(x + t/10), 1, 1)
 ```
 
-A number that grows without end can't go straight into a colour, so Psi asks you to wrap it first. `frac`, `%`, `sin`, `noise` and a comparison all do that.
+A number that grows without end can't go straight into a colour. The compiler refuses the Formula until the number goes through something that keeps it in a range: `frac`, `%`, `sin`, `noise` or a comparison.
 
 ```psi-bad
 name "Oops"
@@ -108,6 +108,6 @@ loop forever
 gray(t*x)
 ```
 
-Here the editor says "`t` grows without end in `loop forever`, and this can't take it", and lists the ways to wrap it. A `loop forever` Formula can also read `seed`, a number from 0 to 1 that is new each time it starts playing.
+Here the editor says "`t` grows without end in `loop forever`, and this can't take it", and lists what to use. A `loop forever` Formula can also read `seed`, a number from 0 to 1 that is new each time it starts playing.
 
 Next: [Make a Formula, 3: add a shape](psi-3.md).

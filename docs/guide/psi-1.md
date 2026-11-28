@@ -1,6 +1,6 @@
 # Make a Formula, 1: change one
 
-A Formula is a few lines of text that make a moving picture on the panel. The language they are written in is called Psi. This tour takes three short pages. You change numbers first, then make things move, then draw shapes.
+A Formula is a few lines of text that the display turns into a moving picture. The language it is written in is called Psi. These three pages go through writing one: this page sets colours, the second makes them move, and the third draws shapes.
 
 ## Where to type
 
@@ -19,7 +19,9 @@ name "First light"
 hsv(0.6, 1, 1)
 ```
 
-The first line gives the Formula its name. The last line is the colour, and a Formula always ends with one. The display works it out for all 4,096 pixels of the panel, 128 across and 32 down, and does that again for every frame.
+The first line gives the Formula its name. The second is the colour line, which says what colour a pixel is. The display works the colour line out for each of the panel's 4,096 pixels, 128 across and 32 down, and does that again for every frame. This one reads nothing that differs from pixel to pixel, so every pixel gets the same blue.
+
+The colour line has to be the last line.
 
 `hsv` takes three numbers, each from 0 to 1:
 
@@ -63,7 +65,7 @@ name "Embers"
 pal(fire, 1 - y)
 ```
 
-`1 - y` is 1 at the top and 0 at the bottom, so the heat is at the top. Change it to `y` to turn it over. The other palettes are `ice` (also called `ocean`), `chrono`, `amber`, `rainbow` and `gray`.
+`1 - y` is 1 at the top and 0 at the bottom, so the top row is white and the bottom row black. Change it to `y` to turn it over. The other palettes are `ice` (also called `ocean`), `chrono`, `amber`, `rainbow` and `gray`.
 
 ## Whole pixels
 
@@ -76,16 +78,16 @@ gray(px % 8 == 0 or py % 8 == 0)
 
 `%` gives the remainder, so `px % 8` counts 0 to 7 over and over. A comparison such as `==` or `<` gives 1 when it is true and 0 when it is false. `or` joins two of them. So the grey is 1 on every eighth column and every eighth row, and 0 everywhere else. Change both 8s to 16 for a wider grid.
 
-## When it goes wrong
+## Errors
 
-When a line doesn't make sense to Psi, the editor shows the problem above the code, as **Line N:** and a message. The picture keeps showing the last version that worked. Sometimes there is a **Fix it** button that makes the change for you.
+When a Formula has a mistake in it, the editor shows an error above the code, as **Line N:** and a message. The picture keeps showing the last version that worked. Sometimes there is a **Fix it** button that makes the change for you.
 
 ```psi-bad
 name "Oops"
 gray(2x)
 ```
 
-On paper, `2x` means two times x. Psi needs the `*`: `gray(2 * x)`. The message here says so: "`2x` is not a number or a name (to multiply, write `2 * x`)".
+Multiplying needs a `*` in Psi: `gray(2 * x)`. The message for this one is "`2x` is not a number or a name (to multiply, write `2 * x`)".
 
 ## Naming and keeping it
 

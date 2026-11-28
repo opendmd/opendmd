@@ -1,14 +1,15 @@
 # Psi language reference
 
 **Psi** is the language OpenDMD's **Formulas** are written in. A formula
-is a few lines of arithmetic, worked out for every pixel of the 128 × 32
-panel every frame. Its last line is a colour.
+is a few lines of arithmetic that give the colour of one pixel. The panel
+works them out for each of its 128 × 32 pixels to draw a frame, and again
+for the next frame.
 
-This page lists every name the language knows and what it does. Then come
-how a formula runs, its limits, some recipes and the language in full. The
-error codes are on [a separate page](psi-errors.md). To learn Psi, start
-with [Make a Formula](guide/psi-1.md) in the guide. To try it, open the
-[demo](/demo/)'s Formulas.
+This page lists every name in the language and what it does, then how a
+formula runs, the limits, some recipes, and the grammar and number rules in
+full. The error codes are on [a separate page](psi-errors.md). To learn
+Psi, start with [Make a Formula](guide/psi-1.md) in the guide. To try it,
+open Formulas in the [demo](/demo/).
 
 On the site, the search box filters the built-ins (press `/`), and
 **Cheat sheet** shows only the tables.
@@ -164,54 +165,99 @@ the editor.
 
 ## How a formula runs
 
-- **Levels.** Each value is worked out only as often as what it reads
-  changes. Constants are worked out once. Values of the time, the clock and
-  the controls are worked out once a frame, values of `y`, `py` and `cy`
-  once a row, and the rest once a pixel. This changes the cost, not the
-  result.
-- **Layers** (`layer [blend] [rate N] { … }`) are drawn bottom to top. Each
-  has its own names and colour, and goes onto what is below with its blend
-  (`over`, `add`, `multiply`, `screen`, `max`, `min`). A colour's last value
-  says how much of the pixel it covers.
-- **Functions** (`fn p(a, b) = …` or `fn p(a, b) { … }`) are written out
-  where they are called. A function gives a value, a colour, or lines that
-  draw. Inside a function whose values are `x, y`, the names `px py i cx cy
-  r angle` follow them, so it draws at another place.
-- **`draw { }`** runs once a frame, before the pixels. Its loops
-  (`for k < n`), lines and dots go into a canvas, which the pixels read
-  back as `ink`.
-- **Time.** `t` is the frame's time, in seconds into the loop (`loop N`, 8
-  when left out). Which instants get drawn is the display's: the panel
-  draws a frame on its scan's refresh (about 8 ms; 100 to 125 a second, by
-  panel), every 2nd refresh unless the formula asks for every refresh
-  (`smooth`), and fewer when frames take too long;
-  the browser's preview draws at about the same times, and a saved GIF at
-  20 or 40 ms. So motion is a function of `t`, never a count of frames.
-  On the panel, racing its scan, `t` wraps at exactly the loop's length
-  (from OpenDMD 1.1), as in the preview; a saved GIF, and the panel when it
-  can't follow its scan (a `rate` layer, the glow), play whole 20 ms (or
-  40 ms) frames, so a loop that isn't a whole number of them comes out up
-  to a frame short there (such a frame, the first of a play among them,
-  that falls in the loop's last part frame draws `t` at 0). The time past
-  the loop's end carries into the next, so `t` keeps the clock's pace
-  across the wrap. `loop N` is also the least time the
-  formula plays for in a playlist, and the length of a GIF saved from it.
-  `phase` is where the frame is in the loop, 0 to 1: `t` divided by the
-  loop's length as its line writes it, the very division, so `sin(phase)`
-  and `sin(t/8)` in an 8-second loop draw the same frames, and a change of
-  the loop's length needs no other edit. With `loop forever`, `t` is
-  seconds since the formula started and grows without end (and there is no
-  `phase`: E908). `phase` and `smooth` are OpenDMD 1.1's: a panel before
-  it says the name is unknown, and needs an update.
-- **Built-in inputs** (`daylight`, `sun.alt`, `moon.phase`, `season`,
-  `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`,
-  `replay.game`) are read by name. Each is the same for every pixel of a
-  frame and is held to its range. When the panel has no value for one, the
-  input reads its default; thumbnails, the gallery and `psi check` draw at
-  the defaults, and the editor's preview does until its inputs panel
-  moves them. `since(KEY)` says when one last changed and `was(KEY)` what it
-  was before ("Numbers" gives their ends). A formula has no memory between
-  frames.
+### Levels
+
+Each value is worked out only as often as what it reads can change:
+
+| the value reads | worked out |
+| --- | --- |
+| only numbers | once, at compile time |
+| the time, the clock, a control, a built-in input | once a frame |
+| `y`, `py` or `cy`, and nothing listed in the next row | once a row |
+| `x`, `px`, `cx`, `r`, `angle`, `i`, `ink` or the picture under the formula | once a pixel |
+
+A value that reads another value is worked out at least as often as that
+one. Two cases are cheaper than once a pixel. A per-pixel value that reads
+`x` but not `y` is worked out once a column. A per-pixel value that reads
+nothing that changes between frames is worked out once and kept from frame
+to frame, when the panel has the memory for it (16 KB a value). `psi check
+--levels` lists each value's level and what puts it there.
+
+Levels change the time a frame takes. They never change the picture.
+
+### Layers
+
+`layer [blend] [rate N] { … }`. Layers are drawn bottom to top, the first
+in the text at the bottom. Each has its own names and its own colour line,
+and is combined with what is below by its blend (`over`, `add`, `multiply`,
+`screen`, `max`, `min`; `over` when none is written). A colour's last value
+says how much of the pixel it covers, 0 to 1. A formula with layers has no
+colour line outside them.
+
+### Functions
+
+`fn p(a, b) = …` or `fn p(a, b) { … }`. A function is written out where it
+is called, so each call costs its steps again. Its result is a value, a
+colour (its last line is a colour line), or nothing (its lines draw, and it
+is called inside `draw { }`). Inside a function whose values are named `x`
+and `y`, the names `px py i cx cy r angle` are worked out from those
+values.
+
+### The draw stage
+
+`draw { }` runs once a frame, before the pixels. `line` and `dot` with an
+ink value write into a canvas that the pixels read back as `ink`. The paint
+calls (`cls`, `pset`, `rect`, `circ`, `spr`, `print` and the rest) write
+colours that are put over the finished pixels.
+
+### Time
+
+`t` is the time of the frame being drawn, in seconds since the loop began.
+The loop is `loop N` seconds long, 8 when there is no `loop` line. A
+formula can't count frames. Which instants are drawn depends on what draws
+it:
+
+- The panel draws a frame on a refresh of its scan (100 to 125 a second,
+  depending on the panel): every 2nd refresh, or every refresh for a
+  `smooth` formula, and every 4th or 8th when frames take too long.
+- The browser's preview draws at about the same times.
+- A saved GIF has frames of 20 ms, or 40 ms for a long loop.
+
+On the panel and in the preview `t` wraps at exactly the loop's length, and
+the time left over at the wrap is carried into the next loop, so `t` keeps
+real time across it. A saved GIF is made of whole frames, so a loop that is
+not a whole number of them is up to one frame short there. The same holds
+on the panel when it draws whole 20 ms frames (a formula with a `rate`
+layer, or Phosphor glow on): a frame that would start in the loop's last,
+partial frame is drawn with `t` at 0.
+
+`phase` is `t` divided by the loop's length as the `loop` line writes it,
+0 to 1. It is the same division, so `sin(phase)` and `sin(t/8)` in an
+8-second loop give the same frames.
+
+With `loop forever`, `t` is the seconds since the formula started and grows
+without end, and there is no `phase` (E908).
+
+In a playlist a formula plays whole loops until the playlist's shortest
+time for an item has passed (1 second unless changed) and is cut off at
+the longest (30 seconds). A `loop forever` formula counts as a loop of
+1 second. A GIF saved from a formula is one loop long.
+
+`phase` and `smooth` need OpenDMD 1.1 or later. An earlier panel says the
+name is unknown.
+
+### Built-in inputs
+
+`daylight`, `sun.alt`, `moon.phase`, `season`, `yearday`, `night`,
+`bright`, `replay.playing`, `replay.platform` and `replay.game` are read by
+name. Each is the same for every pixel of a frame and is held to its range.
+When the panel has no value for one, it reads its default. Thumbnails, the
+gallery and `psi check` draw at the defaults, and so does the editor's
+preview until its inputs panel changes them. `since(KEY)` gives the seconds
+since an input last changed and `was(KEY)` its value before that
+("Numbers" gives their ends).
+
+A formula keeps nothing from one frame to the next.
 
 ## Limits
 
@@ -243,19 +289,29 @@ up to 2, 16 for up to 4 and 8 for up to 16: a 64 × 32 sprite takes 67,
 133 or 273. Each `#hex` colour in a key is one of the 127 paint colours
 a formula has (a palette drawn with in `draw { }` takes 32).
 
-A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
-**light**, up to 8 ms **medium**, and past that **heavy**. The panel
-refuses a formula past 40 ms a frame by the plain VM estimate, or past
-12 ms for a look drawn over every GIF. A `smooth` one past 32 ms, the most
-it can keep every refresh, is drawn every 2nd refresh instead (from
-OpenDMD 1.1; earlier panels refuse it). That is
-the VM's figure with no still cache even where the JIT or the cache would
-draw it faster, because the panel may have to draw it that way (the JIT
-switched off, short of memory, or failing its self-check). The light,
-medium and heavy ratings count the JIT's estimate where it draws, so a
-Formula can rate light and still be refused: the editor and `psi check`
-say so. The gallery takes a formula of 10 ms or less by the rating, and
-none the panel refuses.
+A formula's cost is an estimate, in milliseconds, of the time the panel
+takes to draw one frame of it. `psi check` and the editor print it.
+
+| estimate | rating | on the panel |
+| --- | --- | --- |
+| 5 ms or less | light | every refresh if `smooth`, else every 2nd |
+| 8 ms or less | medium | every 2nd refresh |
+| more than 8 ms | heavy | every 4th or 8th refresh |
+
+The panel has two ways to run a formula: an interpreter, and machine code
+it compiles from the formula (the JIT) where it can. The rating uses the
+compiled figure when the formula can be compiled. The panel's limits use
+the interpreter's figure with no values kept between frames, because the
+panel may have to run it that way (short of memory, or the JIT off):
+
+- a formula estimated at more than 40 ms a frame is not played;
+- a look, drawn over every GIF, is not used past 12 ms;
+- a `smooth` formula past 32 ms is drawn every 2nd refresh, as if it had
+  no `smooth` line (OpenDMD 1.0 refuses it).
+
+So a formula can be rated light and still be refused. The editor and `psi
+check` say when that is so. The gallery takes a formula rated at 10 ms or
+less that the panel does not refuse.
 
 <a id="cookbook"></a>
 
@@ -288,8 +344,9 @@ hsv(x/2 + phase, 0.6, glyph(msg[k], u % 6, row))
 
 ### A palette cycle
 
-The 1990s trick: the picture never moves, only its palette turns.
-`cycle(P, v, s)` reads palette `P` at `v`, turned by `s`. With `s =
+The picture stays the same and its palette is turned, as in palette-cycled
+graphics of the early 1990s. `cycle(P, v, s)` reads palette `P` at `v`,
+turned by `s`. With `s =
 phase` (where the frame is in the loop, 0 to 1) it turns once a loop. `wave` reads only the pixel's position,
 so the panel works it out once and keeps it, and the formula is very
 light.
