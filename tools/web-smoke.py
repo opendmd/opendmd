@@ -2765,6 +2765,35 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def kept_listing_checks(browser, base: str, errors: list[str]) -> None:
+    """Folder listings are kept in the browser (IndexedDB odmd-lists,
+    js/tree.js): a second visit shows Consoles' rows while every listing is
+    still on its way (each held 3 s here), then the card's own listing,
+    asked once, replaces it; and Settings reads no playlist until Choose…"""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library/Consoles")
+    page.wait_for_selector("#lib-list .vrow:not([hidden])", timeout=30000)
+    page.wait_for_timeout(1000)
+    page.add_init_script("""const f = window.fetch; window.fetch = (u, o) => /api\\/files\\?dir=/.test(String(u)) ? new Promise(r => setTimeout(r, 3000)).then(() => f(u, o)) : f(u, o);""")
+    asked: list[str] = []
+    page.on("request", lambda r: "/api/files?dir=" in r.url and asked.append(urllib.parse.unquote(r.url.split("dir=", 1)[1])))
+    t0 = time.time()
+    page.reload()
+    page.wait_for_selector("#lib-list .vrow:not([hidden])", timeout=30000)
+    took = time.time() - t0
+    check(took < 2.5, f"kept listings: Consoles' rows shown {took:.1f} s after a reload, the listings held 3 s")
+    page.wait_for_timeout(4000)
+    check(asked.count("/gifs/Consoles") == 1 and asked.count("/gifs") == 1,
+          f"kept listings: then listed once from the card ({asked})")
+    reads: list[str] = []
+    page.on("request", lambda r: r.url.endswith("/filelist.txt") and reads.append(r.url))
+    goto_view(page, "settings/play")
+    page.wait_for_timeout(1500)
+    check(not reads and page.inner_text("#st-plat-val") == "All platforms",
+          f"settings: opening Playback reads no playlist ({reads}, '{page.inner_text('#st-plat-val')}')")
+    page.context.close()
+
+
 def tree_checks(browser, base: str, errors: list[str]) -> None:
     """The Library's folder tree in a fresh browser: the folders (the
     card's, system ones last; no Live), ⊟, the keys (↓ → → ↓ Enter
@@ -5345,6 +5374,7 @@ def mock_pass(browser) -> None:
         no_leaks(page, "library")
         shot(page, "library", "laptop")
         tree_checks(browser, base, errors)
+        kept_listing_checks(browser, base, errors)
         listing_queue_checks(browser, base, errors)
         thumbs_checks(browser, base, errors)
         thumbs_redrawn_checks(browser, base, errors)
@@ -10897,7 +10927,7 @@ def platform_checks(page: Page, base: str) -> None:
     check(cfg["platforms"] == "" and cfg["set"] == "", f"platforms: start from All files, no filter ({cfg['platforms']!r})")
     goto_view(page, "settings/play")
     total = get_json(base + "/api/status")["entries"]
-    page.wait_for_function("/^All \\(\\d+\\)$/.test(document.querySelector('#st-plat-val').textContent)", timeout=30000)
+    page.wait_for_function("/^All( \\(\\d+\\)| platforms)$/.test(document.querySelector('#st-plat-val').textContent)", timeout=30000)
     check(page.locator("#st-plats").count() == 0 and page.locator("#st-platforms").count() == 0,
           f"settings: platforms are one row, '{page.inner_text('#st-plat-val')}', no chips until Choose…")
     page.click("#st-plat-btn")

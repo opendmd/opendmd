@@ -402,7 +402,8 @@ export async function mount(el) {
   }
 
   await tree.load();
-  await playlists();
+  // (Not waited for: the rows' glyphs follow when the playlist's overrides come.)
+  playlists();
   sync();
   const again = () => {
     if (tree.dirty) tree.load().then(() => { const it = current && tree.rows.find((x) => x.path === current.path); if (it) preview(it); });

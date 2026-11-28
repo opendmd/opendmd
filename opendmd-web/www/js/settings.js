@@ -155,12 +155,15 @@ export async function mount(el) {
     return counted[1];
   }
   const chosen = () => f.platforms.value.toUpperCase().split(',').map((p) => p.trim()).filter(Boolean);
+  // (The playlist, 450 KB on a big card, is only read for its count once
+  // Choose… has asked for it, or something else has read it already.)
   async function platRow() {
-    const n = (await platCounts()).length, s = chosen();
-    platVal.textContent = s.length ? s.map((p) => platName(p) || p).join(', ') : `All (${n})`;
+    const s = chosen(), have = counted[1] || app.texts.has(setPath(app.config?.set));
+    platVal.textContent = s.length ? s.map((p) => platName(p) || p).join(', ') : have ? `All (${(await platCounts()).length})` : 'All platforms';
   }
   async function platSheet(btn) {
     const all = [...await platCounts()], sel = new Set(chosen());
+    platRow();
     // A saved name the playlist lacks shows with 0, so it can be cleared.
     for (const p of sel) all.some(([q]) => q == p) || all.push([p, 0]);
     let more = false;
