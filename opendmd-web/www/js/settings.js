@@ -204,7 +204,7 @@ export async function mount(el) {
   async function loadPlaylists() {
     const set = app.config?.set ?? '';
     const lists = await app.playlists().catch(() => []);
-    if (!lists.some((p) => p.value === '')) lists.unshift({ value: '', label: 'All files' });
+    if (!lists.some((p) => p.value === '')) lists.unshift({ value: '', label: 'All GIFs' });
     if (!lists.some((p) => p.value === set)) lists.push({ value: set, label: playlistLabel(set) });
     clear(f.set, lists.map((p) => h('option', { value: p.value }, p.value ? p.label : `${p.label} (default)`)));
     f.set.value = set;

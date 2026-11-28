@@ -17,7 +17,7 @@ export async function mount(el) {
   const se = h('div.se', h('p.muted.sehint', 'Open a playlist to see and change what is in it.'));
   el.append(h('div.cols.sets', { id: 'sets' },
     h('div.sl', h('div.card', h('div.row.sp', { style: 'margin-bottom:8px' }, h('h2', { style: 'margin:0' }, 'Playlists'), h('button', { id: 'sets-new', onclick: newList }, '+ New playlist')), setsList,
-      note('“All files” plays when no other playlist is chosen', 'Changing the playlist takes a few seconds; the panel holds its frame meanwhile.'))),
+      note('“All GIFs” plays when no other playlist is chosen', 'Changing the playlist takes a few seconds; the panel holds its frame meanwhile.'))),
     se));
 
   // The editor, once something opens.
@@ -134,7 +134,7 @@ export async function mount(el) {
   async function del(p) {
     const path = p.path, set = p.value;
     const isActive = app.device && app.activeSet === set;
-    if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
+    if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All GIFs and delete it?` : `Delete the playlist "${p.label}"?`)) return;
     try {
       await (await smartMod()).idle();
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }

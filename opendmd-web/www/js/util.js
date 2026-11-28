@@ -87,7 +87,8 @@ export function debounce(fn, ms) {
 // `act`: an optional [text, fn] button in it (the editor's Undo), which
 // keeps it up longer.
 export function toast(msg, kind = '', act) {
-  const el = h('div.toast' + (kind ? '.' + kind : ''), String(msg),
+  // (Every toast starts with a capital, whoever wrote it.)
+  const t = String(msg), el = h('div.toast' + (kind ? '.' + kind : ''), t[0]?.toUpperCase() + t.slice(1),
     act && h('button.sm.txt', { onclick: () => { el.remove(); act[1](); } }, act[0]));
   $('#toasts').append(el);
   setTimeout(() => el.remove(), kind === 'bad' || act ? 8000 : 4000);

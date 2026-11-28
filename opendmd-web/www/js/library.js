@@ -105,10 +105,13 @@ export async function mount(el) {
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
   const tagBox = h('div', { id: 'lib-d-tags' });
   const gifOnly = [meta, moreBtn];
+  // Details: the title, then its actions in one row (Play now, the heart,
+  // Add to playlist), then its tags.
+  const heartBox = h('span.hbox');
   const body = h('div', { id: 'lib-d-body', hidden: true },
     h('div.dhead', h('div.grow', dTitle, meta), moreBtn),
-    tagBox,
-    h('div.row.acts', sendBtn, plBtn), smoothBox);
+    h('div.row.acts', sendBtn, heartBox, plBtn),
+    tagBox, smoothBox);
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -177,8 +180,8 @@ export async function mount(el) {
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
     moreBtn.hidden ||= !app.device; // (its items are the card's)
-    tagBox.hidden = !gif;
-    if (gif) (tg ? Promise.resolve(tg) : tagsMod()).then((m) => { if (current === it) m.detail(tagBox, it.path, (t) => { search.value = 'tag:' + (/[\s,:]/.test(t) ? `"${t}"` : t); apply(); }, ov); }).catch(() => {});
+    tagBox.hidden = heartBox.hidden = !gif;
+    if (gif) (tg ? Promise.resolve(tg) : tagsMod()).then((m) => { if (current === it) m.detail(tagBox, it.path, (t) => { search.value = 'tag:' + (/[\s,:]/.test(t) ? `"${t}"` : t); apply(); }, ov, heartBox); }).catch(() => {});
     const a = authorOf(e), sp = (id, t) => t && h('span', { id }, t);
     clear(meta, [sp('lib-d-platform', platName(e.platform)), sp('lib-d-category', e.category && niceName(e.category)),
       a && ['by ', sp('lib-d-author', a)], ...e.flags.filter(isFlag).map(flagName)].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
@@ -257,7 +260,9 @@ export async function mount(el) {
       pv.clear();
       cap.textContent = 'Pick a GIF to see it here';
     }
-    count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
+    // Shown of every GIF on the card (not only the open folders'); "+" while a folder has never been listed.
+    count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${(text ? st.pool : st.all).toLocaleString()}${!text && st.some ? '+' : ''}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
+    count.title = !text && st.some ? 'GIFs on the card: more in folders not opened yet' : '';
     count.classList.toggle('bad', !!st.err);
     favs();
     unseen();

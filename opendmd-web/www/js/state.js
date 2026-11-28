@@ -15,7 +15,7 @@ const name = (p) => (isFormula(p) ? formulaName(p) : label(wasm.parsePath(p)));
 
 // Root manifests with a name people know them by. Anything else shows its
 // file name.
-const LABELS = { 'filelist.txt': 'All files', 'filelist.hall': 'Halloween', 'filelist.xmas': 'Christmas' };
+const LABELS = { 'filelist.txt': 'All GIFs', 'filelist.hall': 'Halloween', 'filelist.xmas': 'Christmas' };
 // Manifests of prepared-copy paths from before copies were found
 // automatically (filelist.odm.txt, and the like). The device ignores them;
 // so does the UI.

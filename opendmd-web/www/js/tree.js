@@ -289,9 +289,13 @@ export class Tree {
   // One pass: the rows; every match (`res`); the platforms' counts.
   update() {
     const [text, okQ, okP] = this.match(), rows = [], res = [], pc = new Map();
-    let pool = 0, matched = 0;
+    // (`all`: every GIF on the card, as far as known: a folder not listed
+    // yet counts as last seen; `some`: one was never seen, `all` is less.)
+    let pool = 0, matched = 0, all = 0, some = false;
     for (const f of this.folders) {
       const items = this.items(f.cat), open = text ? !this.shut.has(f.cat) : this.open.has(f.cat);
+      const n = items ? items.length : counts()[f.cat];
+      if (n == null) some = true; else all += n;
       let hits = null;
       if (items && (text || open)) {
         hits = [];
@@ -330,7 +334,7 @@ export class Tree {
       const i = rows.findIndex((r) => (r.path || 'd' + r.cat) === key);
       this.focusRow(i >= 0 ? i : Math.min(a._i, rows.length - 1));
     }
-    this.o.onUpdate?.({ shown: res.length, pool, matched, plats: pc, busy: (text && (this.gathering || waiting)) || rows.some((r) => r.ld), bad: this.bad, text, err: this.err });
+    this.o.onUpdate?.({ shown: res.length, pool, all, some, matched, plats: pc, busy: (text && (this.gathering || waiting)) || rows.some((r) => r.ld), bad: this.bad, text, err: this.err });
   }
 
   render(r, it, i) {

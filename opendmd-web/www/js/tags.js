@@ -186,12 +186,14 @@ export function bits(o) {
 // Details' heart and tags for `path`, drawn again on every change.
 // `onTag(tag)`: a tag's chip was picked (the Library searches for it);
 // `ov`: the overrides the Library has loaded (setFav's).
-export function detail(box, path, onTag, ov) {
+// `hbox`: where the heart goes (Details' row of actions), else with the tags.
+export function detail(box, path, onTag, ov, hbox) {
   const s = mine && app.tags;
-  if (!s) { clear(box); tags().then(() => detail(box, path, onTag, ov)).catch(() => {}); return; }
+  if (!s) { clear(box); tags().then(() => detail(box, path, onTag, ov, hbox)).catch(() => {}); return; }
   const o = s.get(path) || { r: 0, t: [] }, fav = isFav(o);
   const heart = h('button.chip.heart' + (fav ? '.on' : ''), { id: 'lib-d-fav', 'data-path': path, 'aria-pressed': String(fav), title: fav ? 'A favourite: plays more often' : 'Make it a favourite: plays more often',
-    onclick: () => { setFav([path], !fav, ov, s).then(() => detail(box, path, onTag, ov)); detail(box, path, onTag, ov); box.querySelector('#lib-d-fav')?.focus(); } }, fav ? '♥ Favourite' : '♡ Favourite');
+    'aria-label': 'Favourite', onclick: () => { setFav([path], !fav, ov, s).then(() => detail(box, path, onTag, ov, hbox)); detail(box, path, onTag, ov, hbox); document.querySelector('#lib-d-fav')?.focus(); } },
+  fav ? '♥' : '♡', h('span.w', ' Favourite'));
   const list = h('datalist', { id: 'lib-tag-list' }, offered(s).map((t) => h('option', { value: t })));
   const input = h('input', { type: 'text', id: 'lib-d-tag', placeholder: '+ Add tag', enterKeyHint: 'done', 'aria-label': 'Add a tag', maxLength: 24 });
   input.setAttribute('list', 'lib-tag-list');
@@ -200,15 +202,16 @@ export function detail(box, path, onTag, ov) {
     if (!t) { if (input.value.trim()) toast('a tag is letters, digits, spaces and _ . + \' - (24 at most)', 'bad'); return; }
     if (o.t.includes(t)) { input.value = ''; return; }
     if (t === FAV) setFav([path], true, ov, s); else s.set(path, o.r, [...o.t, t]);
-    detail(box, path, onTag, ov);
+    detail(box, path, onTag, ov, hbox);
     box.querySelector('#lib-d-tag')?.focus();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   input.addEventListener('change', add);
   const chips = o.t.filter((t) => t !== FAV).map((t) => h('span.uchip', { 'data-tag': t },
     h('button.txt', { title: `GIFs tagged ${t}`, onclick: () => onTag?.(t) }, t),
-    h('button.x', { 'aria-label': `Take off ${t}`, onclick: () => { s.set(path, o.r, o.t.filter((x) => x !== t)); detail(box, path, onTag, ov); } }, '✕')));
-  clear(box, h('div.utags', { id: 'lib-d-utags' }, heart, chips, input, list));
+    h('button.x', { 'aria-label': `Take off ${t}`, onclick: () => { s.set(path, o.r, o.t.filter((x) => x !== t)); detail(box, path, onTag, ov, hbox); } }, '✕')));
+  if (hbox) clear(hbox, heart);
+  clear(box, h('div.utags', { id: 'lib-d-utags' }, !hbox && heart, chips, input, list));
 }
 
 // The bulk bar's Tag…: the tags on any of `paths`, each on all of them (✓),

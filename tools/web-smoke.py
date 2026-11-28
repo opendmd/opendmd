@@ -1868,7 +1868,7 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     lib_row(phone, g[0])
     phone.wait_for_selector("#lib-d-fav", timeout=60000)
     box = phone.eval_on_selector("#lib-d-fav", "e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }")
-    check(box[0] >= 36 and box[1] >= 36, f"phone: the heart is a 36 px target ({box})")
+    check(box[0] >= 44 and box[1] >= 44, f"phone: the heart is a 44 px target ({box})")
     phone.context.close()
     if orig is None:
         delete_path(base, "/sets/.tags")
@@ -2007,7 +2007,7 @@ def pill_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#now-from")
     page.click("#now-from-menu [data-path='/filelist.txt']")
     c = wait_config(base, lambda c: c["set"] == "")
-    page.wait_for_function("document.querySelector('#now-from').textContent.startsWith('All files')", timeout=20000)
+    page.wait_for_function("document.querySelector('#now-from').textContent.startsWith('All GIFs')", timeout=20000)
     check(c["set"] == "", "now: Playing from switches back to All files")
     page.context.close()
 
@@ -2322,8 +2322,9 @@ def facets(page: Page, sel: str, attr: str) -> list:
 
 
 def lib_count(page: Page) -> tuple[int, int]:
+    """Shown, of every GIF on the card ("+": some folders never listed yet)."""
     a, b = page.inner_text("#lib-count").replace(",", "").split(" of ")
-    return int(a), int(b)
+    return int(a), int(b.split(" ")[0].rstrip("+"))
 
 
 def folder_counts(page: Page) -> list:
@@ -2347,7 +2348,7 @@ def search_checks(page: Page, exact: bool) -> None:
     by_cat = {}
     for p in want:
         by_cat[p.parent.name] = by_cat.get(p.parent.name, 0) + 1
-    tab_n = lib_count(page)[1]
+    tab_shown = lib_count(page)[0]
     page.fill("#lib-search", "mario")
     wait_counted(page)
     shown, total = lib_count(page)
@@ -2382,7 +2383,7 @@ def search_checks(page: Page, exact: bool) -> None:
           f"library search: closing {first} takes its matches out of what is shown (and Select all shown) ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "")
     wait_counted(page)
-    check(lib_count(page) == (tab_n, tab_n) and page.locator("#lib-chips .chip.on").count() == 0,
+    check(lib_count(page)[0] == tab_shown and page.locator("#lib-chips .chip.on").count() == 0,
           f"library search: cleared -> the folder as it was, platforms off ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "mario")
     wait_counted(page)
@@ -5678,12 +5679,12 @@ def mock_pass(browser) -> None:
         check({"/filelist.txt", "/filelist.hall", "/filelist.xmas"} <= set(rows) and not any("odm" in r for r in rows),
               f"sets: root playlists listed, the obsolete ones not ({rows})")
         labels = {p: row_label(page, p) for p in ["/filelist.txt", "/filelist.hall", "/filelist.xmas"]}
-        check(labels == {"/filelist.txt": "All files", "/filelist.hall": "Halloween", "/filelist.xmas": "Christmas"},
+        check(labels == {"/filelist.txt": "All GIFs", "/filelist.hall": "Halloween", "/filelist.xmas": "Christmas"},
               f"sets: friendly labels {labels}")
         dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'Default').map(e => e.closest('[data-path]').dataset.path)")
         check(dflt == ["/filelist.txt"], f"sets: default marked on {dflt}")
         playing = page.eval_on_selector("#sets-list .tag.act", "e => e.closest('button.pl').textContent")
-        check("All files" in playing, f"sets: playing '{playing}'")
+        check("All GIFs" in playing, f"sets: playing '{playing}'")
         sets_do(page, '/filelist.xmas', "activate")
         page.wait_for_function(f"{PLAYING}.includes('Christmas')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
@@ -5692,7 +5693,7 @@ def mock_pass(browser) -> None:
         no_leaks(page, "sets")
         shot(page, "sets-root", "laptop")
         sets_do(page, '/filelist.txt', "activate")
-        page.wait_for_function(f"{PLAYING}.includes('All files')", timeout=60000)
+        page.wait_for_function(f"{PLAYING}.includes('All GIFs')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "" and st["manifest"] == "/sdcard/filelist.txt", "sets: All files activated as set \"\"")
         n = build_smoke_set(page)
@@ -5799,7 +5800,7 @@ def mock_pass(browser) -> None:
         # The ETA follows once the mock's builder has measured its full pace:
         # the earlier pauses (Now's preview, Now's Pause) can add up to a
         # file's 2 s, so it may or may not have by now.
-        t = wait_auto_text(page, "^Files are prepared automatically when the panel is idle · 0 of 3( · about \\d+ s of idle time left)?\\.")
+        t = wait_auto_text(page, "^GIFs are prepared automatically when the panel is idle · 0 of 3( · about \\d+ s of idle time left)?\\.")
         a = get_json(base + "/api/cache")["auto"]
         eta = "of idle time left" in t
         check(not page.is_checked("#pc-always") and eta == (a["avg_full_s"] is not None),
@@ -5812,19 +5813,19 @@ def mock_pass(browser) -> None:
         post_json(base + "/api/pause", {})
         goto_view(page, "sets")
         goto_view(page, "settings/advanced")
-        t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [1-3] of 3 · about \\d+ s of idle time left\\.|^All files are prepared\\.")
+        t = wait_auto_text(page, "^Preparing GIFs automatically while the panel is idle · [1-3] of 3 · about \\d+ s of idle time left\\.|^All GIFs are prepared\\.")
         a = auto_fields(base, "auto (paused)")
         check(a["session"] > 0 and a["avg_full_s"] == 2.0, f"auto: paused -> prepared at full pace ('{t}', session {a['session']})")
         post_json(base + "/api/pause", {})
         page.click("#pc-go")
-        page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('3 files prepared')", timeout=120000)
+        page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('3 GIFs prepared')", timeout=120000)
         line = wait_cache_line(page, "3 of 3")
         check(True, f"cache: prepared -> '{line}' ({page.inner_text('#pc-progress')})")
         made = {cache_path(p): CARD / p.lstrip("/") for p in selected}
         compare_with_pack(overlay, made)
         no_leaks(page, "settings (prepared)")
         shot(page, "settings-cache", "laptop")
-        t = wait_auto_text(page, "^All files are prepared\\.\\s*$")
+        t = wait_auto_text(page, "^All GIFs are prepared\\.\\s*$")
         check(True, f"auto: after preparing, the card reads '{t}'")
         page.check("#pc-always")
         check(wait_config(base, lambda c: c.get("auto_prepare") == "always").get("auto_prepare") == "always", "auto: ticked -> auto_prepare always")
@@ -5949,7 +5950,7 @@ def mock_pass(browser) -> None:
         api_page_checks(page, base)
         goto_view(page, "settings/play")
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
-        check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
+        check(opts[0] == ["", "All GIFs (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
         for t in ("play", "look", "time", "replay", "wifi", "updates", "advanced", "about"):
             goto_view(page, f"settings/{t}")
@@ -6027,7 +6028,7 @@ def mock_pass(browser) -> None:
         # Clear the schedule: delete the rule, turn night mode off.
         goto_view(page, "settings/advanced")
         # The panel is off for the night: the builder runs, counted in nights.
-        t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [\\d,]+ of [\\d,]+ · about \\d+ nights? left\\.|^All files are prepared\\.")
+        t = wait_auto_text(page, "^Preparing GIFs automatically while the panel is idle · [\\d,]+ of [\\d,]+ · about \\d+ nights? left\\.|^All GIFs are prepared\\.")
         check(True, f"auto: night mode -> '{t}'")
         no_leaks(page, "settings (auto)")
         goto_view(page, "settings/time")
@@ -10256,9 +10257,9 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     sync_app(page)
     wait_cache_line(page, "1 of 6")
     page.click("#pc-go")
-    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
+    page.wait_for_function("(t => /^\\d+ GIFs? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
-    check(line == "4 files prepared · 2 damaged files skipped (they can't be played either)",
+    check(line == "4 GIFs prepared · 2 damaged GIFs skipped (they can't be played either)",
           f"damage: summary line '{line}' (first GET of {base_name(flaky)} aborted: {len(aborted)})")
     check(len(aborted) == 1 and page.locator("#pc-net").count() == 0 and page.inner_text("#pc-errors") == "",
           "damage: the aborted download was retried, nothing listed as failed")
@@ -10286,9 +10287,9 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     compare_with_pack(overlay, {cache_path(p): CARD / p.lstrip("/") for p in good})
     n = len(hits)
     page.click("#pc-go")
-    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
+    page.wait_for_function("(t => /^\\d+ GIFs? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
     line = page.inner_text("#pc-progress")
-    check(line == "Every other file is already prepared · 2 damaged files skipped (they can't be played either)"
+    check(line == "Every other GIF is already prepared · 2 damaged GIFs skipped (they can't be played either)"
           and len(hits) == n, f"damage: second run '{line}', damaged GIFs fetched again: {len(hits) - n}")
     page.unroute(match)
     page.remove_listener("request", watch)
@@ -10309,7 +10310,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
         if stale:
             post_json(base + "/api/cache/failed", {"path": many[0], "reason": "more than 256 colours: plays as it is"})
         page.click("#pc-go")
-        page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
+        page.wait_for_function("(t => /^\\d+ GIFs? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
         check(cache_path(many[0]).lower() in copies(),
               f"replace: a run keeps the replacement's exact copy{' (stale line back)' if stale else ''} ('{page.inner_text('#pc-progress')}')")
     post_json(base + "/api/cache/forget", {"path": many[0]})
@@ -10465,10 +10466,10 @@ def smooth_checks(page: Page, base: str, overlay: Path) -> None:
     sync_app(page)
     goto_view(page, "settings/advanced")
     page.click("#pc-go")
-    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
+    page.wait_for_function("(t => /^\\d+ GIFs? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
     got = copy.read_bytes()
-    check(line.startswith("1 file prepared") and got == ref, f"smooth: prepare run made it smooth again ('{line}', marked {marked(got)})")
+    check(line.startswith("1 GIF prepared") and got == ref, f"smooth: prepare run made it smooth again ('{line}', marked {marked(got)})")
     put_json(base + "/api/config", {"set": ""})
     req = urllib.request.Request(base + "/api/files/sets/smoothtest.txt", method="DELETE")
     urllib.request.urlopen(req, timeout=30).read()
@@ -11693,7 +11694,7 @@ def device_pass(browser, device: str) -> None:
         n = build_smoke_set(page)
         rows = root_manifest_rows(page)
         labels = {p: row_label(page, p) for p in rows}
-        check("/filelist.txt" in rows and labels.get("/filelist.txt") == "All files"
+        check("/filelist.txt" in rows and labels.get("/filelist.txt") == "All GIFs"
               and not any("odm" in p for p in rows), f"device sets: playlists {labels}")
         no_leaks(page, "device sets")
         with urllib.request.urlopen(base + "/sets/smoke.txt", timeout=30) as resp:

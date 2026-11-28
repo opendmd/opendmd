@@ -889,7 +889,7 @@ function build(root, o) {
       } else {
         // (Under another number if the name was taken meanwhile.)
         const put = (await S.opts.save(c, f, S.gif, (m) => problems.push(m), smoothOnSave ? keep : undefined)) || path;
-        toast(`${base(put)} saved to ${c}`, 'ok');
+        toast(`“${label(app.wasm.parsePath(put))}” saved to ${niceName(c)}`, 'ok');
         for (const m of problems) toast(m, 'bad');
         await S.opts.saved(c, [put]);
       }

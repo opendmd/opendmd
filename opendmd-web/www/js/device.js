@@ -102,7 +102,7 @@ export function deviceTab({ f, save, banner, sched, live }) {
   banner.append('Saved. WiFi changes take effect after a reboot. ', h('button.sm', { onclick: reboot }, 'Reboot now'));
   // --- playback cache
   const cacheLine = h('b', { id: 'pc-count' }, '…');
-  const cacheBtn = h('button', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining files');
+  const cacheBtn = h('button', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining GIFs');
   const cacheBar = h('i');
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
@@ -288,8 +288,8 @@ export function deviceTab({ f, save, banner, sched, live }) {
     clearTimeout(cachePoll);
     try {
       const r = await app.src.cache();
-      if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} files · counting prepared files…`;
-      else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} files prepared` + (r.state === 'counting' ? ' · recounting…' : '');
+      if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} GIFs · counting prepared GIFs…`;
+      else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} GIFs prepared` + (r.state === 'counting' ? ' · recounting…' : '');
       const a = r.auto, run = a?.state === 'running';
       autoBox.hidden = !a;
       if (a) { autoLine.textContent = autoText(a, r) + '. '; always.checked = a.mode === 'always'; }
@@ -299,37 +299,37 @@ export function deviceTab({ f, save, banner, sched, live }) {
   function autoText(a, r) {
     const n = (x) => x.toLocaleString(), e = a.eta_s, nt = sched.night();
     if (a.mode === 'off') return 'Automatic preparing is off';
-    if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All files are prepared';
+    if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All GIFs are prepared';
     const m = (t) => +t.slice(0, 2) * 60 + +t.slice(3), len = nt?.mode == 'off' && ((m(nt.to) - m(nt.from) + 1440) % 1440 || 1440) * 60;
     // Waiting for its turn (playing, a GIF change, a late frame) is the normal sentence.
     const waits = !a.reason || ['playing', 'gif on screen', 'transition', 'late frame'].includes(a.reason);
     return (a.state !== 'running' ? (!waits ? `Automatic preparing is waiting (${a.reason})`
-      : 'Files are prepared automatically when the panel is idle' + (a.mode === 'always' ? ', and a little while playing' : ''))
-      : a.policy === 'drip' ? 'Preparing files slowly while playing' : 'Preparing files automatically while the panel is idle')
+      : 'GIFs are prepared automatically when the panel is idle' + (a.mode === 'always' ? ', and a little while playing' : ''))
+      : a.policy === 'drip' ? 'Preparing GIFs slowly while playing' : 'Preparing GIFs automatically while the panel is idle')
       + (r.prepared != null ? ` · ${n(r.prepared)} of ${n(r.total)}` : '')
       + (e == null ? '' : len ? ` · about ${Math.ceil(e / len)} night${e > len ? 's' : ''} left` : ` · about ${e < 5400 ? mins(e) : Math.round(e / 3600) + ' hours'} of idle time left`);
   }
   function mins(s) { return s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; }
   function renderJob(j) {
-    cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this file…' : 'Stop') : 'Prepare remaining files';
+    cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this GIF…' : 'Stop') : 'Prepare remaining GIFs';
     cacheBtn.disabled = j.stopping;
     const n = j.tried, dmg = j.damaged.length, net = j.net.length, num = (x) => x.toLocaleString();
     const files = (k, what) => `${num(k)} ${what}${k === 1 ? '' : 's'}`;
     cacheBar.style.width = j.todo ? `${(100 * n) / j.todo}%` : j.phase === 'finished' ? '100%' : '0';
     const left = prep.eta();
-    const skipped = dmg ? ` · ${files(dmg, 'damaged file')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
-    cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
+    const skipped = dmg ? ` · ${files(dmg, 'damaged GIF')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
+    cacheMsg.textContent = j.phase === 'checking' ? 'Finding the GIFs that are not prepared yet…'
       : j.phase === 'preparing' ? `${num(n)} of ${num(j.todo)} · ${num(j.done)} prepared` + (dmg ? ` · ${num(dmg)} damaged skipped` : '')
         + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${label(app.wasm.parsePath(j.current))}` : '')
-      : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped
+      : j.phase === 'finished' ? (j.todo ? files(j.done, 'GIF') + ' prepared' : dmg ? 'Every other GIF is already prepared' : 'Every GIF is already prepared') + skipped
       : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on' : '';
     // Once a run is over: what was skipped, and what could not be fetched.
     // (Each GIF by its title and folder, never its path: `data-path` for tools/web-smoke.py.)
     const said = (p) => `${label(app.wasm.parsePath(p))} (${niceName(p.split('/')[2] || '')})`;
     const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map(([p, r]) => h('div', { 'data-path': p }, said(p) + (r ? ' — ' + r : '')))));
-    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => [d.path, d.reason])),
-      !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'file')} — `),
-        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which files', j.net.map((p) => [p]))));
+    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged GIFs', j.damaged.map((d) => [d.path, d.reason])),
+      !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'GIF')} — `),
+        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which GIFs', j.net.map((p) => [p]))));
     clear(cacheErr, j.errors.map((e) => h('div', e)));
     if (!j.running && j.phase !== 'idle') loadCache();
   }
