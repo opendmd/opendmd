@@ -16,8 +16,8 @@ import { app, playlistLabel, platName } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
-import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
+import { Overrides, moreButton, actions } from './overrides.js';
+import { h, clear, on, emit, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
 // whenever Recently played is wanted; the slim one (`?now=1`, one segment:
@@ -38,27 +38,44 @@ const LOST_MS = 3000;
 // for a title card.
 let tagsAsked = false;
 const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
-// Then the user's own: its tags and stars (js/tags.js, once read).
+// Then the user's own: its tags (js/tags.js, once read; Favourite is the heart).
 function tags(p, e) {
   if (drawn(p)) return isFormula(p) ? 'Formula' : '';
   const by = e.flags.find((f) => !isFlag(f)), seen = new Set(), u = app.tags?.get(p);
   return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by, ...(u?.t || [])]
-    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).concat(u?.r ? ['★' + u.r] : []).join(' · ');
+    .filter((t) => t && t !== 'favourite' && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).join(' · ');
 }
 
-// ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
+// ♥: the GIF on screen a favourite (the built-in tag, js/tags.js setFav,
+// which also has it play more often in the playlist playing; one with
+// only that weight, from before, shows as one too). Not a title card or a
+// Formula. Drawn at once, saved after.
 function favButton() {
-  const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav) });
+  const ov = new Overrides(), b = h('button.more.heart', { id: 'now-fav', hidden: true, onclick: async () => {
+    const p = b.p, on = !b.on;
+    b.draw(on);
+    try { await (await import('./tags.js')).setFav([p], on, ov); } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : 'Couldn’t save the favourite: ' + e.message, 'bad'); }
+    b.set(b.p, ov.path);
+  } });
   b.ov = ov;
+  b.draw = (on) => {
+    b.on = on;
+    b.textContent = on ? '♥' : '♡';
+    b.title = b.ariaLabel = on ? 'A favourite: plays more often' : 'Make it a favourite';
+    b.ariaPressed = on;
+  };
   b.set = (p, list) => {
     b.hidden = !(b.p = p) || drawn(p) || !list;
     if (list && list != ov.path) ov.load(list);
-    const on = ov.get(p)?.w > 1;
-    b.textContent = on ? '★' : '☆';
-    b.title = b.ariaLabel = `Favourite in “${ov.name}”`;
-    b.ariaPressed = on;
+    // (The tag alone: a weight from before is adopted into it, js/tags.js adopt.)
+    b.draw(!!app.tags?.get(p)?.t?.includes('favourite'));
   };
-  ov.onChange = () => b.set(b.p, ov.path);
+  ov.onChange = () => {
+    b.set(b.p, ov.path);
+    // (Favourites from before the tag, a weight alone: into the tag, js/tags.js adopt.)
+    if ([...ov.map.values()].some((o) => o.w > 1)) import('./tags.js').then((m) => m.adopt(ov)).catch(() => {});
+  };
+  on('tags', () => b.set(b.p, ov.path));
   return b;
 }
 
@@ -107,6 +124,26 @@ function recentCard(prev, pick, fb) {
   return card;
 }
 
+// Playing from: the playlist in play, and a menu of the others to switch to
+// (app.playPlaylist). Not while the display is still reading one.
+function fromLine() {
+  const b = h('button.sm', { id: 'now-from', 'aria-haspopup': 'menu', onclick: pick });
+  const el = h('div.row.from', { id: 'now-from-line' }, h('span.muted', 'Playing from'), b);
+  async function pick() {
+    const lists = await app.playlists().catch(() => null);
+    if (!lists) { toast('Panel not reachable', 'bad'); return; }
+    const cur = app.activePath;
+    actions(b, 'now-from-menu', lists.map((p) => [{ 'data-path': p.path }, [h('span.ck', p.path === cur ? '✓' : ''), p.label],
+      () => p.path !== cur && app.playPlaylist(p), '', app.building]), 'Play a playlist');
+  }
+  el.set = (s) => {
+    const m = s?.manifest?.replace(/^\/sdcard/, '');
+    el.hidden = !m;
+    b.textContent = (m ? playlistLabel(m) : '') + (s?.index_state === 'building' ? ' · switching…' : '') + ' ▾';
+  };
+  return el;
+}
+
 export async function mount(el) {
   return app.device ? mountDevice(el) : mountLocal(el);
 }
@@ -135,9 +172,11 @@ function mountDevice(el) {
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
   const ed = editLine();
+  const from = fromLine();
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
-  const conn = h('span.dot', { id: 'now-conn' });
+  // (The link's state: the header's pill says it; kept, hidden, for tools/web-smoke.py.)
+  const conn = h('span.dot', { id: 'now-conn', hidden: true });
   // A Formula kept on the panel (`now_playing.kept_s`, Formulas › Keep on the panel): how long, and the way back.
   const keptText = h('span.grow', { id: 'now-kept-text' });
   const keptRow = h('div.row', { id: 'now-kept', hidden: true, style: 'margin-top:8px' }, keptText,
@@ -155,6 +194,7 @@ function mountDevice(el) {
     h('div.card', canvas, cap, sdLine,
       h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, nextEl, ' ', conn), meta, ed, keptRow),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
+      from,
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
     lookControls(drift));
@@ -198,7 +238,7 @@ function mountDevice(el) {
   const NOT = () => (app.noMirror ? '' : 'Not mirroring the panel (Settings › Panel)');
   if (!mirrored) cap.textContent = NOT();
   const sendBright = debounce(async (v) => {
-    try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
+    try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('Couldn’t set the brightness: ' + e.message, 'bad'); }
   }, 300);
   bright.input.addEventListener('input', () => sendBright(+bright.input.value));
   on('config', (c) => { bright.ceil(c.max_brightness); if (document.activeElement !== bright.input) bright.set(c.brightness); });
@@ -366,6 +406,7 @@ function mountDevice(el) {
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);
+    from.set(s);
     ed.set(np.path, title.textContent);
     const b = bannerFor(s, () => soonPoll(300));
     banner.hidden = !b;
@@ -378,6 +419,7 @@ function mountDevice(el) {
     nocard = !sd.mounted && !np.path && !!(sd.attempts || sd.error);
     still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
+    emit('now', s);
     follow_(np.path, fkey(np.path, np), np);
   }
 
@@ -416,6 +458,7 @@ function mountDevice(el) {
       good();
     } catch (e) {
       conn.className = 'dot bad';
+      if (unreachable(e)) emit('link', false);
       conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
       // (No mirror: the desk scene's page shows the panel, the app still says it lost it.)
       if (shownPath || app.noMirror) cap.textContent = UNREACH;
@@ -586,7 +629,7 @@ function mountLocal(el) {
     if (listSel.value) text = await src.readText(listSel.value);
     else text = [...src.files.keys()].filter((p) => /\.gif$/i.test(p)).sort().join('\n');
     list = app.wasm.filterManifest(text, JSON.stringify({ platforms: plats.value, shuffle: shuffle.checked, seed: +seed.value }));
-    if (!list.length) { toast('the filter matched nothing', 'bad'); return; }
+    if (!list.length) { toast('The filter matched nothing', 'bad'); return; }
     i = -1;
     nextBtn.disabled = pauseBtn.disabled = false;
     next();

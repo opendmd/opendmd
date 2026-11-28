@@ -35,8 +35,8 @@ Every display is called `opendmd` until you rename it. When a second one
 joins your network with the same name, one of them moves to
 `opendmd-2.local`, and it may be the one you had first. Open
 `opendmd-2.local` or the display's address, then give each display its own
-name in **Settings › Device › Network**. A name another display already
-has is refused. **Settings › Device › About** shows the address a display
+name in **Settings › WiFi**. A name another display already
+has is refused. **Settings › About** shows the address a display
 really has.
 
 ## The panel says there's no card, or the card can't be read
@@ -57,7 +57,7 @@ white pictures. Lower the brightness, or lower **Maximum brightness** in
 ## Some LEDs show the wrong colours on certain pictures
 
 If a few dots come out the wrong colour on some pictures but not others,
-the panel may be fussy about timing. Open **Settings › Device › Panel
+the panel may be fussy about timing. Open **Settings › Advanced › Panel
 timing** and press **Test panel timing**. The panel shows some test
 pictures, switching between **A** and **B**, with the letter in the bottom
 corner. Pick the one that looks clean and it is saved. If both have dots,
@@ -131,4 +131,4 @@ security key all go. Your SD card, GIFs and playlists are kept.
 
 If none of this helps, [report the problem on GitHub](https://github.com/opendmd/opendmd/issues):
 say what you did, what the panel or the web app showed, and the
-version under **Settings › Device › About**.
+version under **Settings › About**.

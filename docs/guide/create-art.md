@@ -34,7 +34,7 @@ a GIF of any size, showing its middle 128 × 32, and keeps every frame
 however long the GIF is. A GIF with thousands of frames starts that way.
 
 Press **Fit and next** (or **Next**), then give each one a title, a
-platform, a category and, if you like, an author, as for any GIF
+platform, a folder and, if you like, an author, as for any GIF
 ([Adding GIFs](web-app.md#adding-gifs)). Nothing goes on the card until you
 press **Add GIF**. **Cancel** leaves that file out.
 
@@ -49,7 +49,7 @@ Studio: in the Library, open the GIF and choose **… › Download GIF**, then
 in the [Studio's Import](https://opendmd.dev/studio/#import) choose that
 file, make your changes and press **Send to panel**. It comes back into
 Add GIFs as a new GIF; **… › Delete…** removes the old one, and **Edit
-details…** changes only its title, platform, category or author.
+details…** changes only its title, platform, folder or author.
 
 ## Finding art online
 

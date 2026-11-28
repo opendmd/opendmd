@@ -86,7 +86,7 @@ offset  size  field
 
 The HTTP API reference is not in the pack: it is docs/api.md on the project
 site (`dev/api.html`, and `dev/api/v<version>.html` for each release), which
-Settings → Device → About links (14.5 KB of flash, gzipped, until 2026-10-23,
+Settings → About links (14.5 KB of flash, gzipped, until 2026-10-23,
 when it was `api.html` with a size line of its own).
 
 Nor are the site's own files (`opendmd-pack` www.rs `SITE_ONLY`: the

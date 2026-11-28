@@ -29,14 +29,14 @@ filelist.xmas
 - `gifs/` holds the animations, one folder per category. The
   Library shows the same folders. Make a new folder and you have a new
   category.
-- `filelist.txt` is the list the panel plays: **All files** in the web
+- `filelist.txt` is the list the panel plays: **All GIFs** in the web
   app. It doesn't have to list every GIF on the card. When you add GIFs
   from the web app, it offers to add them to the playlist that's playing.
 - `filelist.hall` and `filelist.xmas` are the Halloween and
   Christmas playlists, if your card has them.
 
 Playlists you make in the web app are saved on the card too, in `sets/`,
-so they move with it, and so are your tags and stars and the searches of
+so they move with it, and so are your tags and favourites and the searches of
 your smart playlists.
 
 ## The settings file
@@ -97,7 +97,7 @@ the list is part of OpenDMD, and new platforms arrive with
 updates.
 
 You rarely need to type these yourself. **Add GIFs…**, **Edit details…**
-and the Studio's **Send to panel** ask for a title, platform, category and author and build the
+and the Studio's **Send to panel** ask for a title, platform, folder and author and build the
 name for you. If you copy GIFs onto the card from a computer, name them this
 way and they'll sort into the right platform.
 
@@ -122,7 +122,7 @@ is dark at night or playback is paused. The whole DMDoS pack is ready
 after about four hours of that. Turn on **Night mode** under Settings ›
 Schedule, set to turn the panel off rather than dim it, and it happens
 overnight; or pause playback for a while. **Ready to play** under Settings
-› Device shows how far it has got, and **Prepare remaining files** does the
+› Advanced shows how far it has got, and **Prepare remaining GIFs** does the
 rest from your browser.
 
 ## If a card starts failing

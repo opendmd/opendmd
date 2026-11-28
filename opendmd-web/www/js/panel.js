@@ -46,7 +46,7 @@ export function panelCard(el) {
   // A trial needing a restart (`panel_next`) is undone by one.
   const boot = () => left != null && !!app.config.panel_next;
   const undo = btn('pt-undo', 'Undo', () => { const b = busy = boot(); send({ panel_confirm: false }).then(() => b && back()); });
-  const restart = btn('pt-restart', 'Restart now', () => app.src.reboot().then(back, (e) => toast('restart: ' + e.message, 'bad')));
+  const restart = btn('pt-restart', 'Restart now', () => app.src.reboot().then(back, (e) => toast('Couldn’t restart: ' + e.message, 'bad')));
   const bar = h('div.banner', { id: 'pt-bar', hidden: true, style: 'margin:12px 0 0' }, msg, ' ', keep, ' ', undo, restart);
   const tb = h('div.banner', { id: 'pt-box', hidden: true, style: 'margin:12px 0 0' });
   let left = null, tick = 0, busy = 0;
@@ -55,7 +55,7 @@ export function panelCard(el) {
     try {
       await app.src.putConfig(patch);
       await app.refreshConfig();
-    } catch (e) { busy || toast('panel timing: ' + e.message, 'bad'); app.refreshConfig().catch(() => {}); }
+    } catch (e) { busy || toast('Panel timing: ' + e.message, 'bad'); app.refreshConfig().catch(() => {}); }
   }
   // Through a restart: until nothing waits for one, or a trial runs.
   async function back() {

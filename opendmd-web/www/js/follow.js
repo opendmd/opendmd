@@ -44,7 +44,7 @@ export function followCard() {
     const lists = await app.playlists().catch(() => []);
     clear(attract, h('option', { value: '*' }, 'The current playlist'),
       lists.map((p) => h('option', { value: p.value }, p.label)));
-    if (cur != null && ![...attract.options].some((o) => o.value === cur)) attract.append(h('option', { value: cur }, cur || 'All files'));
+    if (cur != null && ![...attract.options].some((o) => o.value === cur)) attract.append(h('option', { value: cur }, cur || 'All GIFs'));
     attract.value = cur ?? '*';
     if (keep && [...attract.options].some((o) => o.value === keep)) attract.value = keep;
   }
