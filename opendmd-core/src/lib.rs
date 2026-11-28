@@ -79,7 +79,7 @@ pub mod www_pack;
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 pub use compositor::{Kind as TransitionKind, Transition};
 pub use engine::{
-    Catalog, DwellPolicy, Engine, FileCatalog, FormulaKeep, NowPlaying, ReadSeek, SharedStr, Source, TickOutcome,
+    hand_picked, Catalog, DwellPolicy, Engine, FileCatalog, NowPlaying, ReadSeek, SharedStr, Source, TickOutcome,
     OFF_PLAYLIST,
 };
 pub use filter::Filter;

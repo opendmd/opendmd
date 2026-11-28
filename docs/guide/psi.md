@@ -117,7 +117,9 @@ A Formula can't count frames, and the number of frames drawn in a second varies 
 
 `hour`, `minute` and `second` are the display's clock. They are whole numbers, and all three read 0 until the clock has been set.
 
-In a playlist, a Formula plays whole loops, as a GIF does. The playlist's **Each GIF stays** setting gives a shortest and a longest time, 1 and 30 seconds unless you change them. A Formula stops at the end of the first loop that takes it past the shortest time, so a `loop 4` Formula plays once and a `loop 0.4` Formula three times. One whose loop is longer than the longest time is cut off there. A `loop forever` Formula has no loop to finish, so it stops at the shortest time. To keep one on for longer, use **Play longer or loop…** on it in the playlist.
+In a playlist, a Formula plays whole loops, as a GIF does. The playlist's **Each GIF stays** setting gives a shortest and a longest time, 1 and 30 seconds unless you change them. A Formula stops at the end of the first loop that takes it past the shortest time, so a `loop 4` Formula plays once and a `loop 0.4` Formula three times. A Formula with no `loop` line has an 8-second loop and plays once. One whose loop is longer than the longest time is cut off there, partway through the loop. A `loop forever` Formula has no loop to finish, so it stays for the longest time. **Play longer or loop…** on it in the playlist changes this: twice as long, or a number of seconds, for any Formula; a number of times, for one with a loop (it does nothing for a `loop forever` one).
+
+A Formula you show on the panel yourself (Play, **Show on panel**, Remote control) isn't timed: it loops until you skip it, play something else or go back to the playlist.
 
 **Save as GIF…** saves one loop. A GIF's frames are a fixed length, 0.02 seconds here, or 0.04 when the loop is longer than about 5 seconds. A loop that isn't a whole number of frames is up to one frame short in the GIF.
 

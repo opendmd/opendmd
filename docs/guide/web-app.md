@@ -263,14 +263,18 @@ how many there are, or the ones you picked. **Choose…** lists them with how
 many GIFs each has, with the rare ones behind **+N more** and a box to find
 one. Tap the ones you want and press **Only these**, or **All platforms**.
 
-**Each GIF stays** sets the shortest and longest time a GIF is on (3 to
-30 seconds unless you change them), and **Shuffle** mixes the order. With
+**Each GIF stays** sets the shortest and longest time a GIF or a Formula
+in a playlist is on (1 and 30 seconds unless you change them). It plays
+whole loops until the shortest time has passed, and is cut off at the
+longest. A Formula that goes on without repeating (`loop forever`) stays
+for the longest time. **Shuffle** mixes the order. With
 Shuffle off the playlist plays in order and carries on where it was when you
 add or remove GIFs, after another playlist has played for a while (a
 schedule, Follow RePlayOS) and after a restart or an update; only cutting
-the power starts it from the top again. **A Formula you
-show on the panel stays** for one turn, 1 or 5 minutes, or until you change
-it.
+the power starts it from the top again. A Formula you show on the panel
+yourself stays, looping, until you skip it, play something else or go back
+to the playlist. A GIF you play yourself plays once, then the playlist
+goes on.
 
 ### Panel
 

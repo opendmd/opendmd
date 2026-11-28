@@ -23,7 +23,6 @@
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
 use opendmd_core::boot::ShowLength;
-use opendmd_core::FormulaKeep;
 use opendmd_core::card_speed::CardSpeed;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
@@ -84,8 +83,6 @@ const KEY_FORMULA_JIT: &str = "formula_jit";
 const KEY_FORMULA_ARENA: &str = "formula_arena";
 /// The web app's update check reads the beta feed (`beta.json`), 0/1.
 const KEY_BETA_UPDATES: &str = "beta_updates";
-/// How long a Formula sent to the panel stays (`FormulaKeep::name`).
-const KEY_FORMULA_KEEP: &str = "formula_keep";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
 const KEY_CARD_SPEED: &str = "card_speed";
 /// The location for the sky's inputs (`Settings::location`): latitude and
@@ -222,9 +219,6 @@ pub struct Settings {
     /// `release.json` (the newest final). Off by default; the firmware
     /// itself only keeps it.
     pub beta_updates: bool,
-    /// How long a Formula sent to the panel (`/api/play`) stays on it: one
-    /// turn (the default), a minute, five, or until something else plays.
-    pub formula_keep: FormulaKeep,
     /// The API key every API and card request must carry when set
     /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
     /// returned by the API (only `api_key_set`).
@@ -307,7 +301,6 @@ impl Default for Settings {
             formula_jit: true,
             formula_arena: false,
             beta_updates: false,
-            formula_keep: FormulaKeep::Turn,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
             location: None,
@@ -525,10 +518,6 @@ impl Config {
                 .flatten()
                 .map(|v| v != 0)
                 .unwrap_or(d.beta_updates),
-            formula_keep: self
-                .get_string(KEY_FORMULA_KEEP)
-                .and_then(|s| FormulaKeep::from_name(&s))
-                .unwrap_or(d.formula_keep),
             api_key: self
                 .get_string(KEY_API_KEY)
                 .filter(|k| opendmd_core::access::valid_key(k))
@@ -589,7 +578,6 @@ impl Config {
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;
         self.nvs.set_u8(KEY_FORMULA_ARENA, u8::from(s.formula_arena))?;
         self.nvs.set_u8(KEY_BETA_UPDATES, u8::from(s.beta_updates))?;
-        self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
         self.nvs.set_str(KEY_NETWORK, network_name(s.network))?;

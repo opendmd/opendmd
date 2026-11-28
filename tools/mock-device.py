@@ -762,7 +762,7 @@ DEFAULT_SETTINGS = {
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
     "formula_arena": False,     # dev: a Formula's memory set aside at boot
-    "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
+    "formula_keep": "hold",     # taken and ignored (a Formula picked by hand stays until changed); GET says hold
     "api_key": "",              # "" = no key asked; never echoed back
     "lat": None,                # the panel's location, 0.01° (both or neither);
     "lon": None,                # in /api/config only, never in status
@@ -770,9 +770,10 @@ DEFAULT_SETTINGS = {
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
 BOOT_SHOWS = ("off", "short", "full")
-# opendmd_core::FormulaKeep: a Formula sent to the panel (POST /api/play)
-# stays its seconds (0: until something else plays; None: one turn).
-FORMULA_KEEP = {"turn": None, "1m": 60, "5m": 300, "hold": 0}
+# The old `formula_keep` choices, still taken by PUT /api/config and
+# ignored: a Formula picked by hand (opendmd_core::hand_picked) stays until
+# something else plays.
+FORMULA_KEEP = ("turn", "1m", "5m", "hold")
 # The start-up show as a virtual file (`@boot[?len=short|full|card&..]`,
 # opendmd_core::boot): the show once (1300 / 5600 ms) or one loop of the
 # status card (16384 ms), in 10 ms frames.
@@ -2361,8 +2362,8 @@ class Player:
         self.manifest_last_set: str | None = None
         self.index_state = "building"
         self.played: str | None = None  # an off-playlist POST /api/play
-        # A Formula sent to the panel and kept there (`formula_keep`): the
-        # ordinal of its start and its seconds (0: until something else plays).
+        # A Formula picked by hand, kept until something else plays
+        # (opendmd_core::hand_picked): the ordinal of its start and 0.
         self.kept: tuple[int, int] | None = None
         # The sent Formula's start and its bytes' CRC-32 (`now_playing.sent`).
         self.sent_id: tuple[int, int] | None = None
@@ -2480,7 +2481,7 @@ class Player:
 
     def retune(self, path: str):
         """Engine::retune: a formula over the formula on screen, in place
-        (the same ordinal, a fresh dwell, kept as `formula_keep` says)."""
+        (the same ordinal, a fresh dwell, kept until something else plays)."""
         self.played = path
         self.last_advance = time.monotonic()
         self.keep(path)
@@ -2513,9 +2514,8 @@ class Player:
         return out
 
     def keep(self, path: str):
-        """main.rs PlayNow: a Formula stays as long as `formula_keep` says."""
-        secs = FORMULA_KEEP[self.ctx.settings["formula_keep"]] if is_formula_ref(path) else None
-        self.kept = None if secs is None else (self.ordinal, secs)
+        """main.rs PlayNow: a Formula stays until something else plays; a GIF one turn."""
+        self.kept = (self.ordinal, 0) if is_formula_ref(path) else None
 
     def kept_s(self) -> int | None:
         """Status `now_playing.kept_s` while the kept start is on screen."""
@@ -4037,7 +4037,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
                     "formula_arena": s["formula_arena"],
-                    "formula_keep": s["formula_keep"],
+                    "formula_keep": "hold",
                     "api_key_set": bool(s["api_key"]),
                     "lat": s["lat"],
                     "lon": s["lon"],

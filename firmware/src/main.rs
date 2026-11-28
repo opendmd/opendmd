@@ -514,8 +514,8 @@ fn save_settings(cfg: &mut Config, next: &Settings, dirty: &mut bool, defer: boo
 
 /// Settings held back while a Formula played and not written yet: a
 /// restart writes them first ([`restart`], through [`FLUSH_AT_RESTART`]),
-/// or a change made during a Formula (`formula_arena`, a `formula_keep`
-/// put back) is lost to the reboot that was to apply it.
+/// or a change made during a Formula (`formula_arena`) is lost to the
+/// reboot that was to apply it.
 static SETTINGS_UNSAVED: AtomicBool = AtomicBool::new(false);
 /// Writes the shared settings copy (the settings in force: every apply
 /// puts them there) to NVS; set once at boot.
@@ -1134,20 +1134,14 @@ fn main() -> Result<()> {
                         // `fx_psi::Retune`); one the heap can't
                         // compile beside it lets it go and is played from
                         // nothing (`Engine::retune`).
-                        // A Formula stays as long as `formula_keep` says
-                        // (a one-off dwell: it keeps animating; a live edit
-                        // keeps it kept).
-                        let formula = opendmd_core::synth::is_formula(&path)
-                            || opendmd_core::synth::formula_file(&path).is_some();
-                        let keep = if formula {
-                            settings.formula_keep
-                        } else {
-                            opendmd_core::FormulaKeep::Turn
-                        };
-                        if formula {
+                        // A Formula stays until something else plays (a
+                        // one-off dwell: it keeps animating; a live edit
+                        // keeps it kept); a GIF gets one turn.
+                        let keep = opendmd_core::hand_picked(&path);
+                        if keep.is_some() {
                             room_for_formula(engine.as_mut(), &mut canvas);
                         }
-                        let r = match retune(engine.as_mut(), &path, live, epoch.elapsed(), keep.dwell()) {
+                        let r = match retune(engine.as_mut(), &path, live, epoch.elapsed(), keep) {
                             Some(r) => {
                                 // No new start (the ordinal stays), but
                                 // status names the formula now on the panel:
@@ -1169,7 +1163,7 @@ fn main() -> Result<()> {
                             None if engine.is_none() => Err(PlayError::NoPlaylist),
                             // (Not a Formula on screen, or not the one sent.)
                             None if live => Err(PlayError::MovedOn),
-                            None => play_now(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()),
+                            None => play_now(engine.as_mut(), &path, epoch.elapsed(), keep),
                         };
                         if r.is_ok() {
                             // What this play put on screen is the one later
@@ -1183,7 +1177,7 @@ fn main() -> Result<()> {
                             }
                             let ordinal = engine.as_ref().and_then(|e| e.now_playing()).map(|p| p.ordinal);
                             let mut s = status.lock().unwrap();
-                            s.kept = keep.secs().zip(ordinal).map(|(secs, o)| (o, secs));
+                            s.kept = keep.and(ordinal);
                             // The sent one, held (just now, or still from
                             // its last send): which bytes this start plays.
                             if opendmd_core::synth::is_sent(&path) {
@@ -2750,7 +2744,7 @@ fn main() -> Result<()> {
             if let Some(playing) = new_file {
                 s.recent.started(&playing.path);
                 // Any other start ends a kept Formula's report.
-                if s.kept.is_some_and(|(o, _)| o != playing.ordinal) {
+                if s.kept.is_some_and(|o| o != playing.ordinal) {
                     s.kept = None;
                 }
                 s.ordinal = playing.ordinal;

@@ -1015,8 +1015,8 @@ class Lane:
         short = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
         name = lambda b: b[6:6 + b[5]].decode()
         self.expect(len(long) * 4 // 3 > 6144, "sent", f"--long-psb is {len(long)} B: it fits a path")
-        # (Kept until changed: the JIT's waits below outlast a turn of the dwell.)
-        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (Kept until changed, as every Formula picked by hand: the JIT's
+        # waits below outlast a turn of the dwell.)
         jit = lambda s: (s["now_playing"].get("formula") or {}).get("jit") or {}
         def jit_off(what):
             # (The status says the last kernel's word until the new
@@ -1044,6 +1044,8 @@ class Lane:
                               and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the long Formula playing")
         np = st["now_playing"]
         self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
+        # Kept until something else plays (opendmd_core::hand_picked): kept_s 0.
+        self.expect(np.get("kept_s") == 0, "sent", f"now_playing.kept_s {np.get('kept_s')!r}, wanted 0 (until changed)")
         # Its identity (Connect P1 F0): the CRC-32 of the bytes sent, and the
         # seed it opened with.
         seed = np.get("seed")
@@ -1094,10 +1096,13 @@ class Lane:
         np = api.status()["now_playing"]
         self.expect(np["ordinal"] == ordinal, "sent", "a refused one moved the panel on")
         self.expect(np.get("sent") == zlib.crc32(short), "sent", f"after the refused ones, sent {np.get('sent')}: not the bytes on screen's")
+        # Still the same start after all of that (the JIT's waits: far past
+        # a turn of the dwell), and still kept.
+        self.expect(np.get("kept_s") == 0, "sent", f"the sent Formula after the edits: kept_s {np.get('kept_s')!r}")
         api.json("POST", "/api/skip")
-        self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
+        st = self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
+        self.expect("kept_s" not in st["now_playing"], "sent", f"kept_s {st['now_playing'].get('kept_s')!r} after Next")
         api.call("POST", "/api/play/formula?live=1", long, want=(409,))
-        api.json("PUT", "/api/config", {"formula_keep": "turn"})
         self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
                 f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on; "
                 f"the JIT on after the show, the edits ({made} kernel made) and a=30: {first}, {after}, {wide}")
@@ -1117,8 +1122,8 @@ class Lane:
             api.json("POST", "/api/play", body)
             _, m = emu.wait_for(rx, 30, mark, f"the retune's start ({what})")
             return "edited" if m.group(1) else "played", int(m.group(2)), int(m.group(3))
-        # (Kept until changed: its turn must not end between the steps.)
-        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        # (A Formula picked by hand is kept until changed: its turn does not
+        # end between the steps.)
         # (Its start on the console, not in /api/status: at dwell_min 1 it plays once, ~1 s
         # of device time, ~0.4 s wall, and a status poll every 0.5 s missed it twice.)
         mark = emu.mark()
@@ -1154,7 +1159,6 @@ class Lane:
         api.call("POST", "/api/play", {"path": light, "live": True}, want=(409,))
         self.expect(not emu.find(rx, mark), "governor", "a live edit after Previous retuned the Formula on screen")
         self.expect(api.status()["now_playing"]["ordinal"] == back, "governor", "the 409 moved the panel on")
-        api.json("PUT", "/api/config", {"formula_keep": "turn"})
         self.ok("governor", f"light over heavy at its own rate ({light_ms} ms frames), heavy over light slow ({heavy_ms}), "
                 f"a live edit kept the level; a live edit after Previous put a Formula back: 409")
 

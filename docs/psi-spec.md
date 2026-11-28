@@ -239,9 +239,13 @@ With `loop forever`, `t` is the seconds since the formula started and grows
 without end, and there is no `phase` (E908).
 
 In a playlist a formula plays whole loops until the playlist's shortest
-time for an item has passed (1 second unless changed) and is cut off at
-the longest (30 seconds). A `loop forever` formula counts as a loop of
-1 second. A GIF saved from a formula is one loop long.
+time for an item has passed (1 second unless changed), and is cut off at
+the longest (30 seconds unless changed), partway through a loop if need
+be. A formula with no `loop` line plays its 8-second loop. A `loop
+forever` formula stays for the longest time. A playlist entry's own time
+(Play longer) replaces both times; its number of loops does nothing for a
+`loop forever` formula. A formula shown on the panel by hand stays until
+something else plays. A GIF saved from a formula is one loop long.
 
 `phase` and `smooth` need OpenDMD 1.1 or later. An earlier panel says the
 name is unknown.

@@ -53,16 +53,18 @@ replaces it.
 
 ## On the panel
 
-**Show on panel** plays a Formula on your display until the playlist moves
-on, for one turn like any GIF. To watch one for longer, set **Keep on the
-panel** beside it, or in Settings › Playback, to **1 minute**, **5
-minutes** or **Until I change it**. Now then says it is being kept, and
-**Back to the playlist** ends it. So do Skip, Previous, another Formula
-or another playlist.
+**Show on panel** plays a Formula on your display and keeps it there,
+looping, until you change it. Now says it is being kept, and **Back to the
+playlist** ends it. So do Skip, Previous, playing something else and
+choosing another playlist. Playing a Formula from Remote control does the
+same.
 
 **Add to playlist…** puts a Formula in one of your playlists. There the
 display draws it itself. It follows the clock, loops for as long as it
 plays, and takes one line of the playlist instead of the space of a GIF.
+It plays as long as a GIF would (whole loops, within the playlist's
+shortest and longest times); one that goes on without repeating stays for
+the longest time.
 The playlist shows it by its name, marked *Formula*. Now shows its name
 while it plays.
 
