@@ -60,8 +60,8 @@ search in the Library finds nothing, the **Find art online** link beside
 picked.
 
 The Studio searches game art (title screens, box art and logos) and old
-GeoCities GIFs, takes a picture or a GIF from a web address or another
-site, and makes videos into GIFs. It needs an internet connection on your
+GeoCities GIFs, takes a picture, a GIF or an animated WebP from a web
+address or another site, and makes videos into GIFs. It needs an internet connection on your
 computer or phone, not on the display. When the GIF is ready, **Send to
 panel** asks once for your display's address (the name or IP address it
 shows), then opens your display's web app with the GIF in **Add GIFs**,

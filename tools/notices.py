@@ -25,7 +25,8 @@ bootloader and the updater. What is listed comes from the release build:
   library and the crates build-std links into it are listed as one entry.
 
 web: licenses/THIRD-PARTY-LICENSES-web.txt, the web app in the www pack:
-cargo-about over opendmd-web, opendmd-art-web and opendmd-psi-web for wasm32, the Rust
+cargo-about over opendmd-web, opendmd-art-web and opendmd-psi-web for wasm32 (and
+opendmd-art with feature webp: the site's animated WebP reader links it), the Rust
 standard library, and the headings' font (Silkscreen, OFL 1.1).
 
 Both files are committed. --check regenerates in memory and fails when the
@@ -438,13 +439,14 @@ class Firmware:
 
 # --- cargo-about -----------------------------------------------------------------
 
-def cargo_about(about: str, version: str, crate_dir: Path, target: str) -> dict:
+def cargo_about(about: str, version: str, crate_dir: Path, target: str, features: str = "") -> dict:
     v = subprocess.run([about, "--version"], capture_output=True, text=True).stdout.strip()
     if v != f"cargo-about {version}":
         die(f"need cargo-about {version}, have '{v or 'none'}' ({about}): the official release binary, "
             f"or cargo install --locked cargo-about@{version}; CARGO_ABOUT=<path>")
     env = dict(os.environ, RUSTUP_TOOLCHAIN="stable")
     r = subprocess.run([about, "generate", "--fail", "--locked", "--format", "json", "--target", target,
+                        *(["--features", features] if features else []),
                         "-c", str(LIC / "about.toml")], cwd=crate_dir, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         die(f"cargo-about failed for {crate_dir.name} ({target}):\n{r.stderr.strip()[-3000:]}")
@@ -608,8 +610,9 @@ def rust_std_entry(texts: Texts, crates: list[str]) -> dict:
 
 
 def web(a: argparse.Namespace) -> None:
-    abouts = [cargo_about(a.about, a.about_version, ROOT / c, "wasm32-unknown-unknown")
-              for c in ("opendmd-web", "opendmd-art-web", "opendmd-psi-web")]
+    # (opendmd-art with feature webp: the site's WebP reader, its own wasm, links it.)
+    abouts = [cargo_about(a.about, a.about_version, ROOT / c, "wasm32-unknown-unknown", f)
+              for c, f in (("opendmd-web", ""), ("opendmd-art-web", ""), ("opendmd-psi-web", ""), ("opendmd-art", "webp"))]
     texts = Texts()
     packages = []
     font = ROOT / "opendmd-web/www/fonts/OFL.txt"

@@ -189,7 +189,22 @@ impl Anim {
         src.next_frame(&mut canvas)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no frames"))?;
         let first = rgb_image(src.screen(&canvas), ow, oh);
-        let scale = pipeline::native_scale(&first);
+        let loops = match src.repeat() {
+            gif::Repeat::Finite(n) if n > 0 => n as u32 + 1,
+            _ => 0,
+        };
+        let mut a = Anim::native(&first, in_file, loops, budget);
+        a.keep(&first, pipeline::player_delay(src.raw_delay()));
+        a.dec = Some(Decoding::Gif { src, canvas });
+        Ok(a)
+    }
+
+    /// An empty animation of `in_file` frames like `first` (the source's
+    /// full size): its upscale found on it and undone, then reduced to fit
+    /// `budget`, as [`open`](Self::open) does for a GIF.
+    fn native(first: &Image, in_file: usize, loops: u32, budget: usize) -> Anim {
+        let (ow, oh) = (first.w, first.h);
+        let scale = pipeline::native_scale(first);
         let (nw, nh) = if scale.k > 1 {
             ((ow - scale.x0) / scale.k, (oh - scale.y0) / scale.k)
         } else {
@@ -203,43 +218,52 @@ impl Anim {
             reduce += 1;
         }
         let (w, h) = ((nw / reduce).max(1), (nh / reduce).max(1));
-        let mut a = Anim {
-            dec: None,
-            orig: (ow, oh),
-            in_file,
-            scale,
-            reduce,
-            w,
-            h,
-            frames: Vec::with_capacity(keep),
-            delays: Vec::with_capacity(keep),
-            loops: match src.repeat() {
-                gif::Repeat::Finite(n) if n > 0 => n as u32 + 1,
-                _ => 0,
-            },
-            damaged: false,
-            cut: false,
-            video: false,
-            look: Look {
-                fit: Fit::Pixels,
-                lift: false,
-                x: 0,
-                y: 0,
-                key: false,
-                gain: 100,
-                colours: Colours::Auto,
-            },
-            look_set: false,
-            flip: false,
-            key_rgb: None,
-            text: None,
-            cache: Vec::new(),
-            saving: None,
-            colours: 0,
-        };
-        a.keep(&first, pipeline::player_delay(src.raw_delay()));
-        a.dec = Some(Decoding::Gif { src, canvas });
-        Ok(a)
+        let mut a = Anim::sized(w, h, in_file, false);
+        a.orig = (ow, oh);
+        a.scale = scale;
+        a.reduce = reduce;
+        a.frames = Vec::with_capacity(keep);
+        a.delays = Vec::with_capacity(keep);
+        a.loops = loops;
+        a
+    }
+
+    /// An animation the page decodes (an animated WebP, by the site's
+    /// reader): `n` frames of `w` x `h` RGB888 in the file, `first` now at
+    /// `delay_ms`, the rest by [`push_delay`](Self::push_delay), then
+    /// [`end`](Self::end). Treated as a GIF is: its upscale found on the
+    /// first frame and undone, reduced to fit [`BUDGET`], at most
+    /// [`MAX_FRAMES`] kept, `loops` (0: forever) its plays.
+    pub fn pictures(
+        first: &[u8],
+        w: usize,
+        h: usize,
+        n: usize,
+        delay_ms: u32,
+        loops: u32,
+    ) -> Option<Anim> {
+        Anim::pictures_with_budget(first, w, h, n, delay_ms, loops, BUDGET)
+    }
+
+    /// [`pictures`](Self::pictures), the frames kept within `budget` bytes (RGB).
+    #[allow(clippy::too_many_arguments)]
+    pub fn pictures_with_budget(
+        first: &[u8],
+        w: usize,
+        h: usize,
+        n: usize,
+        delay_ms: u32,
+        loops: u32,
+        budget: usize,
+    ) -> Option<Anim> {
+        // (Checked: on wasm32 a page's w * h * 3 could wrap.)
+        if w == 0 || h == 0 || n == 0 || rgb_len(w, h) != Some(first.len()) {
+            return None;
+        }
+        let img = rgb_image(first, w, h);
+        let mut a = Anim::native(&img, n, loops, budget);
+        a.keep(&img, delay_ms);
+        Some(a)
     }
 
     /// Frames the page draws (a formula, by the Psi module): `n` panel
@@ -274,8 +298,9 @@ impl Anim {
         delay_ms: u32,
         budget: usize,
     ) -> Option<Anim> {
-        let most = (budget / (w * h * 3).max(1)).min(MAX_FRAMES);
-        if w == 0 || h == 0 || first.len() != w * h * 3 || most == 0 {
+        let px3 = rgb_len(w, h)?;
+        let most = (budget / px3.max(1)).min(MAX_FRAMES);
+        if w == 0 || h == 0 || first.len() != px3 || most == 0 {
             return None;
         }
         let mut a = Anim::sized(w, h, most, false);
@@ -294,11 +319,19 @@ impl Anim {
 
     /// The next frame at its own delay; true once all of them are in (more,
     /// or one of the wrong size, are ignored).
+    /// (A video's frames come at the working size; the others' at the
+    /// source's, its upscale and the reduction undone here.)
     pub fn push_delay(&mut self, rgb: &[u8], delay_ms: u32) -> bool {
-        if self.frames.len() < self.in_file && rgb.len() == self.w * self.h * 3 {
-            self.keep(&rgb_image(rgb, self.w, self.h), delay_ms);
+        let (w, h) = if self.video {
+            (self.w, self.h)
+        } else {
+            self.orig
+        };
+        let most = self.in_file.min(MAX_FRAMES);
+        if self.frames.len() < most && rgb_len(w, h) == Some(rgb.len()) {
+            self.keep(&rgb_image(rgb, w, h), delay_ms);
         }
-        self.frames.len() >= self.in_file
+        self.frames.len() >= most
     }
 
     /// No more frames are coming (a video's): the ones in are all of them;
@@ -635,6 +668,11 @@ impl Anim {
             .map(encode::finish)
             .unwrap_or_default()
     }
+}
+
+/// `w * h * 3`, or `None` where it would wrap (on wasm32 a usize is 32 bits).
+fn rgb_len(w: usize, h: usize) -> Option<usize> {
+    w.checked_mul(h)?.checked_mul(3)
 }
 
 /// RGB bytes (`w * h * 3`) as an opaque picture.

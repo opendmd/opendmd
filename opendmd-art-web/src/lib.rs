@@ -57,6 +57,28 @@ pub struct Studio {
     seq: Vec<(usize, u32)>,
 }
 
+impl Studio {
+    /// A Studio over an animation, its first frame staged 1:1.
+    #[cfg(feature = "studio")]
+    fn of(a: Anim) -> Studio {
+        let raw = a.image(0);
+        let stage = pipeline::stage_frame(&raw, Fit::Pixels, false);
+        Studio {
+            raw,
+            scale: Scale { k: 1, x0: 0, y0: 0 },
+            stage,
+            frames: 0,
+            colours: 0,
+            duration_ms: 0.0,
+            anim: Some(a),
+            fit: Fit::Pixels,
+            lift: false,
+            text: None,
+            seq: Vec::new(),
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl Studio {
     #[wasm_bindgen(constructor)]
@@ -167,6 +189,27 @@ impl Studio {
             text: None,
             seq: Vec::new(),
         })
+    }
+
+    #[cfg(feature = "studio")]
+    /// An animation the page decodes (an animated WebP, by the site's
+    /// reader): `n` frames of `width` x `height` RGB888 (the source's own
+    /// size, on black), `first` now at `delayMs`, the rest by `pushFrame`
+    /// at the same size, then `end`. Treated as a GIF is (its upscale
+    /// found and undone, reduced to fit the memory budget, at most 5,000
+    /// frames kept); `plays` 0: forever. Throws on a frame of the wrong size.
+    #[wasm_bindgen(js_name = fromPictures)]
+    pub fn from_pictures(
+        first: &[u8],
+        width: usize,
+        height: usize,
+        n: usize,
+        delay_ms: u32,
+        plays: u32,
+    ) -> Result<Studio, JsError> {
+        let a = Anim::pictures(first, width, height, n, delay_ms, plays)
+            .ok_or_else(|| JsError::new("not a frame of that size"))?;
+        Ok(Studio::of(a))
     }
 
     #[cfg(feature = "studio")]
