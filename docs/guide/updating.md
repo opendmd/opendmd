@@ -8,7 +8,7 @@ brought.
 
 ## Over WiFi
 
-1. In the web app, open **Settings › Device › Firmware** and press
+1. In the web app, open **Settings › Updates** and press
    **Check for updates**.
 2. If there's a new version, the app names it and shows an
    **Update** button. Press it.
@@ -26,7 +26,7 @@ anything goes wrong it tells you what, and whether to try again.
 
 Before each release there are betas: early versions you can try sooner.
 They may have problems. To get them, switch on **Get
-beta updates** under **Settings › Device › Firmware**, and **Check for
+beta updates** under **Settings › Updates**, and **Check for
 updates** then offers the newest beta as well as the releases. The switch
 is kept on the display, so every phone or computer you use sees the same
 choice.
@@ -87,5 +87,5 @@ first.
 
 ## Finding your version
 
-**Settings › Device › Firmware** shows the firmware version and the board
-it is for, and **Settings › Device › About** shows the web app's.
+**Settings › Updates** shows the firmware version and the board
+it is for, and **Settings › About** shows the web app's.

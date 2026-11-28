@@ -9,7 +9,10 @@ open **Playlists** to choose what plays.
 
 On a computer the views are listed down the left side, and on a phone along
 the bottom. They are **Now**, **Library**, **Playlists**, **Formulas** and
-**Settings**. Finding art on the web is the OpenDMD website's: the Library's
+**Settings**. A pill in the header, on every view, says what's playing (or
+Paused, Switching playlist…, No card, Card can't be read, Panel not
+reachable); tap it to go to Now. On a phone it takes the place of the
+hostname. Finding art on the web is the OpenDMD website's: the Library's
 **Find art online** opens its [Studio](https://opendmd.dev/studio/#import).
 
 The [demo](https://opendmd.dev/demo/) is the same app running in your
@@ -25,7 +28,8 @@ has, such as "14 played · 10,162 in the playlist" (with what comes next,
 once the display has picked it), and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
-brightness. To hide the preview, turn off **Mirror the panel on Now** in
+brightness. Under the buttons, **Playing from <playlist> ▾** is a menu to
+switch playlist. To hide the preview, turn off **Mirror the panel on Now** in
 Settings › Panel.
 
 **Recently played**, under the preview, lists what the panel showed last,
@@ -39,10 +43,11 @@ skips and **←** goes back, as Previous does.
 (its glow and contrast), to match your panel better. It doesn't change the
 panel.
 
-Tap **☆** next to the title to make the GIF a favourite in the playlist
-that's playing. It turns to **★**, and a second tap undoes it; the message
-that pops up names the playlist. The **…** on a Recently played GIF has the
-other choices: play less often, play longer. Formulas have no ☆.
+Tap **♡** next to the title to make the GIF a favourite. It turns to
+**♥**, and a second tap undoes it. A favourite plays more often in the
+playlist that's playing, and the message that pops up names it. The **…** on
+a Recently played GIF has the other choices: play less often, play longer.
+Formulas have no ♡.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -56,8 +61,9 @@ GIFs, which comes with a **Clear filter** button.
 ![The Library: two GIFs ticked, and the menu that adds them to a playlist](../images/library.png)
 
 The Library lists every GIF on your card by folder (Arcade, Consoles and so
-on), each folder with how many GIFs it holds. Click a folder to open it and
-again to close it; **⊟** closes them all. Each GIF has a small picture of
+on), each folder with how many GIFs it holds. Your browser remembers the folders, so the Library opens at once on a
+later visit and then reads the card again once a session. Click a folder to
+open it and again to close it; **⊟** closes them all. Each GIF has a small picture of
 its first frame, and resting the pointer on one, or moving to it with the
 keyboard, plays a moment of it. The chips at the top narrow the list by
 platform.
@@ -76,42 +82,44 @@ it or steps back out, and Enter opens a folder or a GIF.
 | Type | To find |
 |---|---|
 | `tag:boss` | GIFs you tagged "boss" (`tag:"boss fight"` for two words) |
-| `rating>=4`, `rating:5`, `unrated` | GIFs by their stars |
+| `tag:favourite` | your favourites |
+| `rating>=4`, `rating:5`, `unrated` | GIFs by star ratings given earlier |
 | `platform:snes`, `platform:"mega drive"` | a platform |
 | `folder:consoles` | a folder |
 | `is:logo`, `is:intro`, `is:slide` | what the name says it is |
 | `by:pixelkid42` | an author |
 | `-tag:boss`, `-is:logo` | leave those out |
 
-Mix them with plain words: `mario platform:snes rating>=4`. Commas mean
-"or": `platform:md,snes`. Once you have rated something, a **★ 4+** chip
-beside the platforms does `rating>=4` for you.
+Mix them with plain words: `mario platform:snes tag:favourite`. Commas mean
+"or": `platform:md,snes`. A **♥ Favourites** chip beside the platforms does
+`tag:favourite` for you. Star ratings from older versions stay on the card
+and the search still understands them, but the app no longer shows or sets
+them.
 
 Click a GIF to open its details, with a preview and its title, platform,
-category and author, your stars and your tags. From there:
+folder and author, and your tags. From there:
 
-- **Send to panel** plays it now; afterwards the playlist carries on.
+- **Play now** plays it now; afterwards the playlist carries on.
 - **Add to playlist…** puts it in one of your playlists: the one playing
   comes first, or start a new one.
 - **Download GIF** saves the GIF itself, to change it in the
   [Studio](https://opendmd.dev/studio/#import) ([Changing a GIF already on
   the card](create-art.md#changing-a-gif-already-on-the-card)).
-- **Edit details…** changes its title, platform, category or author. The
+- **Edit details…** changes its title, platform, folder or author. The
   GIF is renamed on the card and every playlist keeps up.
 - **Delete…** removes it from the card and from every playlist, after
   asking first.
 
-### Tags and stars
+### Tags and favourites
 
-Tags and stars are yours: words and ratings you give GIFs to find them
-again. In a GIF's details, tap a star to rate it (tap the same star again
-to clear it) and type a tag under the stars, then Enter; ✕ takes one off.
-Tap a tag to see every GIF that has it. A GIF in the list shows its stars
-and first two tags. What a GIF's name already says (its platform, folder
+Tags are yours: words you give GIFs to find them again. In a GIF's details,
+type a tag beside **♡ Favourite**, then Enter; ✕ takes one off. Tap a tag
+to see every GIF that has it. A GIF in the list shows its first two tags. What a GIF's name already says (its platform, folder
 and so on) isn't a tag: change those with **Edit details…**.
 
-Stars are not favourites: a favourite plays more often in one playlist,
-while stars are for searching and for smart playlists.
+**♡ Favourite** is a tag too, built in and kept for the whole card, so you
+can search for it and use it in smart playlists. Tapping it also makes the
+GIF play more often in the playlist that's playing.
 
 If you move or delete GIFs on your computer, the Library notices tags
 left for GIFs that aren't on the card any more after a search: **Move
@@ -121,14 +129,15 @@ their tags** puts them on a GIF of the same name in another folder, and
 ### Several at once
 
 Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
-tap picks a GIF, and a folder's box picks every GIF in it, and **None**
-unpicks them all. **Add 3 to playlist ▾** asks which of your playlists
-they go in (the one playing first) or starts a new one; GIFs already in it
-aren't added twice. **More ▾** has:
+tap picks a GIF, and a folder's box picks every GIF in it. The bar is one row: **Done** (✕), the count, **All**
+(every GIF shown), **Add to playlist ▾** and **More ▾**. **Add to playlist ▾**
+asks which of your playlists they go in (the one playing first) or starts a
+new one; GIFs already in it aren't added twice. **More ▾** has:
 
+- **Select none**: unpick them all.
+- **♥ Favourite**: make all of them favourites.
 - **Tag…**: add a tag to all of them, or take one off. A tag only some of
   them have shows "–"; tap it to give it to all, again to take it off all.
-- **Rate…**: the same stars for all of them.
 - **Move to folder…**: into one of your folders or a new one. Each keeps
   its name unless one there has it, when it takes the next number.
 - **Rename…**: a new title, platform or author for all of them, with a
@@ -137,9 +146,10 @@ aren't added twice. **More ▾** has:
   named.
 
 Playlists, favourites, tags and Smooth motion follow the GIFs you move,
-rename or delete. **Tag…** and **Rate…** can be undone from their message.
-Once an action is done the GIFs are unpicked; if a move, rename or delete
-stops partway, the ones it didn't reach stay picked to try again. Picked
+rename or delete. **♥ Favourite** and **Tag…** can be undone from their message.
+Once an action is done the GIFs are unpicked. A move, rename or delete
+shows its progress ("Moving 3 of 6 GIFs…") with a **Stop** button; if it
+stops partway, or you stop it, the ones it didn't reach stay picked to try again. Picked
 GIFs the list doesn't show (another folder, or not what the search finds)
 are counted in the bar: "6 selected · 2 not shown". **Done** leaves Select.
 
@@ -150,9 +160,12 @@ phone: GIFs, or pictures such as PNG or JPEG, or drop them on the Library
 or paste a copied picture. A picture, or a GIF that
 isn't 128 × 32, is fitted to the panel first: how it fits and which part
 shows, or, for a GIF, **Add as it is** ([Adding your own
-art](create-art.md)). For each one, give it a title, a platform, a category
-(or a new one) and, if you like, an author. The app suggests a title from
-the file name and shows the name the GIF will get on the card. Afterwards
+art](create-art.md)). Choose the **Folder** once at the top (or a new
+one); with more than one GIF, one **Platform** for all of them, or **Each its
+own** when their names differ. Then each GIF asks only for its title, which
+the app suggests from the file name. Under **Details** are its own
+platform, the author, the file's name and the name the GIF will get on the
+card. Afterwards
 it offers to add the new GIFs to the playlist that's playing. Each GIF is
 made ready for smooth playback as it uploads.
 
@@ -189,7 +202,7 @@ goes back. Fill it in any of these ways:
 
 - Tick GIFs, or a whole folder, and press **Add 12 ticked**.
 - Search for "mario", tap the **SNES** chip and press **Add all 41 shown**.
-- Press **Add by filter…** to fill it by rules: platforms, categories and
+- Press **Add by filter…** to fill it by rules: platforms, folders and
   title words, shuffled or cut to a number if you like. **Leave out**
   drops logos, intros and the like.
 - In the Library, open a GIF and choose **Add to playlist… › New
@@ -201,13 +214,13 @@ A GIF already in the playlist has a ✓ and isn't added twice.
 ### Smart playlists
 
 A smart playlist is built from a search and keeps up with it. In **Add by
-filter…**, pick what you want (platforms, folders, tags, stars, or more
+filter…**, pick what you want (platforms, folders, tags such as Favourite, or more
 search words like `rating>=4 -tag:boss`), choose **Every GIF on the card**
 or a playlist to take them from, tick **Keep this search** and press
 **Replace with 25 GIFs**, then save. The list says **Smart**.
 
 The web app writes the playlist again when its search finds something
-new: when you change tags or stars, add GIFs, or press **Refresh** in the
+new: when you change tags, add GIFs, or press **Refresh** in the
 playlist's **…** menu (or **Refresh now** in the editor). **Edit search**
 changes it. The panel plays it like any other playlist, so it stays as it
 was last written until you next open the web app. If you change a smart
@@ -224,25 +237,26 @@ removal, Clear, Shuffle or a replace by filter can be undone from its
 message. Leaving with changes not saved asks whether to save them. The playlists that come with your card (All
 files, Halloween, Christmas) are saved under a name of your own.
 
-**Save & play** while editing, or **Play** from a playlist's **…** menu,
-switches the panel to it in a few seconds. The same menu has **Rename…**
+**Save & play** while editing, or the **▶ Play** button on a playlist's row
+(greyed out on the one playing), switches the panel to it in a few seconds.
+The row's **…** menu has **Rename…**
 and **Duplicate** (the new one is called "Consoles 2", say): favourites come
 along, and a renamed playlist keeps playing and keeps its place in the
 schedule.
 
 ### Favourites
 
-Right-click a GIF in the Library or a playlist, or use its **…** button, to
+Right-click a GIF in a playlist, or use its **…** button, to
 tune how it plays in that playlist. On a phone, long-press it in a
 playlist.
 
-- **Favourite** plays it more often.
-- **Play less often** does the opposite.
+- **Play less often** plays it less.
 - **Play longer or loop…** keeps it on screen twice as long or for a
   number of seconds, or plays it a set number of times.
 
-These are per playlist, so a GIF can be a favourite in one and play less
-often in another. **Reset** puts it back to normal. To keep a GIF from
+These are per playlist. A favourite (the heart on Now, **♡ Favourite** in the
+Library) is a tag for the whole card that also plays the GIF more often in
+the playlist that's playing. **Reset** puts it back to normal. To keep a GIF from
 playing in a playlist, take it out of the playlist.
 
 ## Formulas
@@ -253,14 +267,15 @@ examples to remix, a live editor, the gallery and **Save as GIF…**. See
 
 ## Settings
 
-Settings has five tabs. Changes save as you make them, and a green
+Settings has nine tabs: Playback, Panel, Schedule, RePlayOS, WiFi, Remote
+control, Updates, Advanced and About. Changes save as you make them, and a green
 **Saved ✓** says so.
 
 ### Playback
 
-**Playlist** picks which playlist plays. **Platforms** says **All** with
-how many there are, or the ones you picked. **Choose…** lists them with how
-many GIFs each has, with the rare ones behind **+N more** and a box to find
+**Playlist** picks which playlist plays. **Platforms** says **All platforms**
+or the ones you picked. **Choose…** reads the playlist and lists the
+platforms with how many GIFs each has, with the rare ones behind **+N more** and a box to find
 one. Tap the ones you want and press **Only these**, or **All platforms**.
 
 **Each GIF stays** sets the shortest and longest time a GIF is on (3 to
@@ -287,7 +302,9 @@ glow** makes dots fade out softly like an old plasma display.
 over everything the panel plays.
 
 **Mirror the panel on Now** turns the preview on Now on or off, in this
-browser only.
+browser only. **Thumbnails in the Library and playlists** turns the small
+pictures on or off. Your browser keeps each one, so the display sends it only
+once.
 
 Under **Transition**, **Style** is how the panel moves from one GIF to the
 next (dissolve, wipe, blinds, push, fade or none) and **Speed** is how fast;
@@ -339,27 +356,7 @@ start a game the panel shows that game, and in the menus it plays the
 **Attract playlist** of your choice. [Follow RePlayOS](replayos.md) has the
 steps to set it up and what the panel does.
 
-### Device
-
-**Status** shows the playlist and how many GIFs it has, the card, and how
-long the display has been running. **Reload playlist** reads the card again
-if you changed it in a computer, and **Reboot** restarts the display.
-
-**Remote control**, in the beta versions, lets you use the display from a
-phone away from home, through opendmd.dev. It's off until you switch it on:
-[Remote control](remote.md) has the steps, how to link and remove devices,
-and what the relay sees.
-
-**Card speed** is **Safe** unless you choose **Fast**, which reads the card
-faster. Some cards return wrong data at Fast without an error, so choose
-Safe again if GIFs look damaged.
-
-**Ready to play** shows how many GIFs have been prepared for their
-smoothest playback. The display does this by itself while it is dark at
-night or paused; **Prepare remaining files** does the rest now, from your
-browser. **Thumbnails in the Library and playlists** turns the small
-pictures on or off. Your browser keeps each one, so the display sends it only
-once.
+### WiFi
 
 **Network** changes the WiFi network or the **Display name** (`opendmd` in
 `opendmd.local`); press **Save network** to keep the change. A WiFi change
@@ -375,6 +372,40 @@ computer, change `"network": "off"` to `"network": "on"` in `opendmd.json`
 on the card, or connect the display by USB and use **Connect to Wi-Fi** in
 the [installer](install.md).
 
+**Security** has **Require a key for the API**. Without a key, anyone on
+your WiFi can change the panel, so Settings shows a line at the top, "No key: anyone on your WiFi can
+change this panel. Set a key", that links here; the setup page offers a key
+too. Each browser asks for
+the key once. The key is the only lock, and it travels in clear text on
+your network, so keep the display on a network you trust.
+
+### Remote control
+
+**Remote control**, in the beta versions, lets you use the display from a
+phone away from home, through opendmd.dev. It's off until you switch it on:
+[Remote control](remote.md) has the steps, how to link and remove devices,
+and what the relay sees.
+
+### Updates
+
+**Firmware** shows the version and installs updates; see
+[Updating](updating.md).
+
+### Advanced
+
+**Status** shows the playlist and how many GIFs it has, the card, and how
+long the display has been running. **Reload playlist** reads the card again
+if you changed it in a computer, and **Reboot** restarts the display.
+
+**Card speed** is **Safe** unless you choose **Fast**, which reads the card
+faster. Some cards return wrong data at Fast without an error, so choose
+Safe again if GIFs look damaged.
+
+**Ready to play** shows how many GIFs have been prepared for their
+smoothest playback. The display does this by itself while it is dark at
+night or paused; **Prepare remaining files** does the rest now, from your
+browser.
+
 **Moving pictures** has two switches for GIFs that move fast. **Sync to the
 panel’s refresh** stops tearing, and **Delay the bottom half one refresh**
 takes away the step at mid-height on fast scrollers.
@@ -385,14 +416,7 @@ saves the one you pick. A change by hand is tried for a minute and undone
 unless you press **Keep**; [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)
 has the steps.
 
-**Firmware** shows the version and installs updates; see
-[Updating](updating.md).
-
-**Security** has **Require a key for the API**. Without a key, anyone on
-your WiFi can change the panel, so the web app shows a banner offering to
-set one until you do; the setup page offers one too. Each browser asks for
-the key once. The key is the only lock, and it travels in clear text on
-your network, so keep the display on a network you trust.
+### About
 
 **About** shows the display's address, the firmware and web app versions,
 an **API reference** link to the HTTP API for scripts, and the

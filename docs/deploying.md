@@ -118,7 +118,7 @@ the binary directly (`opendmd-pack convert --verify <card>`). That is the
 whole step: no manifest to write. A GIF with no copy simply plays as a GIF.
 Files added later from the web app (Library → **Add GIFs**, a GIF sent from the website's Studio) are
 prepared by the browser as they are uploaded, the player prepares the rest
-itself at night, and **Settings → Device → Ready to play** shows how many of the
+itself at night, and **Settings → Advanced → Ready to play** shows how many of the
 playlist's files are prepared and can prepare the rest in the background.
 
 **Smooth motion (optional).** To switch it on for every GIF where it
@@ -506,7 +506,7 @@ updates"):
   it by default. Before the first final release exists it names the
   newest beta (as it always has), so players keep getting updates.
 - **`install/beta.json`**: the newest release of all, beta or final.
-  Players with **Get beta updates** on (Settings → Device → Firmware; the
+  Players with **Get beta updates** on (Settings → Updates; the
   device setting `beta_updates`, off by default) read it instead. A beta
   player therefore gets the next betas and also a final release once it
   is newer than its beta. Switching it off downgrades nothing: the player
@@ -729,7 +729,7 @@ erase the chip.
 ### Updating the firmware
 
 **Over WiFi** (a board already on table v4, with a card in): `make
-fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Device → Firmware → "Update from file…" with
+fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Updates → "Update from file…" with
 `dist/opendmd-<version>-<variant>.odfw`, the board's own layout and
 table: the device, the web app and `fw-ota` refuse any other. The
 device receives the bundle onto the card (`/update/opendmd.bin`), checks

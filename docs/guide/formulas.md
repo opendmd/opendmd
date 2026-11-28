@@ -156,7 +156,7 @@ the web app says why and keeps it in the editor.
 
 The first time, the site asks for your display's address. It suggests
 `opendmd.local`, and the name or IP address is also in the web app under
-Settings › Device. After that one press is enough. Your phone or computer
+Settings › About. After that one press is enough. Your phone or computer
 must be on the same network as the display. Your browser may ask you to
 allow pop-ups for opendmd.dev the first time.
 
