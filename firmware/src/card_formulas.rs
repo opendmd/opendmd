@@ -53,7 +53,7 @@
 use opendmd_core::psi;
 use std::fs;
 use std::io::Read;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -134,6 +134,10 @@ static mut GUARD: [u32; 2] = [0; 2];
 const GUARD_MAGIC: u32 = 0x5053_4243;
 /// The crashes in a row this boot found.
 static CRASHES: AtomicU32 = AtomicU32::new(0);
+/// The card would not take a compiled file this start: no more compiles
+/// until the next (a failing card must not take up to [`MAX_FILES`] more
+/// failing writes; the retries stop too).
+static WRITES_STOPPED: AtomicBool = AtomicBool::new(false);
 
 fn guard(i: usize) -> &'static AtomicU32 {
     // SAFETY: a word of `GUARD`, only ever accessed through this view
@@ -672,7 +676,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     let mut shorts = Vec::new();
     let (c, left) = pass(settings, &mut shorts, opts, &[], &[]);
     publish(c);
-    if c.short as usize + c.queued as usize > left.heavy.len() && tries > 0 {
+    if c.short as usize + c.queued as usize > left.heavy.len() && tries > 0 && !WRITES_STOPPED.load(Relaxed) {
         // The retries are the network worker's ([`tick`]): the boot task
         // ends now and its stack goes back to the heap.
         *RETRY.lock().unwrap_or_else(|p| p.into_inner()) = Some(Retry {
@@ -720,6 +724,13 @@ static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
 fn retry_tick() {
     let mut g = RETRY.lock().unwrap_or_else(|p| p.into_inner());
     let Some(r) = g.as_mut() else { return };
+    // (A write failed since: the rest is the next start's.)
+    if WRITES_STOPPED.load(Relaxed) {
+        if let Some(r) = g.take() {
+            finish(r.counts, &r.shorts, r.t0);
+        }
+        return;
+    }
     if Instant::now() < r.next {
         return;
     }
@@ -953,6 +964,11 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             c.write_failed += 1;
             continue;
         }
+        // The card would not take a write this start: the rest at the next.
+        if WRITES_STOPPED.load(Relaxed) {
+            c.queued += 1;
+            continue;
+        }
         // Past this pass's compiles, or the card busy: queued for later.
         if stopped || budget == 0 || !give_way(opts.wait) {
             if opts.wait && !stopped {
@@ -1066,13 +1082,15 @@ enum Done {
 /// was written goes (a cut `.psb` would pass for current, a cut mark for
 /// another source's), so nothing beside the source says it was tried and
 /// the next start compiles it again. Counted and logged as a card write
-/// failure, never as short of memory (that list is the retries').
+/// failure, never as short of memory (that list is the retries'). The
+/// first stops every compile for this start ([`WRITES_STOPPED`]).
 fn write_failed(psb_path: &str, name: &str, compiled: bool, c: &mut Counts) -> Done {
     let what = if compiled { "its compiled file" } else { "its mark" };
     let gone = fs::remove_file(psb_path).is_ok() || fs::metadata(psb_path).is_err();
     c.write_failed += 1;
+    WRITES_STOPPED.store(true, Relaxed);
     log::warn!(
-        "formulas: /formulas/{name}: the card would not take {what} (a card write failure){}",
+        "formulas: /formulas/{name}: the card would not take {what} (a card write failure){}; no more compiles this start",
         if gone { ": prepared again at the next start" } else { "; what was written could not be removed either" }
     );
     Done::WriteFailed { compiled }
