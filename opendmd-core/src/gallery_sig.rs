@@ -52,9 +52,12 @@ pub const SIG_LEN: usize = 64;
 
 /// The gallery keys this firmware trusts, by id. Empty until the project's
 /// gallery key is committed (`firmware/keys/gallery.pub`, made by
-/// `tools/gallery-sign.py keygen`): then `(0, include_bytes!(…))`, and a
-/// rotation adds the next id beside it (`tests/gallery_signatures.rs`
-/// fails while this table and the committed files disagree).
+/// `tools/gallery-sign.py keygen`); a rotation adds the next id beside it.
+/// `tests/gallery_signatures.rs` fails while this table, the committed key
+/// files and its pinned hex (`PINNED`) disagree.
+//
+// THE SIGNING COMMIT EDITS THE NEXT LINE BY HAND, and nothing else here:
+// `&[]` becomes `&[(0, include_bytes!("../../firmware/keys/gallery.pub"))]`.
 pub const GALLERY_KEYS: &[(u8, &[u8; KEY_LEN])] = &[];
 
 /// The lowest signing revision this firmware takes. A published Formula

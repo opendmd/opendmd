@@ -186,14 +186,24 @@ fn signatures_file() -> Option<Value> {
     Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display())))
 }
 
-/// The table the firmware compiles in is the committed key files, id for
-/// id, and none of them is a test vector's throwaway key.
+// THE PINNED GALLERY KEYS (id, firmware/keys/gallery.pub as hex). The
+// signing commit edits the next line by hand to `&[(0, "<the 64 hex
+// digits>")]`, with the table and the signatures. Once set the gallery must
+// stay GALLERY SIGNED by exactly that key: deleting the key file, the table
+// entry or the signatures, or a different key, fails. Empty: no key yet.
+const PINNED: &[(u8, &str)] = &[];
+
+/// The table the firmware compiles in is the committed key files and the
+/// pinned hex, id for id, and none of them is a test vector's throwaway key.
 #[test]
 fn the_table_is_the_committed_keys() {
     let table: Vec<(u8, [u8; KEY_LEN])> = GALLERY_KEYS.iter().map(|&(id, k)| (id, *k)).collect();
     let mut table = table;
     table.sort();
     assert_eq!(table, keys_on_disk(), "gallery_sig::GALLERY_KEYS and firmware/keys/gallery*.pub disagree");
+    let mut pinned: Vec<(u8, String)> = PINNED.iter().map(|&(id, h)| (id, h.to_string())).collect();
+    pinned.sort();
+    assert_eq!(table.iter().map(|(id, k)| (*id, hex(k))).collect::<Vec<_>>(), pinned, "GALLERY_KEYS and the pinned gallery key (PINNED) disagree");
     let throwaway: Vec<[u8; 32]> = ["A", "B"]
         .iter()
         .map(|n| {
@@ -224,6 +234,7 @@ fn committed_signatures_hold() {
     }
     let t = Trust::panel(opendmd_psi::psb::ABI);
     match check_set(&t, &formulas, signatures_file().as_ref(), !keys_on_disk().is_empty()) {
+        Ok(Outcome::Unsigned(_)) if !PINNED.is_empty() => panic!("a gallery key is pinned (PINNED): the gallery must be GALLERY SIGNED, not unsigned"),
         Ok(Outcome::Unsigned(n)) => {
             eprintln!("GALLERY UNSIGNED: no gallery key committed yet (GALLERY_KEYS empty, no firmware/keys/gallery.pub, no signatures.json): {n} project Formulas, none signed; a panel refuses every add");
         }

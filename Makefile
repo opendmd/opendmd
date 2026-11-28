@@ -215,6 +215,8 @@ test:
 	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Testing tools/gallery-sign.py (the gallery signer: opendmd-core/tests/gallery-vectors.json, keys, stale and foreign signatures)"
 	uv run --locked --quiet tools/gallery-sign.py selftest
+	@echo "==> The gallery's committed signatures (make gallery-check: no key needed)"
+	@$(MAKE) --no-print-directory gallery-check
 	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
 	uv run --quiet tools/connect/vectors_check.py
 	@echo "==> Checking the pairing QR code (tools/connect/qr_check.py): the core's matrices against qrcodegen's, the panel's QR screen decoded by ZXing"
@@ -550,7 +552,9 @@ gallery-tool:
 # needed): every committed signature through the firmware's own verifier
 # (opendmd-core tests/gallery_signatures.rs), and again in Python; a stale,
 # missing or foreign signature fails. With no gallery key committed yet it
-# says GALLERY UNSIGNED and passes (a panel then refuses every add).
+# says GALLERY UNSIGNED and passes (a panel then refuses every add); once
+# the key is pinned (tests/gallery_signatures.rs PINNED, set by the signing
+# commit) only GALLERY SIGNED passes. Also run by make test (CI).
 GALLERY_OUT := $(CURDIR)/target/gallery-out
 GALLERY_KEY ?= $(HOME)/.config/opendmd/gallery.key
 gallery-out: gallery-tool
