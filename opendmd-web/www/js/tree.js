@@ -216,6 +216,8 @@ export class Tree {
       const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: niceName(cat) };
       this.folders = [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)].map(f);
       for (const c of this.open) this.fill(c);
+      // (A search showing: a folder new since it gathered is listed too.)
+      if (this.q.trim()) this.gather();
       this.update();
     };
     const old = !this.folders.length && !checked.has('/gifs') && await kept('/gifs');

@@ -192,7 +192,7 @@ export function detail(box, path, onTag, ov, hbox) {
   if (!s) { clear(box); tags().then(() => detail(box, path, onTag, ov, hbox)).catch(() => {}); return; }
   const o = s.get(path) || { r: 0, t: [] }, fav = isFav(o);
   const heart = h('button.chip.heart' + (fav ? '.on' : ''), { id: 'lib-d-fav', 'data-path': path, 'aria-pressed': String(fav), title: fav ? 'A favourite: plays more often' : 'Make it a favourite: plays more often',
-    'aria-label': 'Favourite', onclick: () => { setFav([path], !fav, ov, s).then(() => detail(box, path, onTag, ov, hbox)); detail(box, path, onTag, ov, hbox); document.querySelector('#lib-d-fav')?.focus(); } },
+    'aria-label': 'Favourite', onclick: () => { setFav([path], !fav, ov, s).then((u) => u || detail(box, path, onTag, ov, hbox)); detail(box, path, onTag, ov, hbox); document.querySelector('#lib-d-fav')?.focus(); } },
   fav ? '♥' : '♡', h('span.w', ' Favourite'));
   const list = h('datalist', { id: 'lib-tag-list' }, offered(s).map((t) => h('option', { value: t })));
   const input = h('input', { type: 'text', id: 'lib-d-tag', placeholder: '+ Add tag', enterKeyHint: 'done', 'aria-label': 'Add a tag', maxLength: 24 });

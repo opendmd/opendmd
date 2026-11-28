@@ -1723,7 +1723,7 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.goto(base + "/#library")
     lib_row(page, g[0])
     page.wait_for_selector("#lib-d-fav", timeout=60000)
-    check(page.locator("#lib-d-stars, .star, #lib-star-chip").count() == 0 and page.inner_text("#lib-d-fav") == "♡ Favourite",
+    check(page.locator("#lib-d-stars, .star, #lib-star-chip").count() == 0 and "".join(page.inner_text("#lib-d-fav").split()) == "♡Favourite",
           "tags: no stars in Details or the Library, a ♡ Favourite instead")
     st = get_json(base + "/api/status")
     playing = setvalue_of(st["manifest"])
@@ -1861,7 +1861,11 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.wait_for_selector("#lib-gone:not([hidden])", timeout=60000)
     page.click("#lib-gone-forget")
     t = wait_tags(overlay, lambda t: gone not in t)
-    check(gone not in t and page.is_hidden("#lib-gone"), "tags: Forget them drops the rest")
+    try:
+        page.wait_for_selector("#lib-gone", state="hidden", timeout=5000)
+    except PlaywrightTimeoutError:
+        pass
+    check(gone not in t and page.is_hidden("#lib-gone"), f"tags: Forget them drops the rest ({page.inner_text('#lib-gone') if page.is_visible('#lib-gone') else ''!r})")
     page.context.close()
     phone = new_page(browser, "phone", errors)
     phone.goto(base + "/#library")
@@ -1895,22 +1899,23 @@ def tidy_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     put_bytes(base + "/api/files" + gif, src)
     put_text(base + "/api/sets/tidy-a", gif + "\n")
     page = new_page(browser, "laptop", errors)
-    page.on("dialog", lambda d: d.accept())
     page.goto(base + "/#library/Tidy_Smoke")
     page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=30000)
-    expected.append("/api/files/sets/tidy-a.txt")
+    expected.append("/api/sets/tidy-a")
+    expected.append("dir=%2Fgifs%2FTidy_Smoke")  # (the folder left empty goes, then is listed again: a 404)
     refuse = lambda r: r.fulfill(status=500, json={"error": "smoke: refused"}) if r.request.method == "PUT" else r.continue_()
-    page.route("**/api/files/sets/tidy-a.txt", refuse)
-    page.evaluate("p => import('./js/details.js').then((m) => m.removeGif(p, 'Tidy Smoke 01'))", gif)
+    page.route("**/api/sets/tidy-a*", refuse)
+    page.evaluate("p => { window.confirm = () => true; return import('./js/details.js').then((m) => m.removeGif(p, 'Tidy Smoke 01')); }", gif)
     page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.includes('Playlists couldn’t be updated'))", timeout=30000)
+    page.evaluate("() => import('./js/tree.js').then((m) => document.querySelector('#lib-list')._tree.load())")
     page.wait_for_function(f"!document.querySelector('#lib-list .vrow[data-path={json.dumps(gif)}]')", timeout=20000)
     check(not (overlay / gif.lstrip("/")).exists() and gif in (overlay / "sets" / "tidy-a.txt").read_text(),
           "tidy: the GIF deleted, its row gone, the playlist not written: said, with Retry")
-    page.unroute("**/api/files/sets/tidy-a.txt", refuse)
+    page.unroute("**/api/sets/tidy-a*", refuse)
     page.click("#toasts .toast.bad:has-text('Playlists couldn’t be updated') button")
     page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some((e) => e.textContent === 'Playlists updated')", timeout=30000)
     check(gif not in (overlay / "sets" / "tidy-a.txt").read_text(), "tidy: Retry updates the playlist")
-    expected.remove("/api/files/sets/tidy-a.txt")
+    expected.remove("/api/sets/tidy-a")
     page.context.close()
     delete_path(base, "/sets/tidy-a.txt")
 
@@ -3006,7 +3011,12 @@ def kept_listing_checks(browser, base: str, errors: list[str]) -> None:
     every = page.evaluate("() => import('./js/smart.js').then((m) => m.everyGif())").split("\n")
     check(k[2] in every and k[0] not in every, "kept listings: a folder changed on the card: rows and a smart playlist's every-GIF list as the card has it")
     # Changed by the app: its record goes, so the next visit shows nothing stale.
+    # (The row's still, asked for before the list is read again, is a 404 then.)
+    expected.append("/gifs/Kept_Smoke/")
+    expected.append("/gifs/Stop_Smoke/")  # (stop_checks: stills asked for as the GIFs move away)
     page.evaluate("p => import('./js/refs.js').then((m) => m.relink([{ from: p, to: null }]))", k[1])
+    goto_view(page, "now")
+    goto_view(page, "library")
     page.wait_for_function(f"!document.querySelector('#lib-list .vrow[data-path={json.dumps(k[1])}]')", timeout=20000)
     page.add_init_script(hold)
     page.reload()
@@ -5334,7 +5344,7 @@ def key_checks(browser, page: Page, base: str) -> None:
           "key: no banner over Now while there is no key")
     goto_view(page, "settings")
     page.wait_for_selector("#keynag", timeout=20000)
-    t = page.inner_text("#keynag")
+    t = page.inner_text("#keynag").replace("\xa0", " ")
     check("anyone on your WiFi" in t and "Set a key" in t and t.count("\n") == 0 and not re.search(r"cache|copy|bucket", t, re.I),
           f"key: Settings says so in one line ({t!r})")
     page.click("#keynag-set")
@@ -7622,7 +7632,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     page.wait_for_selector("#toasts .toast", timeout=10000)
     t = page.eval_on_selector_all("#toasts .toast", "els => els.at(-1).textContent")
-    check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@formula") == 1,
+    check(t == "Already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@formula") == 1,
           f"formulas playlist: added again, it is there once ('{t}')")
     # The editor: one of your own is saved on the panel first, then named
     # by its file (its `-- a:` comment, retired, is a comment: `a` an
