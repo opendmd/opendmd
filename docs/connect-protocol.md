@@ -502,7 +502,8 @@ characters. Its ASCII text is the HMAC key below. One window per secret:
 Sent by the panel only while watched: on change, at most one every 2 s on
 the classic, and one every 30 s. The events snapshot through a field mask,
 about 250 to 400 bytes: `now_playing {path, title, elapsed_ms, next,
-kept_s, seed, sent}`, `paused`, `brightness`, `max_brightness`, `set`,
+kept_s, seed, sent}` (`kept_s` `0` while what plays was played by hand and
+stays until something else plays, as `/api/status`; absent otherwise), `paused`, `brightness`, `max_brightness`, `set`,
 `context.state`, `transfer`, `fw`, `name`, `id`. Never heap, card or
 network internals. The server passes it to every attached controller and
 keeps none of it. Like an `ack`, status is not authenticated: a hostile

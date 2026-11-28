@@ -400,9 +400,8 @@ function mountDevice(el) {
     // (A GIF's; a Formula or a title card next says nothing.)
     const nx = np.next;
     nextEl.textContent = nx && !drawn(nx) ? ` · Next: ${label(app.wasm.parsePath(nx))}` : '';
-    const kept = np.kept_s, left = Math.ceil(Math.max(0, kept * 1000 - np.elapsed_ms) / 1000);
-    keptRow.hidden = kept == null;
-    keptText.textContent = kept == null ? '' : kept ? `Kept on the panel: ${(left / 60) | 0}:${String(left % 60).padStart(2, '0')} left` : 'Kept on the panel until you change it';
+    keptRow.hidden = np.kept_s == null;
+    keptText.textContent = keptRow.hidden ? '' : 'Kept on the panel until you change it';
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);

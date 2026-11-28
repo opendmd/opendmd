@@ -66,6 +66,9 @@ class Panel:
         self.brightness = 64
         self.paused = False
         self.path = "/gifs/Arcade/demo.gif"
+        # Played by hand (`play`, a sent GIF with `play`): kept on the panel
+        # until something else plays (`now_playing.kept_s` 0, as the firmware).
+        self.kept = False
         self.set = ""
         self.window: odc.Window | None = None
         self.watched = False
@@ -108,7 +111,8 @@ class Panel:
     def status(self) -> dict:
         return {
             "t": "status",
-            "now_playing": {"path": self.path, "title": self.path.rsplit("/", 1)[-1], "elapsed_ms": 0, "seed": None, "sent": None},
+            "now_playing": {"path": self.path, "title": self.path.rsplit("/", 1)[-1], "elapsed_ms": 0, "seed": None, "sent": None}
+            | ({"kept_s": 0} if self.kept else {}),
             "paused": self.paused,
             "brightness": self.brightness,
             "max_brightness": self.max_brightness,
@@ -332,7 +336,7 @@ class Panel:
         path = f"/gifs/Sent/{name}"
         await self.send(self.credit(x, name=name))
         if a["play"]:
-            self.path = path
+            self.path, self.kept = path, True
 
     def on_send(self, k: bytes, a: dict):
         """(ack result, credit to say) or raises Bad(code)."""
@@ -375,18 +379,18 @@ class Panel:
         self.log.append((k, n, c))
         r = None
         if c == "next":
-            self.path = "/gifs/Arcade/next.gif"
+            self.path, self.kept = "/gifs/Arcade/next.gif", False
         elif c == "prev":
-            self.path = "/gifs/Arcade/prev.gif"
+            self.path, self.kept = "/gifs/Arcade/prev.gif", False
         elif c == "pause":
             self.paused = not self.paused
             r = {"paused": self.paused}
         elif c == "play":
-            self.path = a["path"]
+            self.path, self.kept = a["path"], True
         elif c == "brightness":
             self.brightness = a["v"]
         elif c == "playlist":
-            self.set = a["set"]
+            self.set, self.kept = a["set"], False
         elif c == "playlists":
             # As the firmware answers: {sets, more}, the main list ("") not in it.
             r = {"sets": ["consoles", "arcade"], "more": False}

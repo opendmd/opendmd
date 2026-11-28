@@ -67,9 +67,12 @@ const KEY_GLOW: &str = "glow";
 /// The Formula look: a formula's `@formula?src=…` path (`""`: none). Its
 /// name, blend and amount are the formula's own `name` and `look` lines.
 const KEY_LOOK_FORMULA: &str = "look_fx";
-/// Keys earlier test builds kept beside it (the look's name, its
-/// `blend:amount`): never read, removed at the next save.
-const STALE_KEYS: [&str; 2] = ["look_fx_name", "look_mix"];
+/// Keys earlier builds kept (beside it, the look's name and its
+/// `blend:amount`; `formula_keep`): never read, removed at the next save.
+const STALE_KEYS: [&str; 3] = ["look_fx_name", "look_mix", KEY_FORMULA_KEEP_GONE];
+/// The old "Keep on the panel" setting: what is played by hand stays until
+/// something else plays. Erased at boot (and at each save) if present.
+const KEY_FORMULA_KEEP_GONE: &str = "formula_keep";
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
 /// The start-up show's Formula (`boot_formula`): a Formula's path as the
@@ -361,7 +364,11 @@ pub struct Config {
 
 impl Config {
     pub fn new(partition: EspNvsPartition<NvsDefault>) -> anyhow::Result<Self> {
-        let nvs = EspNvs::new(partition, NAMESPACE, true)?;
+        let mut nvs = EspNvs::new(partition, NAMESPACE, true)?;
+        // (A key not there is a lookup, no write.)
+        if nvs.contains(KEY_FORMULA_KEEP_GONE).unwrap_or(false) {
+            let _ = nvs.remove(KEY_FORMULA_KEEP_GONE);
+        }
         Ok(Config { nvs })
     }
 

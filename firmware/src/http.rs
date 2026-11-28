@@ -798,10 +798,6 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     if let Some(v) = patch.beta_updates {
         next.beta_updates = v;
     }
-    // `formula_keep` (from an older web app cached in a
-    // browser, or a saved settings file) is taken and ignored: whatever is
-    // played by hand stays until something else plays
-    // (`opendmd_core::hand_picked`).
     if let Some(v) = &patch.api_key {
         if !v.is_empty() && !opendmd_core::access::valid_key(v) {
             return Err(PatchErr::bad(&format!(
@@ -860,7 +856,8 @@ fn wifi_changes(s: &Settings, patch: &ConfigPatch) -> bool {
 }
 
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
-/// is left as it was.
+/// is left as it was, and a key not here is ignored (an older web app's
+/// `formula_keep`: what is played by hand stays until something else plays).
 #[derive(serde::Deserialize, Default)]
 pub struct ConfigPatch {
     pub(crate) wifi_ssid: Option<String>,
@@ -914,11 +911,6 @@ pub struct ConfigPatch {
     pub(crate) formula_arena: Option<bool>,
     /// "Get beta updates" (the web app's update feed); kept, nothing else.
     pub(crate) beta_updates: Option<bool>,
-    /// The web app's old setting, taken and ignored (any JSON value):
-    /// what is played by hand stays until something else plays. Not in
-    /// `GET`.
-    #[allow(dead_code)]
-    pub(crate) formula_keep: Option<serde::de::IgnoredAny>,
     /// WiFi at all: `on` or `off` (`Settings::network`), in effect at the
     /// next boot.
     pub(crate) network: Option<String>,
@@ -3112,8 +3104,8 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
 /// kept on the panel (`opendmd_core::hand_picked`): `0`, until something
 /// else plays; empty otherwise.
 fn kept_json(s: &Status) -> &'static str {
-    match s.kept {
-        Some(ordinal) if ordinal == s.ordinal => r#","kept_s":0"#,
+    match &s.kept {
+        Some(k) if k.on_screen(s.ordinal) => r#","kept_s":0"#,
         _ => "",
     }
 }

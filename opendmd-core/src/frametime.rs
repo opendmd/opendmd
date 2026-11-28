@@ -26,10 +26,12 @@ pub enum Cause {
     Log,
     Other,
     Wake,
+    /// Settings written to flash (`save_hold`): the flash cache stops.
+    Settings,
 }
 
 /// The names, in [`Cause`] order (heartbeat and JSON keys).
-pub const CAUSES: [&str; 8] = [
+pub const CAUSES: [&str; 9] = [
     "open",
     "read",
     "decode",
@@ -38,6 +40,7 @@ pub const CAUSES: [&str; 8] = [
     "log",
     "other",
     "wake",
+    "settings",
 ];
 
 /// Lateness buckets, ms: under 5, 20, 50, 100, 250, 500, and the rest.
@@ -87,6 +90,8 @@ pub struct Phases {
     /// The tick's own time (decode or composite).
     pub decode: u32,
     pub blit: u32,
+    /// Settings written to flash after the blit (`save_hold`).
+    pub settings: u32,
     pub transitioning: bool,
 }
 
@@ -106,6 +111,7 @@ impl Phases {
             (Cause::Log, self.log),
             (Cause::Other, self.other),
             (Cause::Wake, self.wake),
+            (Cause::Settings, self.settings),
         ]
         .into_iter()
         .fold(
@@ -120,7 +126,7 @@ impl Phases {
 /// (≥ [`HEADLINE_MS`], steady or at a switch), since boot.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Misses {
-    pub by_cause: [u32; 8],
+    pub by_cause: [u32; 9],
     pub late: [u32; 7],
     pub steady: u32,
     pub switch: u32,
@@ -252,5 +258,9 @@ mod tests {
         };
         assert_eq!(p.cause(), Cause::Transition);
         assert_eq!(Phases::default().cause(), Cause::Other);
+        // A settings write after the blit, longer than the rest: its own cause.
+        let p = Phases { decode: 3_000, blit: 500, settings: 12_000, ..Phases::default() };
+        assert_eq!(p.cause(), Cause::Settings);
+        assert_eq!(CAUSES[Cause::Settings as usize], "settings");
     }
 }

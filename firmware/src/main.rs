@@ -837,6 +837,8 @@ fn main() -> Result<()> {
     // and a frame), and whether a Formula is what plays.
     let mut unsaved = false;
     let mut save_hold = opendmd_core::save_hold::SaveHold::default();
+    // When the last frame went to the panel (`save_hold::Display`).
+    let mut last_frame_at: Option<Duration> = None;
     // Remote control's last unsaved brightness (`Command::RemoteConfig`).
     #[cfg(feature = "connect")]
     let mut remote_dirty: Option<Instant> = None;
@@ -1025,7 +1027,14 @@ fn main() -> Result<()> {
         // (a GIF, the panel dark), or after a frame once they have waited a
         // minute (below, at the blit).
         save_hold.note(unsaved, epoch.elapsed());
-        if save_hold.due(epoch.elapsed(), !formula_on || sched.off(), false) {
+        let display = opendmd_core::save_hold::Display {
+            formula: formula_on,
+            dark: sched.off(),
+            paused: engine.as_ref().is_some_and(|e| e.is_paused()),
+            engine: engine.is_some(),
+            last_frame: last_frame_at,
+        };
+        if save_hold.due(epoch.elapsed(), display, false) {
             flush_settings(&mut nvs_config, &settings, &mut unsaved);
             save_hold.written();
         }
@@ -1063,10 +1072,16 @@ fn main() -> Result<()> {
                         continue;
                     }
                     let now = epoch.elapsed();
+                    // What was played by hand stays through a pause (`keep`):
+                    // held, not let go.
+                    let kept = {
+                        let s = status.lock().unwrap();
+                        s.kept.as_ref().is_some_and(|k| k.on_screen(s.ordinal))
+                    };
                     let paused = match engine.as_mut() {
                         Some(e) => {
                             e.toggle_pause(now);
-                            if e.is_paused() {
+                            if e.is_paused() && !kept {
                                 // Let the file go — its decoder is a GIF's
                                 // ~54 KB, which the cache builder (full
                                 // speed while paused) and any download want
@@ -1184,7 +1199,7 @@ fn main() -> Result<()> {
                             }
                             let ordinal = engine.as_ref().and_then(|e| e.now_playing()).map(|p| p.ordinal);
                             let mut s = status.lock().unwrap();
-                            s.kept = keep.and(ordinal);
+                            s.kept = keep.and(ordinal).map(|o| opendmd_core::keep::Kept { ordinal: o, path: path.clone() });
                             // The sent one, held (just now, or still from
                             // its last send): which bytes this start plays.
                             if opendmd_core::synth::is_sent(&path) {
@@ -1660,8 +1675,10 @@ fn main() -> Result<()> {
                         });
                     // The GIF on screen carries on (starting over), so a
                     // favourite tapped on Now doesn't jump the panel to
-                    // another one.
-                    if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
+                    // another one. (One kept on screen: the rebuild played
+                    // it again, kept: `carry_kept`.)
+                    let carried = status.lock().unwrap().carry.is_some();
+                    if active && outcome.is_ok() && !carried && !on_screen.is_empty() && !on_screen.starts_with('@') {
                         if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
                             log::warn!("overrides: {on_screen} did not carry on: {e:?}");
                         }
@@ -2367,6 +2384,8 @@ fn main() -> Result<()> {
         // A rebuilt engine's in-order place (`resume`), before its first
         // tick: here, the loop's own depth, not the rebuild's.
         resume_engine(eng);
+        // What was kept before a rebuild of this playlist, kept again.
+        carry_kept(eng, &mut canvas, epoch.elapsed(), &status);
         let outcome = if off {
             TickOutcome::Idle
         } else {
@@ -2449,17 +2468,29 @@ fn main() -> Result<()> {
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
                     .saturating_sub(uclock::span(tick_start, blit_start));
                 let blit_px = panel.blit_within(pic, Budget::frame(left_us));
-                // Settings held a minute while a Formula plays: written now,
-                // with the frame just sent on screen (`SaveHold`).
-                if unsaved && save_hold.due(epoch.elapsed(), false, true) {
-                    flush_settings(&mut nvs_config, &settings, &mut unsaved);
-                    save_hold.written();
-                }
-                #[cfg(feature = "psi-probe")]
-                let fx = opendmd_core::synth::is_formula(&playing.path);
                 // The blit's own time: a wait for the scan (`panel_sync`,
                 // inside the frame's slack) is not part of it.
                 let blit_us = uclock::since(blit_start).saturating_sub(panel.last_wait_us());
+                last_frame_at = Some(epoch.elapsed());
+                // Settings held a minute while a Formula plays: written now,
+                // with the frame just sent on screen (`save_hold`); a frame
+                // late for it counts as `settings`.
+                let mut settings_us = 0;
+                let display = opendmd_core::save_hold::Display {
+                    formula: formula_on,
+                    dark: off,
+                    paused: false,
+                    engine: true,
+                    last_frame: last_frame_at,
+                };
+                if unsaved && save_hold.due(epoch.elapsed(), display, true) {
+                    let t = uclock::now_us();
+                    flush_settings(&mut nvs_config, &settings, &mut unsaved);
+                    save_hold.written();
+                    settings_us = uclock::since(t);
+                }
+                #[cfg(feature = "psi-probe")]
+                let fx = opendmd_core::synth::is_formula(&playing.path);
                 let free = free_heap();
                 floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);
@@ -2585,6 +2616,7 @@ fn main() -> Result<()> {
                             decode: tick_us.saturating_sub(open_us + read_us),
                             // Glow steps between frames count as blit.
                             blit: blit_us + glow_between,
+                            settings: settings_us,
                             transitioning,
                         };
                         let when = frametime::when(
@@ -2597,7 +2629,7 @@ fn main() -> Result<()> {
                         misslog::note(misslog::Miss {
                             late_ms: late,
                             cause: phases.cause() as usize,
-                            phases: [phases.open, phases.read, phases.decode, phases.blit, phases.log, phases.other, phases.wake],
+                            phases: [phases.open, phases.read, phases.decode, phases.blit, phases.log, phases.other, phases.wake, phases.settings],
                             transitioning,
                             advance_us,
                             step_us,
@@ -2756,8 +2788,9 @@ fn main() -> Result<()> {
             s.misses = misses;
             if let Some(playing) = new_file {
                 s.recent.started(&playing.path);
-                // Any other start ends a kept Formula's report.
-                if s.kept.is_some_and(|o| o != playing.ordinal) {
+                // Any other start ends what was kept (`opendmd_core::keep`).
+                use opendmd_core::keep::{Event, Fate};
+                if s.kept.as_ref().is_some_and(|k| k.fate(Event::Started { ordinal: playing.ordinal }) == Fate::Ends) {
                     s.kept = None;
                 }
                 s.ordinal = playing.ordinal;
@@ -2907,6 +2940,9 @@ fn rebuild_context(
     retire(engine, canvas);
     {
         let mut s = status.lock().unwrap();
+        // Follow RePlayOS's playlist: another one, so what was kept ends.
+        s.kept = None;
+        s.carry = None;
         s.manifest = ctx.manifest.clone();
         s.index_state = "building";
     }
@@ -3226,13 +3262,20 @@ fn apply_schedule(
         if !was_off {
             panel.clear();
             panel.set_brightness(0);
+            // What was played by hand ends for the night (`keep`): in the
+            // morning the playlist plays, whatever `auto_prepare` says.
+            let kept = {
+                let mut s = status.lock().unwrap();
+                let ordinal = s.ordinal;
+                s.kept.take().is_some_and(|k| k.on_screen(ordinal))
+            };
             if let Some(e) = engine.as_mut() {
                 e.pause(now);
                 // The cache builder works at full speed while the panel is
                 // dark, and wants the playing file's heap (a GIF's is ~54
                 // KB): let the file go. The next one opens when the panel
                 // comes back.
-                if settings.auto_prepare != nvs_config::AutoPrepare::Off {
+                if kept || settings.auto_prepare != nvs_config::AutoPrepare::Off {
                     e.drop_current(canvas);
                 }
             }
@@ -3502,6 +3545,27 @@ fn engine_over(
     engine
 }
 
+/// Play what a rebuild of the same playlist let go of while it was kept
+/// (`Status::carry`, `opendmd_core::keep`), kept again: a new start on the
+/// new engine, before its first tick.
+#[inline(never)]
+fn carry_kept(eng: &mut Engine, canvas: &mut Canvas, now: Duration, status: &Mutex<Status>) {
+    let Some(path) = status.lock().unwrap().carry.take() else {
+        return;
+    };
+    if opendmd_core::synth::is_formula(&path) || opendmd_core::synth::formula_file(&path).is_some() {
+        room_for_formula(Some(&mut *eng), canvas);
+    }
+    match eng.play_by_hand(&path, now) {
+        Ok(()) => {
+            let ordinal = eng.now_playing().map(|p| p.ordinal);
+            status.lock().unwrap().kept = ordinal.map(|o| opendmd_core::keep::Kept { ordinal: o, path: path.clone() });
+            log::info!("keep: {path} kept across the rebuild");
+        }
+        Err(e) => log::warn!("keep: {path} could not be played again after the rebuild ({e})"),
+    }
+}
+
 /// Continue a rebuilt engine's in-order playlist where it left off, if it
 /// has a place (`resume::pending`): a look at the mark's index and a few
 /// either side (`Engine::resume_at`), at most 17 catalog reads, once.
@@ -3760,20 +3824,34 @@ fn rebuild(
     let path = settings.manifest_path();
     {
         let mut s = status.lock().unwrap();
+        // What was kept on screen: played again, kept, on the rebuilt
+        // engine if this is the same playlist (an edit, a reindex, a
+        // filter, an override); another playlist ends it (`keep`).
+        let same = files::same_card_path(&s.manifest, &path);
+        s.carry = match s.kept.take() {
+            Some(k) if k.on_screen(s.ordinal) => (k.fate(opendmd_core::keep::Event::Rebuild { same_playlist: same })
+                == opendmd_core::keep::Fate::PlayAgain)
+                .then_some(k.path),
+            _ => None,
+        };
         s.manifest = path.clone();
         s.index_state = "building";
     }
     let started = Instant::now();
     fatidx::catalog_reopening();
     let built = open_catalog(&path, &build_filter(settings), force);
-    finish_build(
+    let outcome = finish_build(
         engine,
         settings,
         &path,
         built,
         started.elapsed().as_millis() as u64,
         status,
-    )
+    );
+    if outcome.is_err() {
+        status.lock().unwrap().carry = None;
+    }
+    outcome
 }
 
 /// An engine over the catalog `open_catalog` gave for `path` (here, or on

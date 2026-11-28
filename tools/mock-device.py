@@ -2349,7 +2349,7 @@ class Player:
         # As the firmware counts them (opendmd-core frametime): every late
         # frame by cause and lateness; the headline only from 5 ms, steady
         # or at a GIF change.
-        self.miss_cause = dict.fromkeys(["open", "read", "decode", "transition", "blit", "log", "other", "wake"], 0)
+        self.miss_cause = dict.fromkeys(["open", "read", "decode", "transition", "blit", "log", "other", "wake", "settings"], 0)
         self.miss_late = dict.fromkeys(["<5", "<20", "<50", "<100", "<250", "<500", ">=500"], 0)
         self.miss_steady = self.miss_switch = self.worst_steady_ms = 0
         self.manifest = MANIFEST_REL

@@ -261,6 +261,11 @@ async def main():
         ok(r and r.get("r") == {"paused": True}, "pause: ack carries r.paused")
         r = await a.command("play", {"path": "@formula:fire"})
         ok(r and r.get("ok") and panel.path == "@formula:fire", "play a bundled Formula")
+        st = await a.until("status", lambda m: (m.get("now_playing") or {}).get("kept_s") == 0)
+        ok(st is not None, "status after a play: now_playing.kept_s 0 (kept until changed)")
+        r = await a.command("next")
+        st = await a.until("status", lambda m: "kept_s" not in (m.get("now_playing") or {}))
+        ok(r and r.get("ok") and st is not None, "next: the keep ends (no kept_s), back to the playlist")
         r = await a.command("playlists")
         ok(r and isinstance((r.get("r") or {}).get("sets"), list) and (r.get("r") or {}).get("more") is False, "playlists: {sets, more} in r")
         panel.formulas_every = 0

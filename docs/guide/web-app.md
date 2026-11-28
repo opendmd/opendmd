@@ -254,8 +254,8 @@ tune how it plays in that playlist. On a phone, long-press it in a
 playlist.
 
 - **Play less often** plays it less.
-- **Play longer or loop…** keeps it on screen twice as long or for a
-  number of seconds, or plays it a set number of times.
+- **Play longer or loop…** keeps it on screen twice as long (twice as many
+  loops) or for a number of seconds, or plays it a set number of times.
 
 These are per playlist. A favourite (the heart on Now, **♡ Favourite** in the
 Library) is a tag for the whole card that also plays the GIF more often in
@@ -293,7 +293,10 @@ the power starts it from the top again. A GIF or Formula you play
 yourself (Play now, a Recently played one, Replay, Show on panel, Remote
 control) stays, looping, until you skip it, play something else or go back
 to the playlist. Now says **Kept on the panel until you change it**, with
-**Back to the playlist**.
+**Back to the playlist**. It stays through a pause, a favourite, and an
+edit of the playlist that's playing. Choosing another playlist ends it, and
+so does the panel turning off for the night: in the morning the playlist
+plays.
 
 ### Panel
 

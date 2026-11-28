@@ -16,16 +16,21 @@ export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV });
 // A `loop forever` Formula (a bundled one's source from formulas.json, one
 // of yours read from the card): it has no loop to count, so "Loop N times"
 // does nothing for it (the player leaves `loops` out). False when unsure.
+// One answer per Formula for the page's life (a card file read once).
 let bundled;
-async function endless(path) {
-  if (!isFormula(path)) return false;
+const endlessOf = new Map();
+function endless(path) {
+  if (!isFormula(path)) return Promise.resolve(false);
   const p = path.split('?')[0];
-  try {
-    const src = p.startsWith('@formula:')
-      ? (await (bundled ??= fetch('formulas.json').then((r) => r.json()))).find((f) => f.stem === p.slice(9))?.src
-      : p.startsWith('/') && await app.src.readText(p);
-    return /^[ \t]*loop[ \t]+forever\b/m.test(src || '');
-  } catch { bundled = null; return false; }
+  if (!endlessOf.has(p)) endlessOf.set(p, (async () => {
+    try {
+      const src = p.startsWith('@formula:')
+        ? (await (bundled ??= fetch('formulas.json').then((r) => r.json()))).find((f) => f.stem === p.slice(9))?.src
+        : p.startsWith('/') && await app.src.readText(p);
+      return /^[ \t]*loop[ \t]+forever\b/m.test(src || '');
+    } catch { bundled = null; endlessOf.delete(p); return false; }
+  })());
+  return endlessOf.get(p);
 }
 
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';

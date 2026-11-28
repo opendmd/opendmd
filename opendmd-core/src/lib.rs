@@ -41,6 +41,7 @@ pub mod http_client;
 pub mod improv;
 pub mod index;
 pub mod inputs;
+pub mod keep;
 pub mod layout;
 pub mod logtail;
 pub mod look;
