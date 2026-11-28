@@ -18,9 +18,9 @@ smooth
 -- storms: lightning, behind the towers:
 -- the sky and the far row flicker a cold blue, the near towers stand
 -- black against them, and most strikes show their bolt, forked, coming
--- down on a roof. The Rain control brings rain with it, in long slanted
--- streaks, in showers that swell and ease. Each play starts elsewhere,
--- in another city.
+-- down on a roof. The Rain control brings rain with it, in great
+-- sheets that sweep across the city, near and far, in showers that swell
+-- and ease. Each play starts elsewhere, in another city.
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
@@ -33,22 +33,32 @@ palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   glass #5878a8, red #ff2030, violet #a040ff, magenta #ff40ff,
   pink #ff2a9a, cyan #20f0ff, white #fff
 
--- The same colours, in the same places, as lightning lights them: the
--- sky's ramp a cold blue, the far row lit from behind, the wet asphalt
--- catching a little of it. The near towers and the street stay as they
--- are, and nothing below the horizon but the wet asphalt changes: the
--- flash keeps to the sky.
-palette struck = #000, #2a3a78, #34448a, #404e98, #4e58a4, #6060ac, #8a5cac,
-  #b060a8, #6c70c4, #08060e, #90e8ff, #120c1c, #1a1224, #0e0a16, #130e1c,
-  #2c2048, #382a54, #8090b0, #e0207a, #6878a8, #303850, #5878a8, #ff2030,
-  #a040ff, #ff40ff, #ff2a9a, #20f0ff, #fff
+-- The colours the pixels read, as 32 entries: the city's, each where
+-- the colour line finds it, and in seven of the entries between them
+-- (which only the painted neon uses in `city`) the rain's: first a near
+-- streak (the colour a pixel gets when its number is past the last the
+-- colour line knows), then a far streak over the sky, over the far row
+-- and over a near tower, and a middle one over the sky, over the far row
+-- and over the dark of the towers and the street
+palette drenched = #5a6490, #05020c, #0a0418, #140626, #220a36, #380e44, #1e2040, #6a1658, #a02870, #3a1450, #08060e, #90e8ff, #4a3e6c, #120c1c, #1a1224, #0e0a16, #130e1c, #2a0e30, #34123a, #14142a, #8090b0, #e0207a, #30325a, #5c5286, #2a2e4a, #000, #000, #000, #000, #000, #000, #000
 
--- The weather's own colours, all painted: the rain as it is and as a
--- flash lights it; the bolt, then its afterimage fading; and the lights
+-- The same entries as a downpour has them: the sky lifted a little, the
+-- far row faded towards it, the dark of the towers a little grey, the
+-- lit windows dimmer, the pavement and the asphalt shining
+palette soaked = #5a6490, #080616, #0e0a22, #181030, #24143c, #361a46, #1e2040, #5a2056, #863070, #3a2c54, #0c0c18, #80c8e4, #4a3e6c, #181226, #221830, #12101e, #181426, #38184a, #462056, #14142a, #8090b0, #e0207a, #30325a, #5c5286, #2a2e4a, #000, #000, #000, #000, #000, #000, #000
+
+-- The same entries as lightning lights them: the sky's ramp a cold blue,
+-- the far row lit from behind, the wet asphalt catching a little of it;
+-- the near towers and the street stay as they are, and the rain in
+-- front of the sky turns pale
+palette struck = #7078a8, #2a3a78, #34448a, #404e98, #4e58a4, #6060ac, #5064ac, #8a5cac, #b060a8, #6c70c4, #08060e, #90e8ff, #8088d0, #120c1c, #1a1224, #0e0a16, #130e1c, #2c2048, #382a54, #141a30, #8090b0, #e0207a, #6478bc, #8e96de, #283048, #000, #000, #000, #000, #000, #000, #000
+
+-- The weather's own colours, painted: the bolt, then its afterimage
+-- fading; and the lights
 -- of what flies over the city: two lanes of traffic (each way its own
 -- colour, the far lane dimmer), one that passes close, and an aircraft's
 -- beacon
-palette storm = rain #6878a8, rainLit #a8b8ec, bolt #fff, #8c96c4, #474e78,
+palette storm = bolt #fff, #8c96c4, #474e78,
   fly #b07828, #a01c30, #ffc050, #ff3040, #ffe8b0, #ff5060, beacon #b01828
 
 -- Across the road, left to right, in 30ths of its half width (the middle
@@ -95,19 +105,15 @@ firstTower = floor(nearShift/8)
 towerLeft = .9999 - nearShift
 
 -- Showers come and go (a drizzle at least, up to a downpour), wetting
--- the road whether or not rain is drawn. `wet` is how much of the rain
--- falls now (none with the Rain control at 0) and `reach` how long its
--- streaks are. It falls at one slant, a column across for every two rows
--- down, its height 4 times a second: how many falls so far, how far into
--- this one, and how far across it has drifted (in turns of the 150
--- columns it wraps over).
+-- the road. `wet` is how much of the rain falls now (none with the Rain
+-- control at 0); `rained` is the seconds it has rained, counted off the
+-- neon's clock.
 shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
 wet = rain * (.4 + shower*.6)
-reach = 3 + shower*4
 fall = t*4
 falls = floor(fall)%1280
 fallPart = frac(fall)
-drift = frac(t*.6133)
+rained = (falls + fallPart) * .25
 
 -- The neon's colour changes, 1.5 a second, and the holo screen's, 3 a
 -- second, counted off the rain's falls
@@ -139,8 +145,7 @@ glow = (since >= 0) * (.6 + hash(slot, seed + 4)*.4) * (mix(flicker[tick], flick
 
 -- The scene's colours this frame: the city's, towards the struck ones by
 -- the glow (worked out once a frame: the pixels pay nothing for it)
-palette lit = tween(city, struck, glow)
-lightUp = (glow > .3) * storm.step
+palette lit = tween(tween(drenched, soaked, wet*1.4), struck, glow)
 
 -- The bolt comes down on a near tower in view: of three picked across
 -- the panel, the one with the lowest roof (`roof`, its row), and only
@@ -157,21 +162,38 @@ roof = max(max(roofA, roofB), roofOf(towerC))
 target = roofA == roof ? towerA : (roofB == roof ? towerB : towerC)
 forked = since >= 0 and since < .44 and roof > 5
 
--- Six of the rain's streaks, from number `first`: long and slanted, the
--- longer the harder it rains, spread across and down, each falling along
--- its slant
-fn sheet(first) {
-  for k < 6 {
-    dropY = frac(fallPart + (first + k)*.7549)*46 - 8
-    dropX = frac(drift + (first + k)*.5698)*150 - 22
-    line(dropX, dropY, dropX + reach/2, dropY + reach, pal(storm, storm.rain + lightUp))
-  }
-}
-
 draw {
+  -- The rain, as ink: one field of streaks over the whole scene, 92
+  -- at most, from far to near by number (`deep`, 0 to 1): the far ones
+  -- fine, short, dim and slow, in front of the towers but no lower than
+  -- the horizon; the near ones long, bright and fast; three brightnesses
+  -- in all. Each is a thin line along the wind's slant
+  -- (`slant`: columns across for each row down, gusting), of a length of
+  -- its own, and falls from above the panel at a column of its own each
+  -- fall. It always rains thinly; and masses of denser rain drift
+  -- through (`thick`: 0 between them to 1 in the middle of one,
+  -- feathered both sides), the nearest four times as fast as the
+  -- furthest, sliding with the skyline as the road bends. A streak falls
+  -- if the rain was dense enough where it came in at the top, so none
+  -- appears in mid-air.
+  slant = .1 + noise(driven, 8, 0)*.25
+  if wet > 0 {
+    for k < 92 {
+      deep = k*0.010870
+      at = rained*2.4 + k*.618
+      into = at - floor(at)
+      luck = hash(floor(at), k)
+      odd = frac(luck*64)
+      long = (1.5 + deep*deep*13) * (.7 + odd)
+      dropY = into*(20 + deep*42) - 3
+      pace = 1 + deep*3
+      thick = max(1 - abs(frac((luck*156 - rained*9*pace + into*3.75*pace + heading*-90) * .005) - .5)*4, 0)
+      line(luck*156 + (dropY*slant - 14 - slant*16), dropY, luck*156 + (dropY*slant - 14 - slant*16) - long*slant, dropY - long, (odd < (.25 + thick) * (wet*3.3 - deep*1.1)) * (.25 + deep*.75))
+    }
+  }
+
   -- Painted, back to front, over the pixels: the bolt, the traffic, the
-  -- rain, the car, then the neon and the holo screen, which nothing
-  -- covers.
+  -- car, then the neon and the holo screen, which nothing covers.
 
   -- The bolt: from the top of the panel down to just over the roof, in
   -- three jagged strokes and a short fork off the first bend. It keeps to
@@ -194,8 +216,6 @@ draw {
   -- in front of the towers, now and then: its row and its way are each
   -- pass's own, and it comes in at one edge and leaves at the other
   -- (`zipX` is its head; it is off the panel most of the time).
-  -- `rained` is the seconds gone by, counted off the rain's clock.
-  rained = (falls + fallPart) * .25
   zipAt = rained*.06 + .5
   zipLuck = hash(floor(zipAt), seed + 9)
   zipWay = zipLuck < .5 ? 1 : -1
@@ -233,19 +253,6 @@ draw {
 
   -- The one that passes close, with a short trail
   line(zipX, zipY, zipX - zipWay*2, zipY, pal(storm, storm.fly + (4.5 - zipWay*.5)*storm.step))
-
-  -- Rain, when there is any: three sheets of six streaks, one more as
-  -- the control and the shower bring it (a sheet not falling costs
-  -- nothing); a flash lights them
-  if wet > 0 {
-    sheet(0)
-  }
-  if wet > .3 {
-    sheet(6)
-  }
-  if wet > .6 {
-    sheet(12)
-  }
 
   -- The car
   spr(car, 1 - carLeft, 24)
@@ -318,8 +325,23 @@ scene skyline when 1 - below {
 scene street when below {
   road = across[px*scale + start]
 }
-pal(lit, pick(road + towers,
-    below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
-    below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
-    below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
-    below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt))
+
+-- The rain is ink (see the draw block): 1 of 3 is a far streak, 2 a
+-- middle one, 3 a near one. It is read only while it rains.
+scene rainy when wet > 0 {
+  veil = ink(3)*5
+}
+fn shown() {
+  pal(lit, pick(road + towers + veil,
+      below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
+      below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
+      below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
+      below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt,
+      below ? city.pavement + stripe*city.step : .1935,
+      below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : .3871,
+      below ? (stripe ? city.lane : city.asphalt) : .6129,
+      below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt,
+      below ? .7742 : .7097, below ? .7742 : .7419, below ? (stripe ? city.lane : city.asphalt) : .7742,
+      below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt))
+}
+shown()
