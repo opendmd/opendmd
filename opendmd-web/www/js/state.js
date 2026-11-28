@@ -231,6 +231,22 @@ export const app = {
     }
   },
 
+  // Play a playlist ({value, label}: PUT /api/config {set}): the display
+  // reads it again, which takes a few seconds; the panel holds its frame
+  // meanwhile. The Playlists rows' Play, Now's Playing from, the editor's
+  // Save & play. -> true once it plays.
+  async playPlaylist(p) {
+    if (this.building) { toast('The display is still reading a playlist: try again in a moment', 'bad'); return false; }
+    try {
+      toast(`Switching to “${p.label}”…`);
+      const r = await this.src.putConfig({ set: p.value });
+      await this.refreshStatus();
+      await this.refreshConfig();
+      toast(`Playing “${p.label}” · ${(r.entries ?? this.status?.entries ?? 0).toLocaleString()} GIFs`, 'ok');
+      return true;
+    } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : `Couldn’t play “${p.label}”: ${e.message}`, 'bad'); return false; }
+  },
+
   go(view) { location.hash = '#' + view; },
 
   // The one status scheduler. A view asks for the status every `ms` while it

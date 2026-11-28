@@ -16,7 +16,7 @@ import { app, playlistLabel, platName } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
-import { Overrides, moreButton, fav } from './overrides.js';
+import { Overrides, moreButton, fav, actions } from './overrides.js';
 import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
@@ -107,6 +107,26 @@ function recentCard(prev, pick, fb) {
   return card;
 }
 
+// Playing from: the playlist in play, and a menu of the others to switch to
+// (app.playPlaylist). Not while the display is still reading one.
+function fromLine() {
+  const b = h('button.sm', { id: 'now-from', 'aria-haspopup': 'menu', onclick: pick });
+  const el = h('div.row.from', { id: 'now-from-line' }, h('span.muted', 'Playing from'), b);
+  async function pick() {
+    const lists = await app.playlists().catch(() => null);
+    if (!lists) { toast('Panel not reachable', 'bad'); return; }
+    const cur = app.activePath;
+    actions(b, 'now-from-menu', lists.map((p) => [{ 'data-path': p.path }, [h('span.ck', p.path === cur ? '✓' : ''), p.label],
+      () => p.path !== cur && app.playPlaylist(p), '', app.building]), 'Play a playlist');
+  }
+  el.set = (s) => {
+    const m = s?.manifest?.replace(/^\/sdcard/, '');
+    el.hidden = !m;
+    b.textContent = (m ? playlistLabel(m) : '') + (s?.index_state === 'building' ? ' · switching…' : '') + ' ▾';
+  };
+  return el;
+}
+
 export async function mount(el) {
   return app.device ? mountDevice(el) : mountLocal(el);
 }
@@ -135,6 +155,7 @@ function mountDevice(el) {
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
   const ed = editLine();
+  const from = fromLine();
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
   const conn = h('span.dot', { id: 'now-conn' });
@@ -155,6 +176,7 @@ function mountDevice(el) {
     h('div.card', canvas, cap, sdLine,
       h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, nextEl, ' ', conn), meta, ed, keptRow),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
+      from,
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
     lookControls(drift));
@@ -366,6 +388,7 @@ function mountDevice(el) {
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);
+    from.set(s);
     ed.set(np.path, title.textContent);
     const b = bannerFor(s, () => soonPoll(300));
     banner.hidden = !b;

@@ -51,6 +51,9 @@ export async function mount(el) {
       return [p, n, h('div' + (ed() && p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
         h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
           p.label, !p.value && h('span.tag', 'Default'), sp && h('span.tag.smart', { title: 'Built from a search' }, 'Smart'), isActive && h('span.tag.act', 'Playing'), n),
+        // ▶: play it (the one playing says so instead).
+        app.device && h('button.play', { 'data-do': 'play', title: isActive ? 'Playing now' : `Play “${p.label}”`, 'aria-label': isActive ? `“${p.label}” is playing` : `Play “${p.label}”`,
+          disabled: isActive || app.building, onclick: () => activate(p) }, '▶\uFE0E'),
         h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
           sp && [{ 'data-do': 'refresh' }, 'Refresh', () => refreshOne(p)],
@@ -126,17 +129,7 @@ export async function mount(el) {
     } catch (e) { toast(`${p.label}: ${e.message}`, 'bad'); }
   }
 
-  async function activate(p) {
-    if (app.building) { toast('the display is still reading a playlist; try again in a moment', 'bad'); return; }
-    const set = p.value, n = p.label;
-    try {
-      toast(`switching to “${n}”…`);
-      const r = await app.src.putConfig({ set });
-      await app.refreshStatus();
-      await app.refreshConfig();
-      toast(`Playing “${n}” · ${(r.entries ?? app.status?.entries ?? 0).toLocaleString()} GIFs`, 'ok');
-    } catch (e) { toast('play: ' + e.message, 'bad'); }
-  }
+  const activate = (p) => app.playPlaylist(p);
 
   async function del(p) {
     const path = p.path, set = p.value;
