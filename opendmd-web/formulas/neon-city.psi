@@ -306,13 +306,19 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 
 -- What each pixel shows: below the horizon, what is across the road
 -- there; above it, the towers: 0 sky, 1 the far row, 2 the near row, 3 a
--- lit window. Each number's colour is the street's below the horizon
--- (the asphalt wet near the horizon, where it shows the haze) and the
--- sky's above it; what is painted goes over it (the road's cyan lines
--- are the window's colour). The colours are the city's as the lightning
--- has them this frame.
-towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
-pal(lit, pick(across[px*scale + start] + towers,
+-- lit window (each worked out only on its own rows: the towers above
+-- the horizon, the road below it). Each number's colour is the street's
+-- below the horizon (the asphalt wet near the horizon, where it shows
+-- the haze) and the sky's above it; what is painted goes over it (the
+-- road's cyan lines are the window's colour). The colours are the city's
+-- as the lightning has them this frame.
+scene skyline when 1 - below {
+  towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
+}
+scene street when below {
+  road = across[px*scale + start]
+}
+pal(lit, pick(road + towers,
     below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
     below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
     below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
