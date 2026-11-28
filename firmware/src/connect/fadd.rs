@@ -2,10 +2,13 @@
 //! protocol 5.7): the card's half of `opendmd_core::connect::fadd`. Built
 //! only with `connect-formula-add` (test images: never a release).
 //!
-//! **Not reached yet.** Until the panel checks the gallery's signature on
-//! `formula-add` before any card access (signed-gallery step 4), the core's
-//! parser refuses every add and part (`fadd::TAKEN` is false): nothing here
-//! runs, and no program arrives by remote at all.
+//! **Only signed Formulas.** [`Client::formula_add`] and the landing take
+//! the [`Signed`] witness only `gallery_sig::check` makes (the core's
+//! parser, before any card access), and the core holds an add only with a
+//! witness over exactly its bytes. `formula-add` carries no signature yet
+//! (the signed-gallery design's step 4), so the parser refuses every add,
+//! nothing here runs past a part's first check (no add held:
+//! `not-allowed`), and no program arrives by remote at all.
 //!
 //! - **Before any card read:** the add's own rate, the same add signed
 //!   again (no card read at all), another key's add under way, the day's
@@ -35,7 +38,7 @@
 
 use super::client::{core_now, Client};
 use crate::config;
-use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Tally};
+use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Signed, Tally};
 use opendmd_core::connect::keys::KeyId;
 use opendmd_core::connect::proto::Refusal;
 use std::io::{Read, Write};
@@ -229,7 +232,7 @@ impl Client {
 
     #[optimize(size)]
     #[inline(never)]
-    pub(super) fn formula_add(&mut self, k: KeyId, args: AddArgs) -> Done {
+    pub(super) fn formula_add(&mut self, k: KeyId, args: AddArgs, signed: Signed) -> Done {
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
@@ -246,8 +249,9 @@ impl Client {
         match self.adds.pre(k, &args, now, today())? {
             Pre::Landed { stem } => return Ok(done(&stem)),
             Pre::Resume { next } => {
-                if self.adds.whole(&k, id).is_some() {
-                    return self.formula_land(k, id);
+                if let Some((_, w)) = self.adds.whole(&k, id) {
+                    let w = w.clone();
+                    return self.formula_land(k, id, &w);
                 }
                 return Ok(Some(format!(r#"{{"next":{next}}}"#)));
             }
@@ -262,7 +266,8 @@ impl Client {
             Err(stem) => return Ok(done(&stem)),
             Ok(stem) => stem,
         };
-        if let Some(old) = self.adds.begin(k, args, stem, now) {
+        // (Held only with a signature over exactly these bytes.)
+        if let Some(old) = self.adds.begin(k, args, signed, stem, now)? {
             remove_parts(old);
         }
         // Its bytes on the tally (fails closed: no part file without it).
@@ -284,6 +289,10 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     pub(super) fn formula_part(&mut self, k: KeyId, id: u32, off: u32, data: Vec<u8>) -> Done {
+        // No add admitted (none signed): refused before the card.
+        if self.adds.held.is_none() {
+            return Err(Refusal::NotAllowed);
+        }
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
@@ -312,18 +321,26 @@ impl Client {
             }
         }
         if p.complete {
-            return self.formula_land(k, id);
+            let Some((_, w)) = self.adds.whole(&k, id) else {
+                return Err(Refusal::BadArg);
+            };
+            let w = w.clone();
+            return self.formula_land(k, id, &w);
         }
         Ok(Some(format!(r#"{{"next":{}}}"#, p.next)))
     }
 
-    /// The bytes are in and their hashes match: check, then land.
+    /// The bytes are in and their hashes match: check, then land. Only with
+    /// the gallery's signature over exactly these bytes.
     #[optimize(size)]
     #[inline(never)]
-    fn formula_land(&mut self, k: KeyId, id: u32) -> Done {
-        let Some(h) = self.adds.whole(&k, id) else {
+    fn formula_land(&mut self, k: KeyId, id: u32, signed: &Signed) -> Done {
+        let Some((h, _)) = self.adds.whole(&k, id) else {
             return Err(Refusal::BadArg);
         };
+        if !h.args.signed_by(signed) {
+            return Err(Refusal::NotAllowed);
+        }
         let (stem, psb_size) = (h.target.clone(), h.args.psb_size as usize);
         if lan_busy() || !room(psb_size) {
             // Kept: the same formula-add signed again tries again.

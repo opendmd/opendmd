@@ -528,10 +528,7 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
             raise Bad("not-allowed")
         return c, args
     if c == "formula-part":
-        args = part_args(a)
-        if not ADDS_TAKEN:
-            raise Bad("not-allowed")
-        return c, args
+        return c, part_args(a)
     if c in ("next", "prev", "pause", "playlists", "controllers"):
         return c, {}
     if c == "brightness":
@@ -650,9 +647,10 @@ ADD_MAX_SOURCE = 16 * 1024
 ADD_MIN_PSB, ADD_MAX_PSB = 6, 8 * 1024
 ADD_MAX_PART = 384
 ADD_QUOTA_ADDS, ADD_QUOTA_BYTES = 16, 256 * 1024
-# Whether a panel takes adds at all (opendmd_core::connect::fadd::TAKEN):
-# False until the gallery's signature is checked; every formula-add and
-# formula-part is refused not-allowed after its argument rules. Only a
+# Whether a formula-add is admitted (the core: only with the witness
+# opendmd_core::gallery_sig::check makes, and the command carries no
+# signature yet): False, every formula-add refused not-allowed after its
+# argument rules; a part with no add held is the panel's not-allowed. Only a
 # test of the mock's own add flow sets it (roundtrip.py), never a panel.
 ADDS_TAKEN = False
 

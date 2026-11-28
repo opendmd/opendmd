@@ -118,9 +118,9 @@ struct Case {
     expect: &'static str,
 }
 
-fn code(r: Result<(), Refusal>) -> &'static str {
+fn code(r: Result<gallery_sig::Signed, Refusal>) -> &'static str {
     match r {
-        Ok(()) => "ok",
+        Ok(_) => "ok",
         Err(Refusal::BadStem) => "bad-stem",
         Err(Refusal::UnknownKey) => "unknown-key",
         Err(Refusal::WrongAbi) => "wrong-abi",

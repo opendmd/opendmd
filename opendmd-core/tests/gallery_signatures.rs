@@ -175,7 +175,8 @@ fn one(t: &Trust, f: &Published, s: &Value) -> Result<u8, String> {
     if fields.psb_len as usize != f.psb.len() || fields.psb_sha256 != sha256(&f.psb) {
         return Err(format!("key {kid}'s signature is for another compiled file (the compiler or ABI changed: make gallery-sign)"));
     }
-    gallery_sig::check(t, &fields, &sig).map_err(|r| format!("key {kid}'s signature refused by the firmware's check: {r:?}"))?;
+    let w = gallery_sig::check(t, &fields, &sig).map_err(|r| format!("key {kid}'s signature refused by the firmware's check: {r:?}"))?;
+    assert_eq!(w.stem(), f.stem);
     Ok(kid)
 }
 

@@ -376,10 +376,12 @@ panel"): its source and its compiled file for the panel's `abi` (5.6), as
 this way: `formula-add` will carry the gallery's signature over the stem,
 the ABI, a signing revision and both files' lengths and SHA-256s
 (`opendmd_core::gallery_sig`, made by `tools/gallery-sign.py`), checked
-before the card is touched. Until the panel checks it, **every
-`formula-add` and `formula-part` is refused `not-allowed`** after its
-argument rules (malformed arguments stay `bad-arg`; the core's
-`fadd::TAKEN`), so no program reaches a panel by remote. The two
+before the card is touched. Until it does, **every
+`formula-add` is refused `not-allowed`** after its
+argument rules (malformed arguments stay `bad-arg`), and a part with no
+add held is `not-allowed` before the card: an add is held, and lands, only
+with the witness `gallery_sig::check` returns for a good signature, which
+no other code can make. No program reaches a panel by remote. The two
 commands exist only in builds with the firmware's `connect-formula-add`
 feature (test images): every release and beta answers them `not-allowed`
 too, and its `formulas` reports no `abi`, so a controller offers no Add to

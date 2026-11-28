@@ -1401,7 +1401,7 @@ class Lane:
     async def remote_add(self, cmd):
         """`formula-add` (5.7) is refused until the panel checks the gallery's
         signature before any card access (the signed-gallery design's step 4;
-        opendmd_core::connect::fadd::TAKEN): a well-formed add of the
+        no gallery signature, no `gallery_sig::Signed` witness): a well-formed add of the
         gallery's largest Formula, rift-patrol, and a part for it are
         not-allowed, nothing reaches the card (no part file, no source, no
         compiled file, no card read for it), and a malformed add is still

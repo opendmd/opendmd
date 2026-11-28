@@ -76,6 +76,54 @@ pub struct Formula<'a> {
     pub psb_sha256: [u8; 32],
 }
 
+/// What [`check`] gives back for a signature it took: the Formula as it was
+/// signed. **Only `check` makes one**: its fields are private and there is no
+/// `Default` or other constructor, so the code that needs one (an add held,
+/// `connect::fadd::Adds::begin`; `proto::Command::FormulaAdd`; the
+/// firmware's `formula_add` and its landing) cannot run for a Formula no
+/// trusted key signed, whatever else is changed.
+///
+/// ```compile_fail
+/// use opendmd_core::gallery_sig::Signed;
+/// let s = Signed { kid: 0, abi: 3, rev: 1, stem: String::from("x"), src_len: 1, src_sha256: [0; 32], psb_len: 6, psb_sha256: [0; 32] };
+/// ```
+///
+/// ```compile_fail
+/// let s: opendmd_core::gallery_sig::Signed = Default::default();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signed {
+    kid: u8,
+    abi: u8,
+    rev: u32,
+    stem: String,
+    src_len: u32,
+    src_sha256: [u8; 32],
+    psb_len: u32,
+    psb_sha256: [u8; 32],
+}
+
+impl Signed {
+    pub fn kid(&self) -> u8 {
+        self.kid
+    }
+    pub fn abi(&self) -> u8 {
+        self.abi
+    }
+    pub fn rev(&self) -> u32 {
+        self.rev
+    }
+    pub fn stem(&self) -> &str {
+        &self.stem
+    }
+    pub fn src(&self) -> (u32, &[u8; 32]) {
+        (self.src_len, &self.src_sha256)
+    }
+    pub fn psb(&self) -> (u32, &[u8; 32]) {
+        (self.psb_len, &self.psb_sha256)
+    }
+}
+
 /// Why a signature is refused. On the wire every one is `not-allowed`
 /// (protocol 5.7); the reason is for the log and the tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,9 +208,10 @@ impl Trust<'static> {
 }
 
 /// Does `sig` sign `f` for `t`? The cheap refusals first (stem, key id,
-/// format, floor), then one strict Ed25519 verification.
+/// format, floor), then one strict Ed25519 verification; the [`Signed`]
+/// witness when it does.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn check(t: &Trust, f: &Formula, sig: &[u8; SIG_LEN]) -> Result<(), Refusal> {
+pub fn check(t: &Trust, f: &Formula, sig: &[u8; SIG_LEN]) -> Result<Signed, Refusal> {
     let msg = message(f)?;
     let key = t.keys.iter().find(|(id, _)| *id == f.kid).map(|&(_, k)| k).ok_or(Refusal::UnknownKey)?;
     if f.abi != t.abi {
@@ -172,7 +221,32 @@ pub fn check(t: &Trust, f: &Formula, sig: &[u8; SIG_LEN]) -> Result<(), Refusal>
         return Err(Refusal::OldRev);
     }
     let key = VerifyingKey::from_bytes(key).map_err(|_| Refusal::BadSignature)?;
-    key.verify_strict(msg.as_bytes(), &Signature::from_bytes(sig)).map_err(|_| Refusal::BadSignature)
+    key.verify_strict(msg.as_bytes(), &Signature::from_bytes(sig)).map_err(|_| Refusal::BadSignature)?;
+    Ok(Signed {
+        kid: f.kid,
+        abi: f.abi,
+        rev: f.rev,
+        stem: f.stem.to_string(),
+        src_len: f.src_len,
+        src_sha256: f.src_sha256,
+        psb_len: f.psb_len,
+        psb_sha256: f.psb_sha256,
+    })
+}
+
+/// A witness for the crate's own unit tests (the add's state machine):
+/// made the only way there is, `check`, over a signature by the vectors'
+/// throwaway key A (`tests/gallery_vectors.rs`), which no firmware trusts.
+#[cfg(test)]
+pub(crate) fn signed_for_tests(f: &Formula) -> Signed {
+    use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
+    let seed: [u8; 32] = Sha256::digest(b"opendmd-gallery throwaway test key, never a real one: A").into();
+    let k = SigningKey::from_bytes(&seed);
+    let public = k.verifying_key().to_bytes();
+    let keys = [(f.kid, &public)];
+    let sig = k.sign(message(f).expect("a stem in the rule").as_bytes()).to_bytes();
+    check(&Trust { keys: &keys, floor: 0, abi: f.abi }, f, &sig).expect("the test key's own signature")
 }
 
 #[cfg(test)]
@@ -201,6 +275,15 @@ mod tests {
         assert_eq!(MAX_MESSAGE, 146);
     }
 
+    /// The witness is the Formula as signed, field for field.
+    #[test]
+    fn the_witness_is_what_was_signed() {
+        let w = signed_for_tests(&f("plasma"));
+        assert_eq!((w.kid(), w.abi(), w.rev(), w.stem()), (0, 3, 1, "plasma"));
+        assert_eq!(w.src(), (10, &[1; 32]));
+        assert_eq!(w.psb(), (6, &[2; 32]));
+    }
+
     #[test]
     fn stems_outside_the_rule_make_no_message() {
         let long = "a".repeat(MAX_STEM + 1);
@@ -217,7 +300,7 @@ mod tests {
     #[test]
     fn with_no_key_committed_every_signature_is_refused() {
         if GALLERY_KEYS.is_empty() {
-            assert_eq!(check(&Trust::panel(3), &f("plasma"), &[0; SIG_LEN]), Err(Refusal::UnknownKey));
+            assert_eq!(check(&Trust::panel(3), &f("plasma"), &[0; SIG_LEN]).map(drop), Err(Refusal::UnknownKey));
         }
         const { assert!(REV_FLOOR >= 1) };
     }

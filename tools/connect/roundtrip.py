@@ -324,7 +324,7 @@ async def main():
         psb = b"PSB" + bytes([panel.abi]) + b"\x00\x0bRift patrol" + b"\x01" * 300
         # A panel takes no add until it checks the gallery's signature:
         # well-formed adds and parts are not-allowed, nothing lands.
-        ok(not odc.ADDS_TAKEN, "adds are not taken (odc.ADDS_TAKEN false, as the core's fadd::TAKEN)")
+        ok(not odc.ADDS_TAKEN, "adds are not admitted (odc.ADDS_TAKEN false: no gallery signature, no witness)")
         r = await add(src, psb, id_=10)
         await asyncio.sleep(0.3)
         rp = await a.command("formula-part", {"id": 10, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})

@@ -150,6 +150,8 @@ class Panel:
 
     def on_part(self, k, a):
         h = self.add
+        if not h:
+            raise odc.Bad("not-allowed")  # no add admitted
         if not h or h["a"]["id"] != a["id"] or h.get("landed"):
             raise odc.Bad("bad-arg")
         if h["k"] != k:
