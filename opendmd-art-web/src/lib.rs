@@ -25,7 +25,9 @@ pub mod tags;
 mod tests;
 
 use anim::Anim;
-use pipeline::{Colours, Edit, Fit, Image, Motion, Overlay, Plan, Scale};
+#[cfg(feature = "studio")]
+use pipeline::Overlay;
+use pipeline::{Colours, Edit, Fit, Image, Motion, Plan, Scale};
 use wasm_bindgen::prelude::*;
 
 /// One picture being made into art. `new Studio(rgba, width, height)` from
@@ -50,6 +52,7 @@ pub struct Studio {
     anim: Option<Anim>,
     fit: Fit,
     lift: bool,
+    #[cfg(feature = "studio")]
     text: Option<Overlay>,
     seq: Vec<(usize, u32)>,
 }
@@ -72,6 +75,7 @@ impl Studio {
             anim: None,
             fit: Fit::Pixels,
             lift: false,
+            #[cfg(feature = "studio")]
             text: None,
             seq: Vec::new(),
         })
@@ -94,6 +98,7 @@ impl Studio {
             anim: Some(a),
             fit: Fit::Pixels,
             lift: false,
+            #[cfg(feature = "studio")]
             text: None,
             seq: Vec::new(),
         })
@@ -119,6 +124,7 @@ impl Studio {
             anim: Some(a),
             fit: Fit::Pixels,
             lift: false,
+            #[cfg(feature = "studio")]
             text: None,
             seq: Vec::new(),
         })
@@ -129,6 +135,7 @@ impl Studio {
         self.anim.as_mut().is_none_or(|a| a.push(rgb))
     }
 
+    #[cfg(feature = "studio")]
     /// A video's frames, drawn by the page (the site's Create Art, from a
     /// `<video>`): `width` x `height` RGB888 from a video of `videoWidth` x
     /// `videoHeight`, `first` now at `delayMs`, the rest by `pushFrame`,
@@ -156,11 +163,13 @@ impl Studio {
             anim: Some(a),
             fit: Fit::Pixels,
             lift: false,
+            #[cfg(feature = "studio")]
             text: None,
             seq: Vec::new(),
         })
     }
 
+    #[cfg(feature = "studio")]
     /// The next of `fromVideo`'s frames, shown for `delayMs`; true once no
     /// more fit (the memory budget).
     #[wasm_bindgen(js_name = pushFrame)]
@@ -168,6 +177,7 @@ impl Studio {
         self.anim.as_mut().is_none_or(|a| a.push_delay(rgb, delay_ms))
     }
 
+    #[cfg(feature = "studio")]
     /// No more of `fromVideo`'s frames (`cut`: the video went on).
     pub fn end(&mut self, cut: bool) {
         if let Some(a) = self.anim.as_mut() {
@@ -272,6 +282,7 @@ impl Studio {
         }
     }
 
+    #[cfg(feature = "studio")]
     /// Text over the frames: `msg` in the small (4x6) or normal (5x7)
     /// font, colour `0xRRGGBB`, anchor 0..=8 (top-left, row by row), nudged
     /// by `dx`, `dy`, over source frames `from..=to` (an animation's). An
@@ -348,6 +359,7 @@ impl Studio {
             .map_or(Vec::new(), |a| a.render(i.min(a.len() - 1)).rgba())
     }
 
+    #[cfg(feature = "studio")]
     /// Whether `thumb(i)` is ready without work.
     #[wasm_bindgen(js_name = isRendered)]
     pub fn is_rendered(&self, i: usize) -> bool {
@@ -413,6 +425,7 @@ impl Studio {
         vec![x as u32, y as u32]
     }
 
+    #[cfg(feature = "studio")]
     /// `"still"`, `"pan"` or `"scroll"`, from the stage's shape.
     #[wasm_bindgen(js_name = autoMotion)]
     pub fn auto_motion(&self) -> String {
@@ -446,13 +459,19 @@ impl Studio {
             gain: gain.clamp(10, 200),
             colours: Colours::from_count(colours),
         };
-        let anim = pipeline::render_with(&self.stage, &plan, self.text.as_ref());
+        // (The panel's build has no text step: its overlay code is left out.)
+        #[cfg(feature = "studio")]
+        let text = self.text.as_ref();
+        #[cfg(not(feature = "studio"))]
+        let text = None;
+        let anim = pipeline::render_with(&self.stage, &plan, text);
         self.frames = anim.frames.len();
         self.colours = anim.palette.len();
         self.duration_ms = anim.duration_ms() as f64;
         encode::encode(&anim)
     }
 
+    #[cfg(feature = "studio")]
     /// What `render` (a still) or the save (an animation, its last
     /// `setEdit`) would write, in full colour, for the site's Studio:
     /// `[n, total, n delays in ms, then n * 4096 pixels as 0xRRGGBB]`, the
@@ -519,6 +538,7 @@ impl Studio {
     }
 }
 
+#[cfg(feature = "studio")]
 /// A No-Intro name as a title: `(USA)`-style tags dropped, a trailing
 /// article moved to the front (`opendmd_core::follow::clean_game_name`).
 #[wasm_bindgen(js_name = cleanGameName)]

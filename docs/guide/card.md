@@ -7,8 +7,9 @@ also keeps working with DMDoS.
 OpenDMD comes with no GIFs. The DMDoS GIF pack, DMDos GUI v1 + GIFs, is in
 the Software section of [dmdos.net](https://dmdos.net/). To set up a card,
 format it FAT32 and copy your DMDoS card, or the pack, onto it as it is.
-You can also add your own GIFs from the [Library](web-app.md#library), or
-make some with [Create Art](create-art.md).
+You can also add your own GIFs and pictures from the
+[Library](create-art.md), or find art online in the
+[Studio](https://opendmd.dev/studio/#import) on the OpenDMD website.
 
 ## What's on a card
 
@@ -95,8 +96,8 @@ If a platform you need is missing, it can't be added from the web app yet:
 the list is part of OpenDMD, and new platforms arrive with
 updates.
 
-You rarely need to type these yourself. **+ Add GIFs**, **Edit details…**
-and Create Art ask for a title, platform, category and author and build the
+You rarely need to type these yourself. **Add GIFs…**, **Edit details…**
+and the Studio's **Send to panel** ask for a title, platform, category and author and build the
 name for you. If you copy GIFs onto the card from a computer, name them this
 way and they'll sort into the right platform.
 

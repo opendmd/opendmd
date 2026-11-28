@@ -46,21 +46,29 @@ function needs(tags, again) {
 // A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
 export function listCat(c) {
   const dir = `/gifs/${c}`;
-  if (!lists.has(c)) lists.set(c, listOr(dir).then((fs) => {
-    const l = fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
-      const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
-      return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
-    }).sort(cmp);
-    got.set(c, l);
-    counts()[c] = l.length;
-    store.set(countsFor, countsOf);
-    return l;
-  }, () => { lists.delete(c); return null; }));
+  if (!lists.has(c)) {
+    const p = listOr(dir).then((fs) => {
+      const l = fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
+        const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
+        return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
+      }).sort(cmp);
+      // (Forgotten while it was being read — a move or a delete answered
+      // meanwhile —: what it read is not kept, or a search would take the
+      // folder as listed and find GIFs that have left it.)
+      if (lists.get(c) !== p) return l;
+      got.set(c, l);
+      counts()[c] = l.length;
+      store.set(countsFor, countsOf);
+      return l;
+    }, () => { if (lists.get(c) === p) lists.delete(c); return null; });
+    lists.set(c, p);
+  }
   return lists.get(c);
 }
 export function forget(c) {
   for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); }
-  for (const t of trees) t.dirty = true;
+  // (A search showing lists it again: its count would leave the folder out.)
+  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); }
 }
 on('gifs', forget);
 on('card', () => forget());
@@ -147,11 +155,17 @@ export class Tree {
   }
   // A search is of every GIF: each folder listed (one at a time: the device
   // shares the card with the player), the tree updated as they come.
+  // Asked again while it runs (another search, a folder forgotten): once
+  // more when done, so a folder forgotten after it was passed is listed.
   async gather() {
-    if (this.gathering) return;
+    if (this.gathering) { this.again = true; return; }
     this.gathering = true;
-    let bad = 0;
-    for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) { bad++; this.failed.add(c); } this.update(); }
+    let bad;
+    do {
+      this.again = false;
+      bad = 0;
+      for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) { bad++; this.failed.add(c); } this.update(); }
+    } while (this.again);
     this.gathering = false;
     this.bad = bad;
     this.update();

@@ -1,6 +1,6 @@
 // Adding a GIF to the card and to a playlist: shared by the Library, its
-// dialogs (js/details.js) and Create Art (js/studio.js), which so need not
-// load the Library's tree and thumbnails.
+// dialogs (js/details.js) and the converter the website mounts
+// (js/studio.js), which so need not load the Library's tree and thumbnails.
 
 import { app, playlistLabel, dirty } from './state.js';
 import { prepareBytes } from './prepare.js';

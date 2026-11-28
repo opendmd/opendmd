@@ -1,131 +1,70 @@
-# Create Art
+# Adding your own art
 
-![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](../images/create-art.png)
+![Add GIFs fitting a picture to the panel: the frame over the picture, Pixels, Pixels ½ or Fit, and the preview](../images/add-gifs.png)
 
-Create Art turns a picture or an animated GIF into art sized for the panel.
-Find game art on the web, use an old GeoCities GIF, or bring your own
-picture, then frame it, tidy it up and save it to your card. Nothing is
-added to the card until you save.
+Your display's web app adds the GIFs and pictures you already have, from
+the computer or phone you're using. To find art on the web, use
+[the Studio](https://opendmd.dev/studio/#import) on the OpenDMD website
+([below](#finding-art-online)).
 
-It works in six steps. Until you've picked something only step 1 shows;
-after that it folds away (**Change picture** opens it again) and the other
-steps appear. Create Art is also on the OpenDMD website, with a few extras
-([below](#create-art-on-opendmddev)).
+## Adding a picture or a GIF
 
-## 1. Find
+In the **Library**, press **+ Add ▾**, then **Add GIFs…**, and pick one or
+more files: GIFs, or pictures such as PNG or JPEG. You can also drop files
+anywhere on the Library, or paste a picture you've copied. (A web address
+dropped or pasted isn't fetched: use **Find art online** for that.)
 
-Pick a source:
-
-- **Game art:** choose a platform, type a game's title, and pick from its
-  title screens, in-game shots, box art and logos.
-- **GifCities:** search the Internet Archive's collection of GIFs from old
-  GeoCities pages. **Wide (suits the panel)** shows the ones that fit the
-  panel's long shape best.
-- **Your own:** choose a file, or paste a web address. You can also drop a
-  picture onto the page, or paste one you've copied.
-
-Click a result to load it. Searching for art needs an internet connection
-on the computer or phone you're using, not on the display. The list of
-games comes from the OpenDMD website, and the pictures from where they're
-kept.
-If it can't be reached, Find says so; **Try again** when you're back online.
-
-Some sites don't let other pages load their pictures. On
-[opendmd.dev/create/](https://opendmd.dev/create/) Create Art then fetches
-the picture for you, through the OpenDMD website, and keeps nothing. If
-the file is over 16 MB, isn't a picture or a video, or the site refuses, it
-says so. In your display's own web app, download the picture and add the
-file instead.
-
-On the website, `opendmd.dev/create/?url=` followed by a picture's address
-opens it in Create Art straight away. The address of a page works too,
-such as a Tenor, GIPHY, Reddit or Imgur link from their Share buttons, and
-Create Art finds the GIF or video on it.
-
-### Bringing a GIF from another site
-
-On the website, **Your own** has links that search other sites for pixel
-art with your words: Tenor, Klipy, GIPHY, animated Google and Bing
-images, DuckDuckGo, Reddit's r/PixelArt, Tumblr, DeviantArt and Imgur. Each
-opens in a new tab. To draw your own, it also links to Pixilart's editor: make
-the canvas 128 × 32, download the drawing as a GIF and drop it on Create Art. When you find one, bring it back:
-
-- On a computer, right-click the GIF and pick **Copy Image Address**
-  (or **Copy Image**), then paste it into Create Art; or drag the GIF onto
-  the page. The **Open in Create Art** bookmarklet does it in one press:
-  drag it from Your own to your bookmarks bar, then press it on a page
-  with a GIF.
-- On Android, install Create Art from your browser's menu with **Add to
-  Home screen** or **Install app**. It then appears in the Share menu:
-  share a GIF, a video or a link to **Create Art** and it opens there.
-- On iPhone and iPad there is no Share menu entry for websites. Touch and
-  hold the GIF, then **Copy** or **Save to Photos**, or press Share ›
-  **Copy** on a link. In Create Art, paste it into the address box, or press
-  **Choose a picture, GIF or video…** and pick it from Photos.
-
-### Videos
-
-On the website Create Art also takes MP4 and WebM videos, from a file, a
-link or a share: many "GIFs" on the web are really videos. The first 10
-seconds become up to 20 frames a second, fitted to the panel; trim and
-edit them on the timeline as for any animation. In your display's own web
-app, make the video into a GIF on the website first.
-
-## 2. Frame
-
-The panel is a wide strip, 128 by 32 dots, shown as a window over your
-picture. Drag the picture to choose what shows, or press **Auto** to let the
-app pick the busiest part.
+A GIF that is already 128 × 32, the panel's size, goes straight to its
+details. Anything else is fitted to the panel first, one file at a time:
 
 - **Pixels** keeps the picture's own pixels, one per dot: best for game
-  screenshots and pixel art. Enlarged screenshots are spotted and shrunk
-  back automatically.
+  screenshots and pixel art. A screenshot that was enlarged is spotted and
+  shrunk back.
 - **Pixels ½** halves it.
-- **Fit** shrinks a logo or photo to the panel's height.
+- **Fit** shrinks the whole picture, a logo or a photo, to the panel.
+- **Auto** picks for you again.
 
-A still picture can also slowly **Pan →** or **Scroll ↓** across the panel.
+The panel is a strip of 128 by 32 dots, drawn as a frame over the picture.
+Drag the frame, or tap the picture, to choose what shows; the preview under
+it is drawn the way the LEDs look. The web app then makes a GIF of it in the
+colours the panel shows, keeping every frame of an animation.
 
-## 3. Look
+A GIF can also go on **as it is**: press **Add as it is**. The panel plays
+a GIF of any size, showing its middle 128 × 32, and keeps every frame
+however long the GIF is. A GIF with thousands of frames starts that way.
 
-Adjust colours and brightness so it reads well on LEDs. **Brighten dark
-outlines** helps black lines and lettering, which disappear on a panel
-because a black dot is an LED that is off.
+Press **Fit and next** (or **Next**), then give each one a title, a
+platform, a category and, if you like, an author, as for any GIF
+([Adding GIFs](web-app.md#adding-gifs)). Nothing goes on the card until you
+press **Add GIF**. **Cancel** leaves that file out.
 
-## 4. Text
+A Formula's **Save as GIF…** makes a GIF of one loop and opens the same
+details, filled in ([Saving as a GIF](formulas.md#saving-as-a-gif)).
 
-Add a line of text in the panel's own font, in any colour, at one of nine
-spots. On an animation you can put it on every frame or only some.
+## Changing a GIF already on the card
 
-## 5. Preview
+The display's web app doesn't edit a GIF's frames, colours or timing. To
+trim it, change its speed, add text or recolour it, open it in the
+Studio: in the Library, open the GIF and choose **… › Download GIF**, then
+in the [Studio's Import](https://opendmd.dev/studio/#import) choose that
+file, make your changes and press **Send to panel**. It comes back into
+Add GIFs as a new GIF; **… › Delete…** removes the old one, and **Edit
+details…** changes only its title, platform, category or author.
 
-See it playing as it will look on the panel. For an animation there is a
-timeline of frames: trim the start and end, delete frames, change the speed,
-play it backwards or there-and-back with **Ping-pong**, and choose how many
-times it plays. **Undo** is there if you change your mind.
+## Finding art online
 
-If the animation moves in jumpy steps, a **Smooth motion** switch offers to
-fill in the in-between frames.
+In the Library, **+ Add ▾ › Find art online** opens the Studio's Import on
+[opendmd.dev](https://opendmd.dev/studio/#import) in a new tab. When a
+search in the Library finds nothing, the **Find art online** link beside
+"Nothing here matches" takes the same words there, with the platform you
+picked.
 
-## 6. Save
-
-Give it a title, a platform, a category and an author, as when adding GIFs.
-The app shows the name it will get and how the Library will list it. Saving
-puts it on your card, ready to play, and offers to add it to the playlist
-that's playing.
-
-## Editing a GIF you already have
-
-In the Library, open a GIF and choose **Edit in Create Art**. It loads with
-all its frames and details. When you save, **Replace the original** keeps it
-in every playlist it's in, or **Save as new** keeps both.
-
-## Create Art on opendmd.dev
-
-Create Art is also on the OpenDMD website, at
-[opendmd.dev/create/](https://opendmd.dev/create/), with the same steps.
-There **Send to my panel** asks once for your display's address, the name
-or IP address it shows, then opens your display's web app with the GIF
-ready to add. Pick its folder and press **Add GIF**. Your computer or phone
-must be on the same network as the display. **Download GIF** saves it
-instead, and Library › **Add GIFs** in your display's web app puts it on
-the card.
+The Studio searches game art (title screens, box art and logos) and old
+GeoCities GIFs, takes a picture or a GIF from a web address or another
+site, and makes videos into GIFs. It needs an internet connection on your
+computer or phone, not on the display. When the GIF is ready, **Send to
+panel** asks once for your display's address (the name or IP address it
+shows), then opens your display's web app with the GIF in **Add GIFs**,
+ready to add. Your computer or phone must be on the same network as the
+display, or linked to it by [Remote control](remote.md). **Download GIF**
+saves it instead, to add with **Add GIFs…**.

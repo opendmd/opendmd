@@ -86,7 +86,7 @@ export const app = {
   // The playlist being edited: `saved` is its lines as opened or last saved.
   draft: { name: '', paths: [], path: '', saved: '' },
   texts: new Map(),
-  // A page of the site's own (its Create Art page, share/create/), not the
+  // A page of the site's own (its converter, share/create/), not the
   // web app: no source, no card; Game art's index is beside it.
   site: false,
 

@@ -1,4 +1,4 @@
-/* Create Art's web sources (js/find.js): loaded with it. */
+/* The website converter's web sources (js/find.js): loaded with it; not packed for the panel. */
 .find-narrow{margin:4px 0 8px}
 .find-top{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin-bottom:6px}.find-top:has(:empty+:empty){display:none}
 .find-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}

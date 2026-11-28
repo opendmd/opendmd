@@ -89,7 +89,15 @@ site (`dev/api.html`, and `dev/api/v<version>.html` for each release), which
 Settings → Device → About links (14.5 KB of flash, gzipped, until 2026-10-23,
 when it was `api.html` with a size line of its own).
 
-Nor is Create Art's game name index ("Find art for a game"): the site
+Nor are the site's own files (`opendmd-pack` www.rs `SITE_ONLY`: the
+demo's player, the site's wasm, and the converter its `/create/` page
+mounts from this tree, `js/studio.js`, `studio.css`, `js/find.js`,
+`find.css`): `make web` packs `opendmd-web/www-panel/`, the web app less
+those and with the panel's own `pkg-art/` (opendmd-art-web without feature
+`studio`), staged by `tools/www-panel.py`; the site reads
+`opendmd-web/www-dist/`, which has them.
+
+Nor is the converter's game name index ("Find art for a game"): the site
 publishes it (`art-index/v1/<PLATFORM>.json`, from `opendmd-web/art-index/`)
 and the web app fetches it from there, since the feature needs the internet
 for the pictures anyway. Until 2026-10-26 it was `art/*.json` in the pack,

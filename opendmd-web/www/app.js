@@ -1,9 +1,11 @@
 // Entry point: load the wasm module, find out whether a device is serving us
 // (GET /api/status) or we are a static page on a laptop (local mode), and
-// route between the six views (Create Art is the Studio, js/studio.js, and
-// Formulas js/formulas.js, whose stylesheets and wasm load when they are
-// first opened; `#studio`, Create Art's old address, still leads there). Each view is a module with
-// `mount(el) -> {show, hide}`, mounted on first visit.
+// route between the five views (Formulas, js/formulas.js, has a stylesheet
+// and wasm of its own that load when it is first opened). Each view is a
+// module with `mount(el) -> {show, hide}`, mounted on first visit. Making
+// art from the web is the website's (its Studio): `#create` and `#studio`,
+// the addresses of the Create Art view the app once had, lead to the
+// Library, where Add GIFs and Find art online are.
 
 import { init } from './js/web.js';
 import { app, NO_FORMULAS } from './js/state.js';
@@ -13,8 +15,7 @@ import { closeMenu } from './js/overrides.js';
 
 await init();
 
-const VIEWS = ['now', 'library', 'sets', 'formulas', 'create', 'settings'];
-const MODULE = { create: 'studio' };
+const VIEWS = ['now', 'library', 'sets', 'formulas', 'settings'];
 // name -> the mount promise; ready[name] once it has resolved.
 const mounted = {}, ready = {};
 let current = '', shown = '';
@@ -24,13 +25,13 @@ let current = '', shown = '';
 // hash change while a view is still mounting (or before the source is
 // known) mounts whatever the hash says once it can.
 async function route() {
-  // Old addresses: the Studio's, and the editor's when Formulas were a Library tab.
-  if (location.hash === '#studio') { location.replace('#create'); return; }
+  // Old addresses: Create Art's, and the editor's when Formulas were a Library tab.
+  if (/^#(create|studio)(\/|$)/.test(location.hash)) { location.replace('#library'); return; }
   if (location.hash === '#library/formula') { location.replace('#formulas/edit'); return; }
   // A Formula from the site (its Open on my panel: `#gallery=<slug>` or a
   // short link's `#remix=<id>`, never the text itself): Formulas fetches it
   // and opens it in the editor (js/formulas.js keeps it in app.remix).
-  // A GIF from the site's Create Art (its Send to my panel, `#import`): sent
+  // A GIF from the website (its Studio's Send to panel, `#import`): sent
   // by postMessage (js/importgif.js), then the Library's Add GIFs, filled in.
   if (/^#import(&|$)/.test(location.hash)) {
     app.gifIn = import('./js/importgif.js').then((m) => m.received());
@@ -55,7 +56,7 @@ async function route() {
   if (!app.src) return;
   // A player built without Formulas: their view is one plain note (no editor, no wasm).
   const load = name === 'formulas' && app.noFormulas ? Promise.resolve({ mount: noFormulas })
-    : import(`./js/${MODULE[name] || name}.js`);
+    : import(`./js/${name}.js`);
   const m = await (mounted[name] ??= load.then((mod) => mod.mount($('#view-' + name))).then((r) => (ready[name] = r || {})));
   if (current !== name || app.src == null) return;
   if (shown !== name) { shown = name; m.show?.(sub); }

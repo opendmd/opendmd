@@ -72,8 +72,10 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   send it to the panel, and add, rename or delete GIFs.
 - **Playlists:** build them by platform, category and title words, then reorder and switch
   between them live. A GIF can be a favourite in one playlist and play less often in another.
-- **Create Art:** find game screenshots, boxes and logos, or GeoCities GIFs, or use your own
-  picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
+- **Your own art:** add GIFs and pictures from your phone or computer; anything that isn't
+  128 × 32 is fitted and cropped to the panel first, or added as it is. **Find art online** opens
+  the [Studio](https://opendmd.dev/studio/#import) on opendmd.dev, which finds game art and
+  GeoCities GIFs, converts videos and sends the GIF back to your panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without
   changing the file.
 - **Formulas:** a few lines of maths that draw the panel's pixels. Ten come with the panel (a big
@@ -90,9 +92,9 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 
 ## Screenshots
 
-| Library | Create Art |
+| Library | Adding a picture |
 | --- | --- |
-| ![The Library: two GIFs ticked, and the menu that adds them to a playlist](docs/images/library.png) | ![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](docs/images/create-art.png) |
+| ![The Library: two GIFs ticked, and the menu that adds them to a playlist](docs/images/library.png) | ![Add GIFs fitting a picture to the panel: the frame over the picture, Pixels, Pixels ½ or Fit, and the preview](docs/images/add-gifs.png) |
 | **Now playing** | **Formulas** |
 | ![The Now view, previewing what the panel plays](docs/images/now.png) | ![Formulas: the ones that come with OpenDMD, and one playing in its details](docs/images/formulas.png) |
 | **Playlists** | **On a phone** |
@@ -108,7 +110,7 @@ The documentation is also at **[opendmd.dev](https://opendmd.dev/)**.
 
 - [What you need](docs/guide/hardware.md), [Install](docs/guide/install.md) and
   [Updating](docs/guide/updating.md)
-- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md)
+- [The web app](docs/guide/web-app.md), [Adding your own art](docs/guide/create-art.md)
   and [Formulas](docs/guide/formulas.md)
 - [Remote control](docs/guide/remote.md): the display from your phone, away
   from home (beta)
@@ -144,6 +146,6 @@ the web app itself carry them (Settings › Device › About › Open-source lic
 
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
-[dmdos.net](https://dmdos.net/), or make your own with Create Art. The animations on the
+[dmdos.net](https://dmdos.net/), or add your own. The animations on the
 OpenDMD site are OpenDMD's own Formulas, recorded from the simulator, and the
 CC0 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites.

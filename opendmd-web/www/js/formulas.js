@@ -113,7 +113,7 @@ function setUnder(u) {
   for (const fn of underSet) fn();
   kick();
 }
-// A GIF's frames, by pkg-art (the Studio's decoder: the frames the Library's preview shows).
+// A GIF's frames, by pkg-art (its decoder: the frames the Library's preview shows).
 async function loadGif(name, bytes) {
   toast(`Reading “${name}”…`);
   try {
@@ -295,12 +295,15 @@ async function submit(btn, f) {
   popup(h('div.menu.wide', { id: 'psi-submit-sheet', role: 'dialog', 'aria-label': 'Submit to the gallery' }, h('div.mh', 'Submit to the gallery'), s.el), r.left, r.bottom + 4);
 }
 
-// "Save as GIF…": one loop into Create Art: 20 ms frames (a GIF can't do 10: `fps 100`
-// saves at 50), 40 with `fps 25` or past 240, cut at 240.
+// "Save as GIF…": one loop as a GIF (js/fit.js writes it), then the
+// Library's Add GIFs with its title, platform FX and category Demoscene
+// filled in (as the demo card's recordings are named); with no device, a
+// download. 20 ms frames (a GIF can't do 10: `fps 100` saves at 50), 40
+// with `fps 25` or past 240, cut at 240.
 // Over a GIF: the GIF's length, or the formula's loop if that is longer and it moves.
 // One that never repeats (loop 0): its first FOREVER ms, and a toast says so.
 const FOREVER = 10000;
-function toGif(f) {
+async function toGif(f) {
   const i = info(f.src), lp = i[4];
   if (!i.length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
   const ms = lp || FOREVER;
@@ -309,8 +312,21 @@ function toGif(f) {
   let d = Math.max(D, grid(i));
   if (len / d > 240) d = 40;
   const all = Math.max(1, Math.floor(len / d)), n = Math.min(all, 240);
-  app.artFrom = { title: (f.name || 'Formula') + (o && U ? ' over ' + U.name : ''), frames: { n, delay: d, cut: all > n, frame: (k) => draw(f, lp ? k * d % lp : k * d, false, k * d) } };
-  app.go('create');
+  const title = (f.name || 'Formula') + (o && U ? ' over ' + U.name : '');
+  let gif;
+  try {
+    gif = await (await import('./fit.js')).framesGif({ n, delay: d, cut: all > n, frame: (k) => draw(f, lp ? k * d % lp : k * d, false, k * d) });
+  } catch (e) { toast(`Save as GIF: ${e.message || e}`, 'bad'); return; }
+  const file = new File([gif], title.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '') + '.gif', { type: 'image/gif' });
+  if (!app.device) {
+    const a = h('a', { href: URL.createObjectURL(file), download: file.name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast(`downloaded ${file.name}`, 'ok');
+    return;
+  }
+  app.gifIn = Promise.resolve({ file, init: { title, platform: 'FX', category: 'Demoscene' } });
+  app.go('library');
 }
 
 // --- The tab: the gallery, the details, the editor

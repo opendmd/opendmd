@@ -5,9 +5,8 @@
 // GIF: the GIF stays as it is; the file the panel plays in its place is made
 // from the tweened frames (byte-identical to opendmd-pack's), and the choice
 // is one line in the card's /sets/.smooth, outside the cache, so clearing
-// the cache keeps it. Loaded on first use (a Library preview on a device, a
-// prepare run, Create Art's switch or a listed GIF opened there), so it costs
-// the page load nothing.
+// the cache keeps it. Loaded on first use (a Library preview on a device or
+// a prepare run), so it costs the page load nothing.
 //
 // The work runs in slices of ~12 ms with the page given back between them
 // (no Worker: one wasm instance, the one the prepare job already loaded).
@@ -137,7 +136,8 @@ export async function set(path, on) {
   }
 }
 
-// Create Art saved `bytes` at `path` (js/studio.js): list it or not, and
+// The converter (js/studio.js, which the website mounts; its switch shows
+// only with a device) saved `bytes` at `path`: list it or not, and
 // write the file the panel plays to match, so the copy is right at once.
 // `ready` is a Smoother already tweened over these very bytes (optional).
 // On: the list first, then the smooth file (plain, with a warning returned,

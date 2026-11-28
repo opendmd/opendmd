@@ -122,12 +122,14 @@ const CSS = `.dlg{position:fixed;inset:0;z-index:25;background:#000b;overflow:au
 @media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:minmax(0,1fr)}}`;
 
 let styled = false;
+// The dialogs' stylesheet, once (Add GIFs' fitting step, js/fit.js, uses it too).
+export function dlgStyle() { if (!styled) { document.head.append(h('style', CSS)); styled = true; } }
 
 // One dialog, one or more items; resolves to the items' results on OK, or
 // null on Cancel.
 async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   const m = await art();
-  if (!styled) { document.head.append(h('style', CSS)); styled = true; }
+  dlgStyle();
   const listing = listings(opts.categories);
   const urls = [];
   const plats = [...new Set([...m.platforms(), ...(opts.platforms || [])])].sort();
@@ -229,8 +231,8 @@ function readsBack(f) {
 // — the one it had when `keep` (a GIF being edited) has the same platform,
 // title and category —, or, with no platform, the title suffixed until
 // the name is free; never one in `taken`. {path} or {why} (the reason, in
-// words). Add GIFs, Edit details, the bulk Move and Rename and the Studio's
-// Save all name through it.
+// words). Add GIFs, Edit details and the bulk Move and Rename all name
+// through it (and the converter the website mounts from js/studio.js).
 export function pickName(m, f, l, keep, taken = new Set()) {
   f = { ...f };
   const unchanged = keep && f.category === keep.category && f.platform === keep.platform && app.wasm.normalizeTitle(f.title) === app.wasm.normalizeTitle(keep.title);
@@ -256,7 +258,8 @@ export function addDialog(files, opts) {
     title: n > 1 ? `Add ${n} GIFs` : 'Add a GIF',
     intro: 'A GIF’s title, platform and author are its file name on the card: that is what the Library lists, search finds and playlists filter by.',
     files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF',
-    inits: files.map((f, i) => ({ ...guess(f.name), ...opts.inits?.[i], category: opts.category })), // (inits: a GIF from the site's Create Art)
+    // (inits: a GIF from the website's Studio, or a Formula's Save as GIF, which names its category)
+    inits: files.map((f, i) => ({ ...guess(f.name), category: opts.category, ...opts.inits?.[i] })),
   });
 }
 
@@ -353,7 +356,7 @@ export async function bulkMove(paths, opts) {
 // left blank. A preview of the names first (50 at most shown).
 export async function bulkRename(paths, opts) {
   const m = await art();
-  if (!styled) { document.head.append(h('style', CSS)); styled = true; }
+  dlgStyle();
   const title = h('input', { type: 'text', id: 'br-title', placeholder: 'keep each' });
   const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
   const author = h('input', { type: 'text', id: 'br-author', placeholder: 'keep each; - for none' });
@@ -400,7 +403,7 @@ export async function bulkDelete(paths) {
 
 // A small sheet: a heading, a sentence, a control, OK / Cancel; true on OK.
 function sheet(head, intro, body, ok) {
-  if (!styled) { document.head.append(h('style', CSS)); styled = true; }
+  dlgStyle();
   return new Promise((res) => {
     const done = (v) => { el.remove(); res(v); };
     const el = h('div.dlg', { id: 'bm', role: 'dialog', 'aria-modal': 'true' }, h('div.card', h('h2', head), h('p.muted', intro), body,

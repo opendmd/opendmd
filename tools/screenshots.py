@@ -10,7 +10,7 @@ taken in headless Chromium against tools/mock-device.py over the demo card
 
 (`make screenshots` builds the app, the simulator and the demo card
 first.) Writes, at 1280x800: now.png, formulas.png and playlists.png;
-create-art.png (1280 wide, the whole page); at 2x, the part that matters
+add-gifs.png (Add GIFs fitting a picture: the sheet); at 2x, the part that matters
 in a 1280x800 window (the site's bands): library.png (Select, the playlist
 menu open), now-follow.png (Now while following RePlayOS, as a game
 plays), settings-look.png (Settings › Panel) and settings-schedule.png
@@ -36,7 +36,7 @@ frame it shows (ms into the Formula, at its seed).
 
 `--game-art DIR` (tools/game-art.py's output; `make screenshots
 GAME_ART=1`) casts game title screens from libretro-thumbnails, made
-into panel GIFs with Create Art, instead: not what the published shots
+into panel GIFs with the site's converter (Create Art), instead: not what the published shots
 show, and such shots need the credit line (CLAUDE.md, "Content
 licensing"); panels.json is then left alone. No shot may show a card
 path, "odm", "bucket" or "cache". The card is left as it was.
@@ -86,10 +86,13 @@ def wait_port(proc: subprocess.Popen, port: int, what: str) -> None:
     sys.exit(f"{what} did not come up")
 
 
-def start_mock(card: Path, overlay: Path) -> tuple[subprocess.Popen, str]:
+def start_mock(card: Path, overlay: Path, www: Path | None = None) -> tuple[subprocess.Popen, str]:
+    """The mock over `card` (writes to `overlay`), serving the panel's web
+    app, or `www` (tools/game-art.py: make web's www-dist, which has the
+    site's converter too)."""
     port = free_port()
     proc = subprocess.Popen(["uv", "run", str(ROOT / "tools/mock-device.py"), "--port", str(port), "--quiet",
-                             "--root", str(card), "--overlay", str(overlay), "--dwell", "600"],
+                             "--root", str(card), "--overlay", str(overlay), "--dwell", "600", *(["--www", str(www)] if www else [])],
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     wait_port(proc, port, "mock-device.py")
     return proc, f"http://127.0.0.1:{port}"
@@ -483,30 +486,20 @@ def main() -> int:
             clip(big, a.out, "settings-schedule.png", "[document.querySelector('#sc')]")
             big.context.close()
             call(base, "PUT", "/api/schedule", {"rules": [], "night": None})
-            # Create Art: a still of the Kenney scenery (a frame of the
-            # scroll with the most colours), titled and filed under Kenney; the whole page.
-            go(page, "create")
-            page.wait_for_selector("#st-src", timeout=30000)
-            page.click("#st-src [data-v=own]")
+            # Add GIFs fitting a picture: a Kenney scene (CC0; the art
+            # pipeline's 3x test picture, the top 768x426 of it), the 3x
+            # undone, the frame where the art module puts it; the sheet over the Library.
+            go(page, "library")
+            page.wait_for_selector("#lib-list", timeout=20000)
             with tempfile.TemporaryDirectory() as tmp:
                 f = Path(tmp) / "Pixel_Platformer.png"
-                im = Image.open(a.card / KENNEY_SCROLL.lstrip("/"))
-                frames = []
-                for i in range(im.n_frames):  # the busiest frame: the most colours
-                    im.seek(i)
-                    frames.append((len(im.convert("RGB").getcolors(4096) or ()), i))
-                im.seek(max(frames)[1])
-                im.convert("RGB").save(f)
-                page.set_input_files("#st-file", str(f))
-                page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=30000)
-            page.fill("#st-title", "Pixel Platformer")
-            page.select_option("#st-cat", "Kenney")
+                Image.open(ROOT / "opendmd-web/experiments/art/process/out/a_source_windows.png").convert("RGB").crop((0, 0, 768, 426)).save(f)
+                page.set_input_files("#lib-add-files", str(f))
+                page.wait_for_function("document.querySelector('#fit')?.dataset.state === 'ready'", timeout=30000)
+            wait_lit(page, "#fit-panel")
             page.wait_for_timeout(1500)
-            page.evaluate("scrollTo(0, 0)")
-            # The rail is fixed: a viewport as tall as the page, not a full-page shot.
-            page.set_viewport_size({"width": 1280, "height": page.evaluate("document.documentElement.scrollHeight")})
-            page.wait_for_timeout(500)
-            shot(page, a.out, "create-art.png")
+            clip(page, a.out, "add-gifs.png", "[document.querySelector('#fit > .card')]")
+            page.click("#fit-cancel")
             page.context.close()
 
             # The Library on a phone, GIFs ticked.

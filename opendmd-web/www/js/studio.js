@@ -1,3 +1,11 @@
+// The converter the website mounts (opendmd.dev/create/, framed by its
+// Studio's Import; share/create/ in the site's repository): not part of the
+// panel's own web app any more (opendmd-pack www.rs SITE_ONLY leaves it
+// and its stylesheet, js/find.js and find.css out of the pack; the panel's
+// Add GIFs fits and crops with js/fit.js). It was the app's "Create Art"
+// view, and its panel-side paths (Save to the card, Edit from the Library,
+// Smooth motion's switch) are still here, unused by the site.
+//
 // The Studio: the "Create Art" view. A picture or an animated GIF in (found
 // on the web — Game art, GifCities —, your own file, drop, paste or
 // address, or a GIF from the Library's "Edit in Create Art"), a 128x32 GIF

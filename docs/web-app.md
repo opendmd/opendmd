@@ -43,8 +43,9 @@ names the format or shows a copy's path.
 ## The views
 
 **The views** — a left rail on a laptop, a bottom bar on a phone, in this
-order: Now, Library, Playlists, Create Art, Settings. A view's address is
-`#now`, `#library`, `#sets`, `#create` or `#settings`; Settings' tabs and the
+order: Now, Library, Playlists, Formulas, Settings. A view's address is
+`#now`, `#library`, `#sets`, `#formulas` or `#settings` (`#create` and
+`#studio`, Create Art's old addresses, lead to the Library); Settings' tabs and the
 Playlists editor have their own (`#settings/play`, `#settings/look`,
 `#settings/time`, `#settings/replay`, `#settings/device`; `#sets/edit`), so a link or the back
 button lands on them.
@@ -96,21 +97,21 @@ button lands on them.
   file on screen, and Previous is `POST /api/skip?back=1`, which walks back
   one entry a press (twice is two back, not a flip between the last two).
   The simulator keeps the same list in the page by the same rules; firmware
-  without it hides Previous and the list. **✎ Edit in Create Art** under the
-  title, and a ✎ on each Recently played row, open that item where it can be
-  changed, as the Library's Edit does: a GIF in Create Art from the GIF
-  itself (every frame, never the player's prepared copy), a Formula in the Formulas editor (*Edit in Formulas*: the
-  saved or example formula it is, name and comments included, else the
-  panel's one-line text of it). The title cards and the start-up show
+  without it hides Previous and the list. For a Formula, **✎ Edit in
+  Formulas** under the title, and a ✎ on its Recently played row, open it in
+  the Formulas editor (the saved or example formula it is, name and
+  comments included, else the panel's one-line text of it); a GIF has
+  none. The title cards and the start-up show
   are drawn by the panel itself; Now says so, with no button. A ☆ beside the title makes the
   GIF on screen a favourite in the playlist in play (★ when it is; not for
   the panel's own screens); each Recently played row has the "…" overrides menu for
   that playlist.
 - **Library** — the GIFs on the player, and only those (finding new art is
-  **Create Art**'s). One row across the top: a search field (titles, normalised
-  the way the core matches them; when nothing matches, a link searches the
-  web for the same words in Create Art), the count, **⊟** (close every
-  folder), **Select** and **Add GIFs**; under it the platform chips. The
+  the website's Studio's: **Find art online**). One row across the top: a
+  search field (titles, normalised the way the core matches them; when
+  nothing matches, **Find art online** takes the same words and platform to
+  the Studio), the count, **⊟** (close every folder), **Select** and **+ Add
+  ▾** (**Add GIFs…**, **Find art online ↗**: [below](#add-gifs-and-finding-art-online)); under it the platform chips. The
   list is a **tree of folders** (`js/tree.js`): the card's folders under
   `gifs/` by human name, then the system `_x`
   ones, each with its count (the last one seen, remembered by the browser,
@@ -130,9 +131,11 @@ button lands on them.
   one and the **Details** panel (the right-hand column; a sheet from the
   bottom on a phone) plays it with the panel look and shows its title,
   platform, category, author and file name, with **Send to panel**, **Add
-  to playlist…**, **Edit in Create Art**, **Favourite** (in the playlist
+  to playlist…**, **Favourite** (in the playlist
   chosen beside it), Smooth motion where it applies, **Edit
-  details…** and **Delete…**. **Select** (or a long press on a row, on a
+  details…**, **Download GIF** (the GIF itself, to change it in the
+  website's Studio: the app does not edit a GIF's frames) and
+  **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
   **None**, **Add N to playlist ▾** and **Done**: a tap then picks a row
@@ -274,89 +277,73 @@ button lands on them.
     from the pack's header). Firmware updates go over WiFi
     ([`deploying.md`](deploying.md)).
 
-## Create Art
+## Add GIFs and finding art online
 
-**Create Art.** A view of its own in the navigation: find a picture or an
-animated GIF — on the web or of your own — and turn it into a GIF for the
-panel, in six steps. Until something is loaded only step 1 shows; then it
-folds to one line (**Change picture** opens it again, the search as it was)
-and the other steps appear. **Edit in Create Art** on a Library GIF
-opens it here, every frame of it, with its title, platform, category and
-author filled in, to **Replace the original** (the same file, so every
-playlist keeps it; a changed title renames it, and playlists follow) or
-**Save as new**. **Save as GIF…** in Formulas opens a Formula
-here too: one loop of it, drawn as an animation by the same code the panel
-runs, titled with its name, to save as new.
+**Add GIFs** (the Library's **+ Add ▾ › Add GIFs…**, on a device) takes
+GIFs and pictures (PNG, JPEG, WebP: whatever the browser decodes), also
+dropped anywhere on the page while the Library shows, or pasted (an image
+on the clipboard, while the Library or an Add GIFs sheet shows; files
+dropped or pasted while one is open wait their turn). A dropped or pasted
+address is not fetched: the Find art online hint shows instead. A GIF
+that is already 128x32 goes straight to its details. Anything else gets a
+**fitting step** first (`js/fit.js`, one sheet per file, in turn): the
+picture (an animation's first frame) zoomed with the 128x32 window on it —
+drag it, or tap to move it — and **Pixels** (the picture's own pixels 1:1,
+a 2x or 3x enlarged screenshot or GIF detected and undone), **Pixels ½**
+(halved, keeping only colours it has), **Fit** (the whole picture scaled
+into the panel) and **Auto** (the art module's guess again), over a panel
+preview. **Fit and next** writes the GIF with the art module's encoder —
+auto colours (one global palette of what the window shows), every frame
+whole, an animation's own timing and loop count kept — and hands it to
+the details dialog like a picked GIF. A GIF can instead go on **as it is**
+(**Add as it is**): the player centre-crops any size, and every frame is
+kept, so a long GIF (past 256 frames: the website's Studio cuts one to
+256) or one past what the art module keeps (`anim::MAX_FRAMES`, 5,000;
+that one starts as it is) still goes on the card unchanged. **Cancel**
+leaves that file out. Then the details, the upload and the prepared copy
+are Add GIFs' as before.
 
-1. **Find** — three sources. **Game art**: pick a platform (MD, SNES, GB,
-   GBC, GBA, Saturn, DS, NES, SMS, PC Engine, PS1, N64, Arcade), type a
-   title, and the title screens, in-game shots, boxes and logos (whichever
-   exist) of the best-matching games load from the
-   [libretro-thumbnails](https://github.com/libretro-thumbnails)
-   collections. **GifCities**: the Internet Archive's search over the GIFs
-   of GeoCities, a grid of the GIFs themselves, moving, each with its size,
-   narrowed without asking again — **Wide (suits the panel)** (at least
-   twice as wide as tall), **Square-ish** or **Any**, **At least 48 px
-   wide** (on by default), best match or biggest first, with a count ("37
-   of 300"); results are unfiltered, and a loaded one links to the archived
-   page it was on (**Seen on…**). **Your own**: choose a file or give its
-   address (most sites don't let a page read their pictures; then the
-   Studio says so: save it and drop it). Dropping or pasting a picture
-   (Ctrl/⌘-V; copy an image in any tab) works whichever source is showing.
-   **Click a result to load it** — with a title to save it under, and for
-   game art its platform. Nothing is added to the card until it is saved.
-   A GIF with two or more frames comes in as an animation
-   (with a progress line while its frames are read). A very big one is
-   worked on at a smaller size, and the Studio says so.
-2. **Frame** — the picture (an animation's first frame) zoomed with the
-   128x32 window on it: drag it, tap to move it, **Auto** to re-pick the
-   busiest spot. **Pixels** uses the picture's own pixels 1:1 (a 2x or 3x
-   enlarged screenshot or GIF is detected and undone), **Pixels ½** halves
-   it keeping only colours it has, **Fit** scales a logo or photo to the
-   panel's height. A still picture can **Pan →** or **Scroll ↓**, at 50 /
-   40 / 30 ms a pixel, with a pause at the ends; an animation keeps its own
-   timing.
-3. **Look** — colours (auto, or 256 / 64 / 16, picked so that a small
-   bright detail survives), background to black, brighten dark outlines
-   (black lettering vanishes on the panel), brightness. No dithering. For
-   an animation, every frame.
-4. **Text** — a line of text in the panel's small or normal font, any
-   colour, at one of nine places (plus a nudge in pixels), on every frame
-   or on a range of an animation's frames.
-5. **Preview** — the panel look, playing. For an animation: play/pause, a
-   scrubber, and the **timeline**: a strip of the frames (click one to see
-   it; Shift or Ctrl to pick several), **Start here** / **End here** (or
-   drag the handles) to trim, **Delete frame** (or the Delete key) and
-   **Undo** (Ctrl/⌘-Z), speed ¼× to 4×, **Reverse**, **Ping-pong** (there
-   and back), and how many times it plays (forever, or 1 to 10). The frame
-   count and the length update as you go. On a device, **Smooth motion**
-   (below) is a switch here too: it looks at the animation as it will be
-   saved, says how many frames it adds ("Adds 32 frames across 16 moves")
-   and the preview plays it smoothed; if there is nothing to smooth it says
-   why — nothing slides, it already moves one pixel at a time, or its frames
-   are too quick (a speed of 2× can be) — and looks again after your next
-   change. Save keeps the choice.
-6. **Save** — title, platform, category, author and "it is a logo", as
-   Add GIFs asks for them: the file name is built from them (the number is
-   the next free one) and the Studio shows what the Library will list it
-   as, or why it can't be named that way. On a device it goes into the
-   chosen category, prepared, and the Studio offers to add it to the
-   playlist in play; in local mode it downloads.
+Finding art on the web is the website's: **+ Add ▾ › Find art online**
+(and, when a search finds nothing, the link beside "Nothing here matches")
+opens the Studio's Import at `https://opendmd.dev/studio/#import` in a new
+tab, carrying the search's words and its one platform chip as
+`#import?q=<words>&platform=<PLATFORM>` (the demo: its own site's
+`../studio/`). The Studio sends a GIF back with **Send to panel**: it
+opens the panel's app at `#import` and hands the GIF over by postMessage
+(`js/importgif.js`: only from the opener, only from opendmd.dev or the
+page's own origin, the shape checked, at most 4 MB), and the Library opens
+Add GIFs with it and its title, platform, author and logo filled in. (A
+send by Remote control goes to the player itself, not through this app:
+the firmware writes it into the card's `Sent` folder.) `#create` and `#studio`, the addresses of the Create Art view the
+app once had, lead to the Library.
+
+**Save as GIF…** in Formulas draws one loop (20 ms frames, at most 240,
+by the same code the panel runs) and writes it with the same encoder
+(`fit.js` `framesGif`), then opens Add GIFs with it, titled with the
+Formula's name, platform FX, category Demoscene; with no device it
+downloads.
 
 The pixel work and the GIF writer are Rust (the `opendmd-art` crate, which
 has no browser types), wrapped by `opendmd-art-web` in a second wasm module
-loaded only when the Studio opens. The game name lists are
-published on the project site (`https://opendmd.dev/art-index/v1/<PLATFORM>.json`,
-one fetched per platform the first time it is searched, then kept for the
-session; the site's demo fetches its own copy), built by
-`uv run tools/art-index.py` from the repositories' file lists into
-`opendmd-web/art-index/` (committed; not in the www pack); re-run it and
-publish the site to pick up new games. The pictures themselves come from
-GitHub when you pick a game, so the whole search needs the internet; without
-it, Find says so and offers Try again. `v1` is the lists' format: a new
-format gets a new path, so an older web app never reads one it doesn't
-know. The investigation behind all this
-is `docs/art-pipeline.md`.
+(`pkg-art/`) loaded only when it is first used. The panel's pack carries
+the crate built without its `studio` feature (`make web`:
+`opendmd-web/pkg-art-panel/`, laid in by `tools/www-panel.py`): the Text
+step, video, the full-colour frames and the game-name cleaner are the
+website's alone.
+
+**The website's converter.** `js/studio.js` (with `studio.css`) and its
+web sources `js/find.js` (with `find.css`: Game art from
+[libretro-thumbnails](https://github.com/libretro-thumbnails) through the
+name lists the site publishes at
+`https://opendmd.dev/art-index/v1/<PLATFORM>.json`, built by `uv run
+tools/art-index.py` into `opendmd-web/art-index/`; GifCities) are the
+converter the site's `/create/` page mounts from this tree (`make web`'s
+`opendmd-web/www-dist/`, which the site copies as `/demo/`), framed by the
+Studio's Import. They are not in the panel's pack (`opendmd-pack` www.rs
+`SITE_ONLY`; `make web` stages the panel's copy, `opendmd-web/www-panel/`,
+without them, and the size lines, the mock and web-smoke read that). The
+site's repository tests them. The investigation behind the pipeline is
+`docs/art-pipeline.md`.
 
 ## Smooth motion
 
@@ -373,9 +360,7 @@ itself is never changed. The switch only appears where there is something
 to smooth (about one GIF in ten on the stock card). A slow scroll that
 moves one pixel a frame is already as smooth as the panel's pixels allow —
 there is no whole-pixel position between two frames a pixel apart — so the
-Library says so instead of offering the switch; Create Art has the same
-switch for an animation you make or edit there, and a GIF that is on stays
-on when you edit it there and replace it. The choice is kept on
+Library says so instead of offering the switch. The choice is kept on
 the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list.

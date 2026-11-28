@@ -4,8 +4,8 @@ Remote control lets you use your display from a phone or computer that
 isn't on your home WiFi: on mobile data, at work, anywhere. You can see
 what's playing, skip, go back, pause, change the brightness, pick a
 playlist or a Formula, and, on a board that supports it, send a GIF you
-made in the [Studio](https://opendmd.dev/studio/) or
-[Create Art](https://opendmd.dev/create/). (On the standard board, sending
+made or found in the [Studio](https://opendmd.dev/studio/) on the OpenDMD
+website. (On the standard board, sending
 GIFs is off for now: see [Send a GIF](#send-a-gif).) You don't need an
 account.
 
@@ -127,13 +127,13 @@ Remote control picks up again by itself when the display is back.
 ## Send a GIF
 
 Only on a board that supports it: on the standard board, sending GIFs is
-off for now (see below). On a board that supports it, in the [Studio](https://opendmd.dev/studio/) or
-[Create Art](https://opendmd.dev/create/), on a linked device:
+off for now (see below). On a board that supports it, in the
+[Studio](https://opendmd.dev/studio/), on a linked device:
 
 <!-- site:steps -->
 
-1. Make your GIF, then press **Send to panel** in the Studio, or **Send to
-   my panel** in Create Art.
+1. Make your GIF, or find one with the Studio's **Import**, then press
+   **Send to panel**.
 2. Under **Send to**, pick your display.
 3. Leave **Play it as soon as it arrives** ticked to see it straight away,
    and press **Send**.
