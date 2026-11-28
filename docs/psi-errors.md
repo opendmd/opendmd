@@ -52,7 +52,7 @@ Use a smaller number, or scale it down with a multiply.
 
 > `…` is not a number or a name (to multiply, write `… * …`)
 
-Psi never multiplies by putting things side by side, as maths on paper does.
+`2x` is read as one word, and it is not a number or a name. Psi has no implied multiplication, so write `*` between the number and the name.
 
 Put a `*` between the number and the name.
 
@@ -147,7 +147,7 @@ layer {
 
 > the colour has to be the last line (move this to the end)
 
-The last line is the colour, and only the last: lines after it would never be used.
+The colour must be the last line of the Formula, the layer or the function. A line after it would have no effect, so it is refused. (A comment after it is fine.)
 
 Move the colour line to the end of the formula (or the layer or function).
 
@@ -334,7 +334,7 @@ gray(level)
 
 > unknown function `…` (did you mean `…`?)
 
-Only the built-in functions can be called; the message suggests the nearest one.
+The name is not a built-in function and not a `fn` of this Formula. When a built-in function's name is close, the message suggests it.
 
 Fix the spelling, or use a function from the cheat sheet.
 
@@ -354,7 +354,7 @@ gray(sin(x))
 
 > `…` is already the name of a … (line …) — pick another name
 
-A value may be set again (`v = v * 2` reads the `v` before it), but functions, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
+A value may be set again (`v = v * 2` reads the `v` before it). A function, table, sprite, palette or control keeps its name for the whole Formula, so no value and no other function, table, sprite, palette or control can take it.
 
 Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs, and none of them takes a value's name.)
 
@@ -378,7 +378,7 @@ gray(T[0] * k)
 
 > `…` is a word of the language; pick another name
 
-The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn`) can't be names; any built-in value or function's name can (it is then yours).
+`loop`, `layer`, `use`, `draw`, `for`, `table` and `fn` start lines of their own, so they can't be names. `part` is reserved as well, although Psi has no parts (E750). The name of a built-in value or function can be used for a value of your own.
 
 Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value's name may be yours, and a built-in function's as a value; not a palette's or `sun`, `moon` or `replay`).
 
@@ -450,7 +450,7 @@ Move it to the start of a line.
 
 > unknown palette `…` (there are fire, ocean, ice, chrono, amber, rainbow and gray…)
 
-The palettes are fire, ice, ocean, chrono, amber, rainbow and gray, and the ones the formula makes with `palette`.
+The palettes are fire, ocean, ice, chrono, amber, rainbow and gray, and the ones the Formula makes with `palette`.
 
 Use one of the listed palettes, or write your own with `palette name = #…, #…`.
 
@@ -514,7 +514,7 @@ Join two comparisons with `and`: `0 < x and x < 0.5` (a comparison gives 1 or 0,
 
 > there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block
 
-There are no `frame { }` blocks: a value that reads only the time, the clock and the controls is worked out once a frame by itself.
+Psi has no `frame { }` blocks. A value that reads only `t`, the clock and the controls is already worked out once a frame, so its lines need no block around them.
 
 Take the lines out of the block, as they are.
 
@@ -538,7 +538,7 @@ gray(x * k)
 
 > `#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`
 
-A colour such as `#f80` is not a number: it goes in the colour line, where it can be dimmed or mixed.
+A colour such as `#f80` is not a number, so it can't be set as a value. Use it in the colour line, where `#f80 * k` dims it and `mix(#000, #f80, k)` mixes it with another colour.
 
 Use the colour in the colour line, not in a number's place.
 
@@ -560,7 +560,7 @@ v = x
 
 > with layers, every colour goes inside one: put this line in `layer { … }`
 
-Once a formula has a layer, each colour belongs to one: a colour line outside them would have nothing to go on.
+Once a Formula has a layer, every colour line has to be inside a layer.
 
 Put the colour line inside a layer.
 
@@ -614,7 +614,7 @@ Shorten the formula.
 
 > this formula is too long for the panel: … steps (per frame …, draw …, per row …, per pixel …), the limit is … (or: … — simplify it)
 
-The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.
+The panel works out the per-pixel steps for each of the 4,096 pixels every frame, so a Formula can have 768 steps at most. A value that changes only once a row is worked out 32 times a frame, and one that changes only once a frame is worked out once, so moving what you can out of the per-pixel part costs far less.
 
 Simplify the formula: fewer or simpler steps.
 
@@ -654,7 +654,7 @@ Report it with the formula.
 
 > not enough memory for this Formula right now
 
-The panel didn't have the memory to compile this Formula just then (a GIF, a look or a transition was holding it): not the formula's fault. It plays when it is next due; a shorter formula needs less.
+The panel didn't have the memory to compile this Formula at that moment, because a GIF, a look or a transition was using it. Nothing is wrong with the Formula. It plays the next time it is due, and a shorter Formula needs less memory.
 
 Try again, or make the Formula smaller.
 
@@ -716,7 +716,23 @@ Write `for k < 12 { … }` with a whole count from 1 to 1024.
 
 > this formula draws too much a frame (… loop turns in all; the limit is …) — fewer or shorter loops
 
+Every turn of every `for` loop counts, the outer loop's too. `for k < 64 { for j < 32 { … } }` is 64 + 64 × 32 = 2,112 turns, over the 2,048 allowed a frame; with `j < 31` it is 2,048 and fits.
+
 Use fewer or shorter loops.
+
+Before:
+
+```psi-bad
+draw { for k < 64 { for j < 32 { dot(k, j) } } }
+gray(ink)
+```
+
+After:
+
+```psi
+draw { for k < 64 { for j < 31 { dot(k, j) } } }
+gray(ink)
+```
 
 <h3 id="E705">E705 · <code>for</code> nested too deep</h3>
 
@@ -728,7 +744,7 @@ Use at most two `for` loops, one inside the other.
 
 > `…(…)` draws: it goes on a line of its own inside `draw { }`
 
-`line` and `dot` draw into the frame's ink once a frame, so they live in `draw { }`; the pixels read what they drew as `ink`.
+`line`, `dot` and the paint calls (`pset`, `rect`, `circfill` and the rest) draw once a frame, so they go inside `draw { }`. The pixels then read what `line` and `dot` drew as `ink`.
 
 Put the line inside `draw { }`.
 
@@ -758,7 +774,7 @@ Write only numbers in the table.
 
 > `draw { }` runs once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
 
-`draw { }` runs once a frame, before the pixels: there is no pixel position there. Work in pixels, with numbers and the time.
+`draw { }` runs once a frame, before any pixel is worked out, so `x`, `y`, `px`, `py` and the other per-pixel values can't be used there. Give places in pixels, worked out from numbers, `t`, the clock and the controls.
 
 Use only values that are the same everywhere inside `draw { }`.
 
@@ -950,7 +966,7 @@ Use it alone as the last line, or make its last line `#…` or `rgb(…)` so it 
 
 > `fps` is 25, 50 or 100 (every refresh is 100: or write `smooth`)
 
-The panel draws a Formula every refresh of its scan (`smooth`, or `fps 100`), every 2nd (the default, `fps 50`) or every 4th (`fps 25`); nothing in between.
+`fps 100`, `fps 50` and `fps 25` mean every refresh of the panel, every 2nd refresh (the default) and every 4th. The panel refreshes 100 to 125 times a second, so `fps 50` is 50 to 62 frames a second. No other rate is possible. `smooth` is new in OpenDMD 1.1 and means the same as `fps 100`; on OpenDMD 1.0.1 write `fps 100`.
 
 Write `smooth` for every refresh, or `fps 100`, `fps 50` or `fps 25`.
 
@@ -964,7 +980,7 @@ gray(x)
 After:
 
 ```psi
-smooth
+fps 50
 gray(x)
 ```
 
@@ -986,7 +1002,7 @@ Keep one `smooth` or `fps` line.
 
 > `t` grows without end in `loop forever`, and this can't take it: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min, max or smoothstep
 
-In a `loop forever` formula `t` grows without end, and most arithmetic on it would lose its precision or overflow. Wrap it first: `frac`, `%`, `sin` and `noise` keep it in range.
+In a `loop forever` Formula `t` grows without end, and most arithmetic on it would lose precision or overflow. Keep it in range first with `frac`, `%`, `sin` or `noise`.
 
 Use frac(t\*k), t % n, sin(t\*k) or similar in its place.
 
@@ -1026,7 +1042,7 @@ Use fewer values that grow without end.
 
 > a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))
 
-A colour has to be worked out from values that stay in range; `t` in a `loop forever` formula does not.
+A colour has to be worked out from values that stay in range, and `t` in a `loop forever` Formula does not.
 
 Wrap it in frac(…), or limit it with min(t/k, 1).
 
@@ -1062,7 +1078,7 @@ Add the pixel's part inside frac, a wave or noise: frac(t\*k) + x, sin(t\*k + x)
 
 > `phase` is the position in the loop, and `loop forever` has none: use frac(t/k), a place that comes round every k seconds
 
-`phase` is `t` divided by the loop's length, and a `loop forever` formula has no length to divide by.
+`phase` is `t` divided by the loop's length, and a `loop forever` Formula has no length to divide by. (`phase` is new in OpenDMD 1.1.)
 
 Give the formula a `loop N` line, or write frac(t/k) with a period k of your own.
 
@@ -1192,7 +1208,7 @@ Name the colour on the palette's line (`palette road = black #000, kerb #806`), 
 
 > `cycle` turns a whole row at once (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`
 
-`cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.
+`cycle` turns the palette by the same amount along a whole row. The amount can change with the time and from one row to the next, but not from pixel to pixel along a row.
 
 Turn it by t, a value of t, or py.
 
@@ -1279,7 +1295,23 @@ Give the slow layers the same `rate`.
 
 > a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`
 
+A `rate` layer keeps the picture it drew between frames and redraws it a band of rows at a time. So in a Formula with a `rate` layer, no layer can read the picture under the Formula (`ur`, `ug`, `ub`, `ul`), and the `rate` layer itself can't read `ink`. The layers above it may read `ink`.
+
 Do not read `ink`, `ur`, `ug`, `ub` or `ul` in a `rate` formula.
+
+Before:
+
+```psi-bad
+layer rate 4 { gray(x) }
+layer { gray(ul, 0.5) }
+```
+
+After:
+
+```psi
+layer rate 4 { gray(x) }
+layer { gray(y, 0.5) }
+```
 
 <h3 id="E946">E946 · <code>rate</code> before the blend</h3>
 
@@ -1303,7 +1335,7 @@ Leave the blend and the coverage off the bottom `rate` layer.
 
 > `…` goes in the formula's header, at its top among the `name`, `about`, `control`, `look`, `loop` and `smooth` lines, before its other lines
 
-The header (`name`, `about`, `control`, `look`, `loop`, `smooth`, in any order) says what the formula is, so it comes first, before anything it works out.
+The `name`, `about`, `control` and `look` lines go at the top of the Formula, in any order, before any other line. `loop`, `smooth` and `fps` may go there too, but they are also accepted further down.
 
 Move it up into the header, the lines at the top (any order there).
 
