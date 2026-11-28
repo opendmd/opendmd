@@ -352,9 +352,11 @@ function build(root, o) {
     if (!o.webp) { msg.textContent = 'That is an animated WebP: the Studio on opendmd.dev reads those; here, pick a GIF or a picture'; return false; }
     const t0 = performance.now();
     const alive = () => tok === S.tok;
-    let st = null;
+    let st = null, reader;
+    // (The reader's module not loaded — offline, a deploy in between — is said as its wasm not loading is.)
+    try { reader = await o.webp(); } catch { msg.textContent = 'The WebP reader could not be loaded: check your connection, then try again'; return false; }
     try {
-      const r = await (await o.webp()).frames(blob, {
+      const r = await reader.frames(blob, {
         alive,
         progress: (i, n) => { msg.textContent = `Reading frames… ${i} of ${n}`; },
         // (True once the art module keeps no more: its 5,000 frames.)
@@ -362,12 +364,13 @@ function build(root, o) {
       });
       if (r?.still) return 'still';
       if (!r || !alive()) { st?.free(); return false; }
-      if (r.damaged) st.end(false);
+      if (r.damaged || r.cut) st.end(!!r.cut);
       adopt(st, from);
       const [ow, oh, ww, wh, reduce, , capped] = st.info();
       msg.textContent = `${from.label || 'WebP'}: ${ow} × ${oh} · ${st.sourceFrames} frames`
         + (reduce > 1 ? ` · working at ${ww} × ${wh} (1/${reduce} size) to fit in memory` : '')
         + (capped ? ` · only the first ${st.sourceFrames.toLocaleString()} frames are kept` : '')
+        + (r.cut ? ` · only its first ${r.n.toLocaleString()} of ${r.total.toLocaleString()} frames are read (more would be slow on a phone)` : '')
         + (r.damaged ? ' · the rest of the file is damaged' : '');
       Object.assign(el.dataset, { tImport: Math.round(performance.now() - t0), webp: 1 });
       restage(true);

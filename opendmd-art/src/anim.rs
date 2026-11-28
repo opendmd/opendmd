@@ -256,7 +256,8 @@ impl Anim {
         loops: u32,
         budget: usize,
     ) -> Option<Anim> {
-        if w == 0 || h == 0 || n == 0 || first.len() != w * h * 3 {
+        // (Checked: on wasm32 a page's w * h * 3 could wrap.)
+        if w == 0 || h == 0 || n == 0 || rgb_len(w, h) != Some(first.len()) {
             return None;
         }
         let img = rgb_image(first, w, h);
@@ -297,8 +298,9 @@ impl Anim {
         delay_ms: u32,
         budget: usize,
     ) -> Option<Anim> {
-        let most = (budget / (w * h * 3).max(1)).min(MAX_FRAMES);
-        if w == 0 || h == 0 || first.len() != w * h * 3 || most == 0 {
+        let px3 = rgb_len(w, h)?;
+        let most = (budget / px3.max(1)).min(MAX_FRAMES);
+        if w == 0 || h == 0 || first.len() != px3 || most == 0 {
             return None;
         }
         let mut a = Anim::sized(w, h, most, false);
@@ -326,7 +328,7 @@ impl Anim {
             self.orig
         };
         let most = self.in_file.min(MAX_FRAMES);
-        if self.frames.len() < most && rgb.len() == w * h * 3 {
+        if self.frames.len() < most && rgb_len(w, h) == Some(rgb.len()) {
             self.keep(&rgb_image(rgb, w, h), delay_ms);
         }
         self.frames.len() >= most
@@ -666,6 +668,11 @@ impl Anim {
             .map(encode::finish)
             .unwrap_or_default()
     }
+}
+
+/// `w * h * 3`, or `None` where it would wrap (on wasm32 a usize is 32 bits).
+fn rgb_len(w: usize, h: usize) -> Option<usize> {
+    w.checked_mul(h)?.checked_mul(3)
 }
 
 /// RGB bytes (`w * h * 3`) as an opaque picture.

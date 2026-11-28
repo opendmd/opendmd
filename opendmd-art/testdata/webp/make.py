@@ -12,19 +12,31 @@ offset, size, duration, blending and disposal are exactly as written below
 (an encoder would choose its own). What a browser shows is then worked out
 here independently of the Rust reader, straight from the WebP container
 spec: a transparent canvas, the previous frame's rectangle cleared when it
-said "dispose", each frame alpha-blended (non-premultiplied "over") or
-copied, every pixel of each frame as libwebp decodes it.
+said "dispose", each frame alpha-blended (non-premultiplied "over", in
+exact fractions, rounded once, half up) or copied, every pixel of each
+frame as libwebp decodes it.
+
+libwebp's own animation decoder (and so Chrome, and Pillow) blends in 8-bit
+fixed point instead: where a see-through pixel is blended over another see-
+through one it can differ from the exact result by a few levels (up to 4
+in a channel seen on a 16 x 16 gradient of every alpha; this script prints
+the figure for its own frames, 1 on black). Over an opaque pixel, or onto
+a clear one, the two agree.
 
 anim.webp     40 x 24, plays 3 times, 5 frames: a full frame with alpha;
               a blended lossless frame at (6, 4) that is disposed; an
               unblended lossless one at (20, 10) whose holes punch through;
               a blended lossy one with an ALPH chunk, 0 ms, disposed; an
-              opaque lossy one (no alpha) at (24, 0).
+              opaque lossy one (no alpha) at (24, 0); a blended lossless
+              one at (20, 6) of every alpha over frame 0's half-alpha band
+              (see-through over see-through).
 anim.json     its canvas, plays and each frame's raw duration (ms).
 anim.rgba     the composited canvas after each frame, RGBA, frame after frame.
 """
 import io
 import json
+import math
+from fractions import Fraction
 import struct
 from pathlib import Path
 
@@ -82,6 +94,8 @@ FRAMES = [
     (2, 8, draw(16, 12, lambda x, y: (40, 120, 255, 255) if y < 6 else (255, 80, 40, 160)), False, 0, True, True),
     # Lossy, opaque (no alpha chunk), blended (the same as copied).
     (24, 0, draw(16, 8, lambda x, y: (200, 30, 160, 255)), False, 1000, True, False),
+    # Blended, lossless, alpha 0..255 in steps over frame 0's 128-alpha band and its clear pixels.
+    (20, 6, draw(16, 10, lambda x, y: ((x * 16) % 256, 255 - y * 25, 90, min(255, 17 * x + 3 * y))), True, 70, True, False),
 ]
 
 
@@ -98,14 +112,18 @@ def mux() -> tuple[bytes, list[Image.Image]]:
     return b"RIFF" + struct.pack("<I", 4 + len(body)) + b"WEBP" + body, decoded
 
 
+def half_up(v: Fraction) -> int:
+    return math.floor(v + Fraction(1, 2))
+
+
 def over(s: tuple, d: tuple) -> tuple:
-    """Non-premultiplied "over", in exact arithmetic, rounded once."""
-    sa, da = s[3] / 255, d[3] / 255
+    """Non-premultiplied "over", in exact fractions, rounded once (half up)."""
+    sa, da = Fraction(s[3], 255), Fraction(d[3], 255)
     a = sa + da * (1 - sa)
     if a == 0:
         return (0, 0, 0, 0)
     c = [(s[i] * sa + d[i] * da * (1 - sa)) / a for i in range(3)]
-    return tuple(round(v) for v in c) + (round(a * 255),)
+    return tuple(half_up(v) for v in c) + (half_up(a * 255),)
 
 
 def composite(decoded: list[Image.Image]) -> list[bytes]:
@@ -132,6 +150,15 @@ def main() -> None:
     (HERE / "anim.webp").write_bytes(webp)
     (HERE / "anim.rgba").write_bytes(b"".join(composite(decoded)))
     lossy = [i for i, f in enumerate(FRAMES) if not f[3]]
+    # How far libwebp's 8-bit blending is from the exact result, on black (lossless frames).
+    im, n, exp = Image.open(io.BytesIO(webp)), W * H * 4, b"".join(composite(decoded))
+    worst = 0
+    for i in range(len(FRAMES)):
+        im.seek(i)
+        f, e = im.convert("RGBA").tobytes(), exp[i * n:(i + 1) * n]
+        if i not in lossy:
+            worst = max(worst, max(abs(f[j] * f[j - j % 4 + 3] // 255 - e[j] * e[j - j % 4 + 3] // 255) for j in range(n) if j % 4 != 3))
+    print(f"libwebp's animation decoder differs from the exact blend by {worst} at most (on black)")
     (HERE / "anim.json").write_text(json.dumps({"width": W, "height": H, "plays": PLAYS, "ms": [f[4] for f in FRAMES], "lossy": lossy}) + "\n")
     print(f"anim.webp {len(webp)} B, {len(FRAMES)} frames")
 

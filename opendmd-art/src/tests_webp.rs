@@ -1,8 +1,8 @@
 //! The WebP reader (`webp`, feature `webp`) against the fixtures made by
 //! testdata/webp/make.py: what a browser shows after each frame, worked out
-//! there from the container spec and libwebp's own decoding of each frame
-//! (and checked there against libwebp's animation decoder). Natively and
-//! under node.
+//! there from the container spec (exact blending, rounded once) and
+//! libwebp's own decoding of each frame. Natively and under node (wasm32:
+//! where a usize is 32 bits, the size checks below are the ones that matter).
 
 use crate::anim::{Anim, MAX_FRAMES};
 use crate::webp::{is_animated, shown_ms, Webp, MAX_PIXELS};
@@ -55,18 +55,18 @@ fn every_frame_as_a_browser_shows_it() {
             "frame {i}'s duration"
         );
         let (got, want) = (w.rgba(), &EXPECT[i * n..(i + 1) * n]);
-        // Alpha: exact but for the reference's one rounding. Colour: on black, as
-        // the panel shows it; a lossy frame's within what two VP8 decoders differ by.
-        let tol = if lossy.contains(&(i as u32)) { 6 } else { 1 };
+        // Lossless frames: exact, RGBA (the spec's arithmetic, see-through over
+        // see-through included). A lossy frame: its alpha exact, its colour on
+        // black within what two VP8 decoders differ by.
+        let exact = !lossy.contains(&(i as u32));
+        let tol = if exact { 0 } else { 6 };
         let rgb = w.rgb();
         for p in 0..w.width * w.height {
             let (g, e) = (&got[p * 4..p * 4 + 4], &want[p * 4..p * 4 + 4]);
-            assert!(
-                g[3].abs_diff(e[3]) <= 1,
-                "frame {i} pixel {p}: alpha {} for {}",
-                g[3],
-                e[3]
-            );
+            assert_eq!(g[3], e[3], "frame {i} pixel {p}: alpha");
+            if exact && e[3] > 0 {
+                assert_eq!(g, e, "frame {i} pixel ({}, {})", p % w.width, p / w.width);
+            }
             for c in 0..3 {
                 let on_black = (e[c] as u32 * e[3] as u32 + 127) / 255;
                 assert!(
@@ -79,7 +79,7 @@ fn every_frame_as_a_browser_shows_it() {
             }
         }
     }
-    assert!(w.next_frame().is_none(), "five frames, then none");
+    assert!(w.next_frame().is_none(), "six frames, then none");
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn refuses_in_words() {
         "the file is cut short"
     );
     let w = Webp::open(ANIM[..ANIM.len() - 10].to_vec()).unwrap();
-    assert_eq!(w.len(), 4);
+    assert_eq!(w.len(), 5);
 }
 
 #[test]
@@ -242,4 +242,89 @@ fn pictures_fit_the_budget_and_the_cap() {
         Anim::pictures(&[1, 2], 1, 1, 1, 50, 0).is_none(),
         "a first frame of the wrong size"
     );
+}
+
+/// The fixture with a byte range replaced.
+fn patched(at: usize, with: &[u8]) -> Vec<u8> {
+    let mut b = ANIM.to_vec();
+    b[at..at + with.len()].copy_from_slice(with);
+    b
+}
+
+/// Where the `k`th chunk named `tag` starts (its fourcc).
+fn nth(tag: &[u8], k: usize) -> usize {
+    ANIM.windows(4)
+        .enumerate()
+        .filter(|(_, x)| *x == tag)
+        .nth(k)
+        .unwrap()
+        .0
+}
+
+#[test]
+fn sizes_that_wrap_on_wasm32_are_refused() {
+    let why = |b: Vec<u8>| Webp::open(b).err().map(|e| e.0).unwrap_or_default();
+    // 65536 x 65536 is 2^32: 0 in a 32-bit usize. 65536 x 65552 wraps to 2^20, under the limit.
+    for (w, h) in [(65536usize, 65536usize), (65536, 65552)] {
+        let mut b = ANIM.to_vec();
+        b[24..27].copy_from_slice(&((w - 1) as u32).to_le_bytes()[..3]);
+        b[27..30].copy_from_slice(&((h - 1) as u32).to_le_bytes()[..3]);
+        assert!(
+            why(b).starts_with(&format!("it is {w} × {h}, more than")),
+            "{w} x {h}"
+        );
+    }
+    // A RIFF size of 0xffffffff (+ 8 wraps): read as "to the end of the file".
+    let w = Webp::open(patched(4, &[0xff; 4])).unwrap();
+    assert_eq!(w.len(), 6);
+    // The pictures path: a page's w * h * 3 that wraps is refused, not trusted.
+    let rgb = vec![0u8; 3 << 20];
+    assert!(Anim::pictures(&rgb, 65536, 65552, 2, 50, 0).is_none());
+    assert!(Anim::video(&rgb, 65536, 65552, 65536, 65552, 50).is_none());
+}
+
+#[test]
+fn a_frame_whose_bitstream_says_another_size_is_damaged() {
+    // Frame 3 is ALPH + VP8 (16 x 12): its VP8 header made to say 16383 x 8000,
+    // refused before decoding (a small frame must not carry a huge picture).
+    let vp8 = nth(b"VP8 ", 0) + 8; // (the payload)
+    let mut w = Webp::open(patched(vp8 + 6, &[0xff, 0x3f, 0x40, 0x1f])).unwrap();
+    for _ in 0..3 {
+        w.next_frame().unwrap().unwrap();
+    }
+    // (On wasm32 the memory it took is seen: a decoder told 16383 x 8000
+    // sets out ~200 MB of buffers before it finds the data short.)
+    #[cfg(target_arch = "wasm32")]
+    let before = core::arch::wasm32::memory_size(0);
+    assert_eq!(w.next_frame().unwrap().unwrap_err().0, "a frame is damaged");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let grew_mb = (core::arch::wasm32::memory_size(0) - before) * 64 / 1024;
+        assert!(
+            grew_mb < 16,
+            "decoding was started: the memory grew {grew_mb} MB"
+        );
+    }
+    // A VP8L frame (frame 1, 12 x 8) whose header says 13 x 8.
+    let vp8l = nth(b"VP8L", 1) + 8;
+    let mut b = ANIM.to_vec();
+    b[vp8l + 1] = b[vp8l + 1].wrapping_add(1);
+    let mut w = Webp::open(b).unwrap();
+    w.next_frame().unwrap().unwrap();
+    assert_eq!(w.next_frame().unwrap().unwrap_err().0, "a frame is damaged");
+}
+
+#[test]
+fn lossless_alpha_is_read_whatever_its_hint_says() {
+    // Frame 1's VP8L with its "alpha is used" hint cleared: libwebp still
+    // decodes its alpha, and so does this reader: the canvas is as before.
+    let vp8l = nth(b"VP8L", 1) + 8;
+    let mut b = ANIM.to_vec();
+    b[vp8l + 4] &= !0x10;
+    let (mut a, mut z) = (Webp::open(ANIM.to_vec()).unwrap(), Webp::open(b).unwrap());
+    for _ in 0..2 {
+        a.next_frame().unwrap().unwrap();
+        z.next_frame().unwrap().unwrap();
+    }
+    assert_eq!(a.rgba(), z.rgba());
 }

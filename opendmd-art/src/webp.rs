@@ -18,7 +18,16 @@
 //!
 //! Memory: the file's bytes, the canvas (4 bytes a pixel), one decoded
 //! frame at a time. The canvas is at most [`MAX_PIXELS`] (the player's
-//! GIF limit, 2048 x 2048), so a hostile header cannot ask for gigabytes.
+//! GIF limit, 2048 x 2048), so a hostile header cannot ask for gigabytes;
+//! every size the file states is checked before anything is decoded (in
+//! u64: on wasm32 a usize product of two 24-bit sizes wraps), and each
+//! frame's bitstream must say the frame's own size before it is decoded
+//! (else a small frame could carry a huge VP8 picture).
+//!
+//! Blending is the spec's exact arithmetic, rounded once (half up).
+//! libwebp's animation decoder (and so Chrome) approximates it in 8 bits
+//! and can differ by a few levels where a see-through pixel is blended over
+//! another (testdata/webp/make.py measures it); elsewhere they agree.
 
 use std::io::Cursor;
 
@@ -112,7 +121,7 @@ impl Webp {
         if bytes.len() < 30 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
             return err("it isn’t a WebP");
         }
-        let end = (le(&bytes, 4, 4) + 8).min(bytes.len());
+        let end = le(&bytes, 4, 4).saturating_add(8).min(bytes.len());
         let all = chunks(&bytes, 12, end)?;
         let Some(&(_, x0, _)) = all.first().filter(|c| c.0 == *b"VP8X" && c.2 >= 10) else {
             return err("it isn’t an animated WebP");
@@ -121,7 +130,7 @@ impl Webp {
             return err("it isn’t an animated WebP");
         }
         let (width, height) = (1 + le(&bytes, x0 + 4, 3), 1 + le(&bytes, x0 + 7, 3));
-        if width * height > MAX_PIXELS {
+        if width as u64 * height as u64 > MAX_PIXELS as u64 {
             return Err(Error(format!(
                 "it is {width} × {height}, more than the 2048 × 2048 pixels’ worth the Studio reads"
             )));
@@ -149,7 +158,7 @@ impl Webp {
                 data: (i + 16, i + n),
                 alph: false,
             };
-            if f.x + f.w > width || f.y + f.h > height {
+            if f.x as u64 + f.w as u64 > width as u64 || f.y as u64 + f.h as u64 > height as u64 {
                 return err("a frame lies outside the picture");
             }
             let subs = chunks(&bytes, f.data.0, f.data.1)?;
@@ -233,8 +242,8 @@ impl Webp {
     }
 }
 
-/// How long a frame shows, as browsers and the player show it: 10 ms or
-/// less is 100 ms (as for a GIF), anything else at least the player's 20.
+/// How long a frame shows: 10 ms or less is 100 ms (the browsers' rule, for
+/// every animated format), anything else at least the player's 20.
 pub fn shown_ms(ms: u32) -> u32 {
     if ms <= 10 {
         100
@@ -280,13 +289,41 @@ fn decode(b: &[u8], f: &Frame) -> Result<Vec<u8>, Error> {
         x.extend_from_slice(&((f.h - 1) as u32).to_le_bytes()[..3]);
         chunk(&mut file, b"VP8X", &x);
     }
-    // Only the bitstream chunks (an unknown one in a frame is skipped, as the spec says).
+    // Only the bitstream chunks (an unknown one in a frame is skipped, as the
+    // spec says), each saying the frame's own size before anything decodes it.
     for (tag, i, n) in chunks(b, f.data.0, f.data.1)? {
-        if matches!(&tag, b"ALPH" | b"VP8 " | b"VP8L") {
-            chunk(&mut file, &tag, &b[i..i + n]);
-            if n & 1 == 1 {
-                file.push(0);
+        let data = &b[i..i + n];
+        match &tag {
+            b"VP8 " => {
+                // Frame tag (3), start code 9d 01 2a, then 14-bit width and height.
+                if n < 10
+                    || data[3..6] != [0x9d, 0x01, 0x2a]
+                    || (le(data, 6, 2) & 0x3fff, le(data, 8, 2) & 0x3fff) != (f.w, f.h)
+                {
+                    return err("a frame is damaged");
+                }
+                chunk(&mut file, &tag, data);
             }
+            b"VP8L" => {
+                // Signature 0x2f, then width - 1 and height - 1 (14 bits each), the alpha hint, the version.
+                if n < 5 || data[0] != 0x2f {
+                    return err("a frame is damaged");
+                }
+                let v = le(data, 1, 4);
+                if (1 + (v & 0x3fff), 1 + ((v >> 14) & 0x3fff)) != (f.w, f.h) {
+                    return err("a frame is damaged");
+                }
+                // The alpha hint set: its alpha is decoded as it is, as libwebp does
+                // (the hint only says whether it may be ignored).
+                let mut d = data.to_vec();
+                d[4] |= 0x10;
+                chunk(&mut file, &tag, &d);
+            }
+            b"ALPH" => chunk(&mut file, &tag, data),
+            _ => continue,
+        }
+        if n & 1 == 1 {
+            file.push(0);
         }
     }
     let size = (file.len() - 8) as u32;
