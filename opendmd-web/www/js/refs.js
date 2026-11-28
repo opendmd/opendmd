@@ -96,11 +96,10 @@ export async function relink(pairs, step, stopped) {
   step?.(done.length, true);
   const map = new Map(done.map((p) => [lc(p.from), p.to]));
   const to = (p) => (map.has(lc(p)) ? map.get(lc(p)) : p);
-  await rewrite(to);
-  const t = app.tags || (app.setNames?.has('.tags') && (await (await import('./tags.js')).tags()));
-  if (t) await t.relink(done);
-  const gone = new Set(done.filter((p) => !p.to).map((p) => lc(p.from)));
-  if (gone.size) await unsmooth(gone);
+  // The card's references (`tidy`: what stopped them, null when done). The
+  // files have moved whatever happens there: what the app holds follows
+  // below all the same, and the caller offers to try the references again.
+  const tidy = await follow(done).then(() => null, (e) => e);
   // What the app holds by path follows too.
   const d = app.draft;
   d.paths = d.paths.map(to).filter(Boolean);
@@ -113,7 +112,26 @@ export async function relink(pairs, step, stopped) {
     if (p.to) dirs.set(dir(p.to), p.to);
   }
   for (const [d, p] of dirs) { await dropEmpty(p); emit('gifs', d.split('/')[2]); }
-  import('./smart.js').then((m) => m.refreshAll()).catch(() => {});
+  if (!tidy) import('./smart.js').then((m) => m.refreshAll()).catch(() => {});
   emit('draft');
-  return { done, failed };
+  return { done, failed, tidy };
+}
+
+// What names the GIFs `done` moved or deleted ([{from, to | null}]) follows
+// them: every playlist and its overrides, the tags (each on its own: one
+// that fails leaves the others done), Smooth motion's list. Throws the
+// first failure. relink runs it; again on its own when that failed (Retry).
+export async function follow(done) {
+  const map = new Map(done.map((p) => [lc(p.from), p.to]));
+  const to = (p) => (map.has(lc(p)) ? map.get(lc(p)) : p);
+  let err = null;
+  await rewrite(to).catch((e) => { err = e; });
+  try {
+    const t = app.tags || (app.setNames?.has('.tags') && (await (await import('./tags.js')).tags()));
+    if (t) await t.relink(done);
+  } catch (e) { err ??= e; }
+  const gone = new Set(done.filter((p) => !p.to).map((p) => lc(p.from)));
+  if (gone.size) await unsmooth(gone).catch((e) => { err ??= e; });
+  if (err) throw err;
+  import('./smart.js').then((m) => m.refreshAll()).catch(() => {});
 }

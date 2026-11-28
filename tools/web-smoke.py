@@ -1885,6 +1885,36 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
             delete_path(base, meta)
 
 
+def tidy_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """A GIF deleted whose playlist can't be written then (the write
+    refused): the GIF is gone and the app follows (its row goes), the toast
+    says the playlists couldn't be updated and offers Retry, which updates
+    them."""
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    gif = "/gifs/Tidy_Smoke/MD_Tidy_Smoke_01.gif"
+    put_bytes(base + "/api/files" + gif, src)
+    put_text(base + "/api/sets/tidy-a", gif + "\n")
+    page = new_page(browser, "laptop", errors)
+    page.on("dialog", lambda d: d.accept())
+    page.goto(base + "/#library/Tidy_Smoke")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=30000)
+    expected.append("/api/files/sets/tidy-a.txt")
+    refuse = lambda r: r.fulfill(status=500, json={"error": "smoke: refused"}) if r.request.method == "PUT" else r.continue_()
+    page.route("**/api/files/sets/tidy-a.txt", refuse)
+    page.evaluate("p => import('./js/details.js').then((m) => m.removeGif(p, 'Tidy Smoke 01'))", gif)
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.includes('Playlists couldn’t be updated'))", timeout=30000)
+    page.wait_for_function(f"!document.querySelector('#lib-list .vrow[data-path={json.dumps(gif)}]')", timeout=20000)
+    check(not (overlay / gif.lstrip("/")).exists() and gif in (overlay / "sets" / "tidy-a.txt").read_text(),
+          "tidy: the GIF deleted, its row gone, the playlist not written: said, with Retry")
+    page.unroute("**/api/files/sets/tidy-a.txt", refuse)
+    page.click("#toasts .toast.bad:has-text('Playlists couldn’t be updated') button")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some((e) => e.textContent === 'Playlists updated')", timeout=30000)
+    check(gif not in (overlay / "sets" / "tidy-a.txt").read_text(), "tidy: Retry updates the playlist")
+    expected.remove("/api/files/sets/tidy-a.txt")
+    page.context.close()
+    delete_path(base, "/sets/tidy-a.txt")
+
+
 def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Many GIFs moved, renamed and deleted at once (Select › More ▾:
     js/details.js's bulk dialogs, js/refs.js), in a fresh browser: three
@@ -5523,6 +5553,7 @@ def mock_pass(browser) -> None:
         smart_more_checks(browser, base, overlay, errors)
         tags_checks(browser, base, overlay, errors)
         relink_checks(browser, base, overlay, errors)
+        tidy_checks(browser, base, overlay, errors)
         selection_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.

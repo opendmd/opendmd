@@ -311,15 +311,17 @@ const refs = () => import('./refs.js');
 
 // One GIF renamed: its references follow. Throws if the move failed.
 export async function renameGif(from, to) {
-  const { failed } = await (await refs()).relink([{ from, to }]);
-  if (failed) throw failed.error;
+  if (busy()) throw new Error('another batch is under way');
+  const r = await (await refs()).relink([{ from, to }]);
+  if (r.failed) throw r.failed.error;
+  if (r.tidy) tidyFailed(r, 'Renamed');
 }
 
 export async function removeGif(path, name) {
-  if (!confirm(`Delete “${name}” from the card? It is taken out of every playlist too. This can’t be undone.`)) return false;
-  const { failed } = await (await refs()).relink([{ from: path, to: null }]);
-  if (failed) { toast(`deleting “${name}”: ${failed.error.message}`, 'bad'); return false; }
-  toast(`deleted “${name}”`, 'ok');
+  if (busy() || !confirm(`Delete “${name}” from the card? It is taken out of every playlist too. This can’t be undone.`)) return false;
+  const r = await (await refs()).relink([{ from: path, to: null }]);
+  if (r.failed) { toast(`Couldn’t delete “${name}”: ${r.failed.error.message}`, 'bad'); return false; }
+  if (r.tidy) tidyFailed(r, 'Deleted'); else toast(`Deleted “${name}”`, 'ok');
   return true;
 }
 
@@ -331,7 +333,11 @@ export async function removeGif(path, name) {
 // While it runs, a progress line over the toasts: "Moving 3 of 6 GIFs…",
 // a bar and Stop (the GIF under way finishes; those not begun stay
 // selected), then "Updating playlists…" once the files are done.
+// (One at a time: a second, begun while one runs, is refused.)
+let running = false;
+export const busy = () => running && (toast('Wait for the GIFs being moved or deleted: one batch at a time', 'bad'), true);
 async function batch(pairs, verb, done) {
+  if (busy()) return null;
   const N = pairs.length, n = N.toLocaleString();
   if (N > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${n} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
   const ing = { Deleted: 'Deleting', Moved: 'Moving' }[verb] || 'Renaming';
@@ -347,12 +353,22 @@ async function batch(pairs, verb, done) {
   };
   step(0);
   let r;
-  try { r = await (await refs()).relink(pairs, step, () => stop); } finally { box.remove(); }
+  running = true;
+  try { r = await (await refs()).relink(pairs, step, () => stop); } finally { box.remove(); running = false; }
   const k = r.done.length.toLocaleString(), how = verb === 'Deleted' ? 'deleted' : 'moved';
-  if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
+  if (r.tidy) tidyFailed(r, verb);
+  else if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
   else if (r.done.length < N) toast(`Stopped: ${how} ${k} of ${n}. The rest are still selected`, 'ok');
   else toast(`${verb} ${k} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
   return { done: r.done, left: pairs.slice(r.done.length).map((p) => p.from) };
+}
+
+// The GIFs moved, but what names them (playlists, tags) couldn't follow:
+// said, with Retry until it works.
+function tidyFailed(r, verb) {
+  toast(`${verb} ${r.done.length.toLocaleString()} GIF${r.done.length === 1 ? '' : 's'}. Playlists couldn’t be updated: ${r.tidy.message}`, 'bad', ['Retry', async () => {
+    try { await (await refs()).follow(r.done); toast('Playlists updated', 'ok'); } catch (e) { tidyFailed({ ...r, tidy: e }, verb); }
+  }]);
 }
 
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
