@@ -51,14 +51,16 @@ function needs(tags, again) {
 // background (the first time each is wanted); a change replaces it, and
 // the trees redraw. A folder the app itself changes (a move, an add, a
 // delete: `gifs`) loses its record, so nothing stale is shown after.
+// (No IndexedDB, a private window, or one slow to open: no cache, the card's listings only.)
 let dbQ = null;
 const db = () => (dbQ ??= new Promise((res) => {
+  setTimeout(() => res(null), 1500);
   try {
     const r = indexedDB.open('odmd-lists', 1);
     r.onupgradeneeded = () => r.result.createObjectStore('l');
     r.onsuccess = () => res(r.result);
     r.onerror = r.onblocked = () => res(null);
-  } catch { res(null); } // (no IndexedDB: a private window)
+  } catch { res(null); }
 }));
 // get (`v` undefined), put, or delete (`v` null); never throws.
 async function kept(dir, v) {
@@ -85,8 +87,15 @@ async function fresh(dir, dirs) {
 }
 const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
-// A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
-export function listCat(c) {
+// Per folder: this session's listing ({p: what lists holds, card: the
+// card's own listing, items or null}); and kept ones whose re-list failed,
+// to try again (`recheck`): folder -> {n tries, at: not before}.
+const metas = new Map(), stale = new Map();
+
+// A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could
+// not be read. `own`: the card's own listing, never a kept one (a smart
+// playlist must not be written from a list the card may have changed since).
+export function listCat(c, own) {
   const dir = `/gifs/${c}`;
   const items = (names) => names.map((name) => {
     const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
@@ -106,21 +115,38 @@ export function listCat(c) {
   if (!lists.has(c)) {
     me.p = (async () => {
       const old = !checked.has(dir) && await kept(dir);
-      if (!old) return keep(items(await fresh(dir)));
-      // Kept: shown now; the card's own listing, when it comes, wins.
-      fresh(dir).then((names) => {
-        if (lists.get(c) !== me.p || same(names, old)) return;
-        keep(items(names));
+      if (!old) { const l = items(await fresh(dir)); me.card = Promise.resolve(l); return keep(l); }
+      // Kept: shown now; the card's own listing, when it comes, wins: it
+      // replaces what `lists` holds too, so every caller after gets it.
+      me.card = fresh(dir).then((names) => {
+        stale.delete(c);
+        const l = items(names);
+        if (lists.get(c) !== me.p || same(names, old)) return l;
+        lists.set(c, me.p = Promise.resolve(l));
+        keep(l);
         for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); t.update(); }
-      }, () => {});
+        return l;
+      }, () => {
+        // (Not marked checked: asked again at the next look, a while later each time.)
+        const n = (stale.get(c)?.n || 0) + 1;
+        stale.set(c, { n, at: Date.now() + Math.min(120000, 5000 * 2 ** n) });
+        return null;
+      });
       return keep(items(old));
     })().catch(() => { if (lists.get(c) === me.p) lists.delete(c); return null; });
     lists.set(c, me.p);
+    metas.set(c, me);
   }
-  return lists.get(c);
+  const m = metas.get(c);
+  return own ? lists.get(c).then(async (l) => (l && m?.card ? await m.card : l)) : lists.get(c);
+}
+// Kept listings whose re-list failed, listed again once their wait is up
+// (the Library calls it when it is shown).
+export function recheck() {
+  for (const [c, s] of stale) if (s.at <= Date.now() && !checked.has(`/gifs/${c}`)) { lists.delete(c); metas.delete(c); listCat(c); }
 }
 export function forget(c) {
-  for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); }
+  for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); metas.delete(k); }
   // (Changed by the app: its record goes. Everything: listed afresh, kept records shown meanwhile.)
   if (c) { checked.delete(`/gifs/${c}`); kept(`/gifs/${c}`, null); } else checked.clear();
   // (A search showing lists it again: its count would leave the folder out.)

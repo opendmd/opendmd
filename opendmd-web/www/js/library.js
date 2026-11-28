@@ -10,7 +10,7 @@
 import { app, platName } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
 import { PanelPreview } from './preview.js';
-import { Tree, chipRow, forget as forgetDir } from './tree.js';
+import { Tree, chipRow, forget as forgetDir, recheck } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
 import { authorOf, addOne, offerPlaylist, targetMenu } from './gifs.js';
 import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE, unreachable, enc, base } from './util.js';
@@ -247,6 +247,16 @@ export async function mount(el) {
   }
   function counted(st) {
     const text = search.value.trim();
+    // The GIF in Details gone from its folder (the card's listing, read again, lacks it): Details closes.
+    const cat = current?.path.startsWith('/gifs/') && current.path.split('/')[2], l = cat && tree.items(cat);
+    if (l && !l.some((x) => x.path === current.path)) {
+      current = null;
+      tree.cur = '';
+      body.hidden = true;
+      closeSheet();
+      pv.clear();
+      cap.textContent = 'Pick a GIF to see it here';
+    }
     count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
     count.classList.toggle('bad', !!st.err);
     favs();
@@ -437,6 +447,7 @@ export async function mount(el) {
   on('card', () => { if (el.classList.contains('on')) { playlists(); again(); } });
   return {
     show() {
+      recheck();
       sync();
       playlists();
       again();

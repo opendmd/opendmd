@@ -2803,24 +2803,62 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
 
 def kept_listing_checks(browser, base: str, errors: list[str]) -> None:
     """Folder listings are kept in the browser (IndexedDB odmd-lists,
-    js/tree.js): a second visit shows Consoles' rows while every listing is
-    still on its way (each held 3 s here), then the card's own listing,
-    asked once, replaces it; and Settings reads no playlist until Choose…"""
+    js/tree.js): a second visit shows a folder's rows while its listing is
+    still held back (the rows come before the answer), then the card's own
+    listing, asked once, replaces the kept one; a folder changed behind the
+    app's back reads as the card has it, for the rows and for a smart
+    playlist's every-GIF list alike (never the kept one); a folder the app
+    changes itself loses its record (no stale rows next time); with no
+    IndexedDB the Library lists from the card; and Settings reads no
+    playlist until Choose…"""
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    k = [f"/gifs/Kept_Smoke/MD_Kept_Smoke_{i:02d}.gif" for i in (1, 2, 3)]
+    for p in k[:2]:
+        put_bytes(base + "/api/files" + p, src)
+    hold = """window.__held = 0; window.__go = null; const go = new Promise((r) => { window.__go = r; });
+        const f = window.fetch; window.fetch = (u, o) => /api\\/files\\?dir=/.test(String(u)) ? (window.__held++, go.then(() => f(u, o))) : f(u, o);"""
     page = new_page(browser, "laptop", errors)
-    page.goto(base + "/#library/Consoles")
-    page.wait_for_selector("#lib-list .vrow:not([hidden])", timeout=30000)
+    page.goto(base + "/#library/Kept_Smoke")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(k[1])}]", timeout=30000)
     page.wait_for_timeout(1000)
-    page.add_init_script("""const f = window.fetch; window.fetch = (u, o) => /api\\/files\\?dir=/.test(String(u)) ? new Promise(r => setTimeout(r, 3000)).then(() => f(u, o)) : f(u, o);""")
+    page.add_init_script(hold)
     asked: list[str] = []
     page.on("request", lambda r: "/api/files?dir=" in r.url and asked.append(urllib.parse.unquote(r.url.split("dir=", 1)[1])))
-    t0 = time.time()
     page.reload()
-    page.wait_for_selector("#lib-list .vrow:not([hidden])", timeout=30000)
-    took = time.time() - t0
-    check(took < 2.5, f"kept listings: Consoles' rows shown {took:.1f} s after a reload, the listings held 3 s")
-    page.wait_for_timeout(4000)
-    check(asked.count("/gifs/Consoles") == 1 and asked.count("/gifs") == 1,
-          f"kept listings: then listed once from the card ({asked})")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(k[1])}]", timeout=30000)
+    held = page.evaluate("window.__held")
+    check(held > 0 and not asked, f"kept listings: the rows shown before any listing is answered ({held} held)")
+    page.evaluate("window.__go()")
+    page.wait_for_timeout(2000)
+    check(asked.count("/gifs/Kept_Smoke") == 1 and asked.count("/gifs") == 1, f"kept listings: then listed once from the card ({asked})")
+    page.context.close()
+    # Changed behind the app's back: the card's listing wins, rows and smart playlists alike.
+    delete_path(base, k[0])
+    put_bytes(base + "/api/files" + k[2], src)
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library/Kept_Smoke")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(k[2])}]", timeout=30000)
+    page.wait_for_function(f"!document.querySelector('#lib-list .vrow[data-path={json.dumps(k[0])}]')", timeout=10000)
+    every = page.evaluate("() => import('./js/smart.js').then((m) => m.everyGif())").split("\n")
+    check(k[2] in every and k[0] not in every, "kept listings: a folder changed on the card: rows and a smart playlist's every-GIF list as the card has it")
+    # Changed by the app: its record goes, so the next visit shows nothing stale.
+    page.evaluate("p => import('./js/refs.js').then((m) => m.relink([{ from: p, to: null }]))", k[1])
+    page.wait_for_function(f"!document.querySelector('#lib-list .vrow[data-path={json.dumps(k[1])}]')", timeout=20000)
+    page.add_init_script(hold)
+    page.reload()
+    page.wait_for_selector("#lib-list", timeout=30000)
+    page.wait_for_timeout(1500)
+    stale = page.locator(f"#lib-list .vrow[data-path={json.dumps(k[1])}]").count()
+    check(stale == 0, "kept listings: a GIF the app deleted is not shown from a kept list on the next visit")
+    page.evaluate("window.__go()")
+    page.context.close()
+    # IndexedDB failing (a private window): listed from the card.
+    page = new_page(browser, "laptop", errors)
+    # (As a private window has it: every open fails.)
+    page.add_init_script("IDBFactory.prototype.open = function () { const r = {}; setTimeout(() => r.onerror?.(new Event('error'))); return r; };")
+    page.goto(base + "/#library/Kept_Smoke")
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(k[2])}]", timeout=30000)
+    check(True, "kept listings: with no IndexedDB the Library lists from the card")
     reads: list[str] = []
     page.on("request", lambda r: r.url.endswith("/filelist.txt") and reads.append(r.url))
     goto_view(page, "settings/play")
@@ -2828,6 +2866,7 @@ def kept_listing_checks(browser, base: str, errors: list[str]) -> None:
     check(not reads and page.inner_text("#st-plat-val") == "All platforms",
           f"settings: opening Playback reads no playlist ({reads}, '{page.inner_text('#st-plat-val')}')")
     page.context.close()
+    delete_path(base, k[2])
 
 
 def tree_checks(browser, base: str, errors: list[str]) -> None:
