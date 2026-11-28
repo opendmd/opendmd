@@ -30,7 +30,7 @@
 // user's own (js/tags.js), never a part of the name; never bucket or a
 // copy's path.
 
-import { app, listOr } from './state.js';
+import { app, listOr, platName } from './state.js';
 import { art } from './artmod.js';
 import { authorOf } from './gifs.js';
 import { h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
@@ -39,7 +39,7 @@ const WHY = {
   title: 'Give it a title',
   'title-char': 'A title can’t have _ " * / : < > ? \\ | or accented letters',
   platform: 'That is not a platform name',
-  category: 'A category name can’t have / " * : < > ? \\ | or accented letters',
+  category: 'A folder name can’t have / " * : < > ? \\ | or accented letters',
   author: 'An author is one word of letters and digits, 3 or more, like “pixelkid42”',
   'needs-platform': 'An author needs a platform',
   'too-long': 'That name is too long: shorten the title',
@@ -150,9 +150,9 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
 
   function row(init, i, file) {
     const title = h('input', { type: 'text', className: 'dl-title', value: init.title || '', placeholder: 'What it shows', required: true, 'aria-label': 'Title' });
-    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
+    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) || p)));
     platform.value = init.platform || '';
-    const category = h('select', { className: 'dl-cat', 'aria-label': 'Category' });
+    const category = h('select', { className: 'dl-cat', 'aria-label': 'Folder' });
     const author = h('input', { type: 'text', className: 'dl-author', value: init.author || '', placeholder: 'optional', 'aria-label': 'Author' });
     const name = h('div.cap.mono.dl-name');
     const err = h('div.bad.dl-err');
@@ -170,7 +170,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
           file && h('div.cap.mono', file.name),
           h('div.form',
             h('label.stack', 'Title', title), h('label.stack', 'Platform', platform),
-            h('label.stack', 'Category', category), h('label.stack', 'Author', author)),
+            h('label.stack', 'Folder', category), h('label.stack', 'Author', author)),
           name, err)),
       name, err,
     };
@@ -179,7 +179,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     platform.onchange = refresh;
     category.onchange = () => {
       if (category.value === '\n') {
-        const c = (prompt('Name of the new category') || '').trim();
+        const c = (prompt('Name of the new folder') || '').trim();
         if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
         for (const x of items) fillCats(x, x === it ? c || x.cat : x.cat);
       }
@@ -189,7 +189,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   }
 
   function fillCats(it, value) {
-    clear(it.category, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New category…'));
+    clear(it.category, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
     it.category.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
     it.cat = it.category.value;
   }
@@ -210,7 +210,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
       const { path = null, why = '' } = pickName(m, f, l, keep, taken);
       it.out = path && { file: it.file, category: c, name: base(path), path };
       it.title.classList.toggle('bad', !f.title);
-      it.name.textContent = path ? `→ ${base(path)}${app.device ? ` in ${c}` : ''}` : '';
+      it.name.textContent = path ? `→ ${base(path)}${app.device ? ` in ${niceName(c)}` : ''}` : '';
       it.err.textContent = why;
       Object.assign(it.el.dataset, { name: path ? base(path) : '', error: why ? 'yes' : '' });
       if (path) taken.add(lc(path)); else bad++;
@@ -352,13 +352,16 @@ export async function bulkMove(paths, opts) {
   return batch(plan, 'Moved', ` to ${niceName(c)}`);
 }
 
+// A GIF as the rename preview says it: its title, then its platform and author by name.
+const said = (p) => { const e = app.wasm.parsePath(p), a = authorOf(e); return [label(e), platName(e.platform), a && 'by ' + a].filter(Boolean).join(' · '); };
+
 // Rename…: a title, platform or author for all of them; each keeps what is
 // left blank. A preview of the names first (50 at most shown).
 export async function bulkRename(paths, opts) {
   const m = await art();
   dlgStyle();
   const title = h('input', { type: 'text', id: 'br-title', placeholder: 'keep each' });
-  const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
+  const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) || p)));
   const author = h('input', { type: 'text', id: 'br-author', placeholder: 'keep each; - for none' });
   const list = h('div.cap.mono', { id: 'br-list' });
   let plan = [];
@@ -380,7 +383,7 @@ export async function bulkRename(paths, opts) {
     if (k !== seq) return;
     plan = got;
     const bad = got.find((x) => x.why), moving = got.filter((x) => x.to);
-    clear(list, bad ? h('div.bad', bad.why) : moving.slice(0, 50).map((x) => h('div.br-row', `${base(x.from)} → ${base(x.to)}`)),
+    clear(list, bad ? h('div.bad', bad.why) : moving.slice(0, 50).map((x) => h('div.br-row', `${said(x.from)} → ${said(x.to)}`)),
       !bad && moving.length > 50 && h('div', `and ${(moving.length - 50).toLocaleString()} more`));
     okBtn.disabled = !!bad || !moving.length;
   };

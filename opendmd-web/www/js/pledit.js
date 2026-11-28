@@ -132,7 +132,7 @@ export function editor(se, ctx) {
     extra: (it) => platName(it.e.platform) && h('span.tag', platName(it.e.platform)),
     onTick: () => foot(),
     onError: (m) => toast(m, 'bad'),
-    onUpdate: (st) => { chipRow(aChips, st.plats, aPl, 'data-platform', () => tree.filter(addQ.value, aPl)); foot(st); },
+    onUpdate: (st) => { chipRow(aChips, st.plats, aPl, 'data-platform', () => tree.filter(addQ.value, aPl), (v) => platName(v) || 'Other'); foot(st); },
   });
   tree.el.id = 'set-add-list';
   let shown = 0;

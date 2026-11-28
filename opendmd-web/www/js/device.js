@@ -6,7 +6,7 @@
 
 import { app, playlistLabel, setPath } from './state.js';
 import * as prep from './prepare.js';
-import { h, clear, on, toast, base, note, saver, bytes, uptime, SITE } from './util.js';
+import { h, clear, on, toast, label, niceName, note, saver, bytes, uptime, SITE } from './util.js';
 
 // The HTTP API this firmware speaks, on the site: a release's own page
 // (dev/api/v<version>.html, frozen when it was published) when the player
@@ -313,14 +313,16 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     const skipped = dmg ? ` · ${files(dmg, 'damaged file')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
     cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
       : j.phase === 'preparing' ? `${num(n)} of ${num(j.todo)} · ${num(j.done)} prepared` + (dmg ? ` · ${num(dmg)} damaged skipped` : '')
-        + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
+        + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${label(app.wasm.parsePath(j.current))}` : '')
       : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped
       : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on' : '';
     // Once a run is over: what was skipped, and what could not be fetched.
-    const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map((r) => h('div', r))));
-    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => `${d.path} — ${d.reason}`)),
+    // (Each GIF by its title and folder, never its path: `data-path` for tools/web-smoke.py.)
+    const said = (p) => `${label(app.wasm.parsePath(p))} (${niceName(p.split('/')[2] || '')})`;
+    const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map(([p, r]) => h('div', { 'data-path': p }, said(p) + (r ? ' — ' + r : '')))));
+    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => [d.path, d.reason])),
       !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'file')} — `),
-        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which files', j.net)));
+        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which files', j.net.map((p) => [p]))));
     clear(cacheErr, j.errors.map((e) => h('div', e)));
     if (!j.running && j.phase !== 'idle') loadCache();
   }

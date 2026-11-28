@@ -95,7 +95,7 @@ export async function mount(el) {
   const cap = h('div.cap', { id: 'lib-cap' }, 'Pick a GIF to see it here');
   const dTitle = h('h2', { id: 'lib-d-title' });
   const meta = h('div.cap', { id: 'lib-d-meta' });
-  const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Send to panel');
+  const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Play now');
   const plBtn = h('button', { id: 'lib-d-add', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [current.path]) }, 'Add to playlist…');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
@@ -250,7 +250,7 @@ export async function mount(el) {
       goneBox.hidden = !lost.length;
       goneBox.querySelector('#lib-gone-move').hidden = !moved;
     }
-    grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply) < 2);
+    grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply, (v) => platName(v) || 'Other') < 2);
     grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
     webMsg.replaceChildren('Nothing here matches “', webQ, '”. ');

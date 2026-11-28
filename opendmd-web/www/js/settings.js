@@ -10,7 +10,7 @@
 // is live at once —, Remote control js/remote.js, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
 
-import { app, playlistLabel, setPath, NO_FORMULAS } from './state.js';
+import { app, playlistLabel, setPath, platName, NO_FORMULAS } from './state.js';
 import { timeCard, scheduleCard } from './schedule.js';
 import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
@@ -151,7 +151,7 @@ export async function mount(el) {
   const chosen = () => f.platforms.value.toUpperCase().split(',').map((p) => p.trim()).filter(Boolean);
   async function platRow() {
     const n = (await platCounts()).length, s = chosen();
-    platVal.textContent = s.length ? s.join(', ') : `All (${n})`;
+    platVal.textContent = s.length ? s.map((p) => platName(p) || p).join(', ') : `All (${n})`;
   }
   async function platSheet(btn) {
     const all = [...await platCounts()], sel = new Set(chosen());
@@ -162,9 +162,9 @@ export async function mount(el) {
     const box = h('div.chips', { id: 'st-plats' });
     const only = h('button.pri', { id: 'st-plat-only', onclick: () => platSet([...sel]) });
     function draw() {
-      const t = q.value.trim().toUpperCase(), hit = all.filter(([p]) => p.includes(t));
+      const t = q.value.trim().toUpperCase(), hit = all.filter(([p]) => p.includes(t) || (platName(p) || '').toUpperCase().includes(t));
       const show = hit.filter(([p, k]) => more || t || k >= 5 || sel.has(p)), rest = hit.length - show.length;
-      clear(box, show.map(([p, k]) => h('button.chip' + (sel.has(p) ? '.on' : ''), { 'data-platform': p, 'aria-pressed': String(sel.has(p)), onclick: () => { sel.delete(p) || sel.add(p); draw(); } }, p, h('small', k.toLocaleString()))),
+      clear(box, show.map(([p, k]) => h('button.chip' + (sel.has(p) ? '.on' : ''), { 'data-platform': p, 'aria-pressed': String(sel.has(p)), onclick: () => { sel.delete(p) || sel.add(p); draw(); } }, platName(p) || 'Other', h('small', k.toLocaleString()))),
         rest > 0 && h('button.chip.txt', { id: 'st-plat-more', onclick: () => { more = true; draw(); } }, `+${rest} more`));
       only.textContent = sel.size ? `Only these (${sel.size})` : 'Only these';
       only.disabled = !sel.size;

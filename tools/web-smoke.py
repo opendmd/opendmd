@@ -5251,11 +5251,11 @@ def mock_pass(browser) -> None:
         expected.append("/api/play")
         page.evaluate(play, "/gifs/Consoles/no-such-file.gif")
         t = last_toast(page, "bad")
-        check("not on the card" in t, f"now: 404 play -> toast '{t}'")
+        check("isn’t on the card" in t and "/" not in t and ".gif" not in t, f"now: 404 play -> toast by title '{t}'")
         page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
         page.evaluate(play, "/filelist.txt")
         t = last_toast(page, "bad")
-        check("not a GIF" in t and not LEAK.search(t), f"now: 415 play -> toast '{t}'")
+        check("isn’t a GIF" in t and not LEAK.search(t), f"now: 415 play -> toast '{t}'")
         page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
         no_leaks(page, "now")
         shot(page, "now", "laptop")
@@ -9957,7 +9957,9 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
           "damage: the aborted download was retried, nothing listed as failed")
     page.click("#pc-damaged summary")
     listed = page.inner_text("#pc-damaged")
-    check(all(p in listed for p in damaged) and not any(p in listed for p in many)
+    # (By title, never the path: the paths are the rows' data-path.)
+    rowpaths = page.eval_on_selector_all("#pc-damaged .log>div", "els => els.map(e => e.dataset.path)")
+    check(all(p in rowpaths for p in damaged) and not any(p in rowpaths for p in many) and not any(p in listed for p in damaged)
           and page.inner_text("#pc-summary").strip().endswith("malformed GIF header"),
           f"damage: the disclosure lists both damaged GIFs, nothing else ({listed!r})")
     check(page.locator("#toasts .toast.bad").count() == 0, "damage: no error toasts")
@@ -10920,8 +10922,8 @@ def platform_checks(page: Page, base: str) -> None:
     c = wait_config(base, lambda c: set(c["platforms"].split(",")) == {"SNES", "MD"})
     check(set(c["platforms"].split(",")) == {"SNES", "MD"} and page.locator("#st-plat-sheet").count() == 0,
           f"settings: Only these saves SNES and MD and closes the sheet ({c['platforms']!r})")
-    page.wait_for_function("document.querySelector('#st-plat-val').textContent === 'SNES, MD'", timeout=5000)
-    check(True, "settings: the row names them")
+    page.wait_for_function("document.querySelector('#st-plat-val').textContent === 'Super Nintendo, Mega Drive'", timeout=5000)
+    check(True, "settings: the row names them, by name")
     entries = get_json(base + "/api/status")["entries"]
     check(0 < entries < total, f"platforms: MD,SNES plays some of the playlist ({entries} of {total})")
     # Refused: the filter alone, and with a set; nothing saved.
