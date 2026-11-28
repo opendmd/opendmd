@@ -8,7 +8,7 @@
 //! This is the one place a remote controller would hand the panel a
 //! program (every other path refuses inline Formulas and `~sent`). Only a
 //! Formula the project signed may arrive that way (the gallery's
-//! signature, `super::super::gallery_sig`), and that check is not in the
+//! signature, [`crate::gallery_sig`]), and that check is not in the
 //! panel yet: until it is, [`TAKEN`] is false and the parser refuses every
 //! `formula-add` and `formula-part` (`not-allowed`) before the firmware
 //! sees one, so nothing reaches the card.
@@ -54,6 +54,9 @@ pub const STALE: Duration = Duration::from_secs(600);
 /// unsigned program can land, in any build. Step 4 replaces this with the
 /// signature check; nothing else may set it.
 pub const TAKEN: bool = false;
+
+// (Adds are never taken without a gallery key to check them against.)
+const _: () = assert!(!TAKEN || !crate::gallery_sig::GALLERY_KEYS.is_empty(), "adds need a committed gallery key");
 
 /// `formula-add`'s arguments, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]

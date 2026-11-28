@@ -199,6 +199,9 @@ blocklist-check:
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: Connect's session half and protocol v1; panel-id: the stable panel ID)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,connect-formula-add,panel-id
+	@echo "==> Testing $(CORE) with gallery-sig alone (the gallery's signature: its vectors and red cases)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --lib gallery_sig
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --test gallery_vectors
 	@echo "==> Testing $(CORE) as every release builds Connect: without connect-formula-add, no formula-add on the allow-list"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features connect --lib formula_add_is_absent_without_its_feature
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
@@ -326,6 +329,8 @@ check:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --features panel-id
 	@echo "==> Checking $(CORE) with connect alone (Connect's session half and protocol v1)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features connect
+	@echo "==> Checking $(CORE) with gallery-sig alone (the gallery's signature on a Formula)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features gallery-sig
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
@@ -567,6 +572,8 @@ clippy:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect,panel-id -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features connect -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect,connect-formula-add,panel-id -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features gallery-sig -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"
