@@ -66,11 +66,14 @@ async function dropEmpty(path) {
 
 // -> {done: [{from, to}], failed: {from, to, error} | null} (`to` as it
 // was written: a name taken meanwhile gets the next number). `step(n)`
-// after each one done.
-export async function relink(pairs, step) {
+// after each one done, and `step(n, true)` once the files are done and the
+// playlists are being updated; `stopped()` true: no more are begun (those
+// done are kept, and followed everywhere, as after a failure).
+export async function relink(pairs, step, stopped) {
   const done = [];
   let failed = null;
   for (const p of pairs) {
+    if (stopped?.()) break;
     try {
       // A name taken since it was picked (a names list gone stale): the
       // next number, as Add GIFs does.
@@ -90,6 +93,7 @@ export async function relink(pairs, step) {
     } catch (error) { failed = { ...p, error }; break; }
   }
   if (!done.length) return { done, failed };
+  step?.(done.length, true);
   const map = new Map(done.map((p) => [lc(p.from), p.to]));
   const to = (p) => (map.has(lc(p)) ? map.get(lc(p)) : p);
   await rewrite(to);

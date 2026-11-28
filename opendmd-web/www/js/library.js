@@ -58,14 +58,17 @@ export async function mount(el) {
   // Into a playlist picked from a menu; the selection clears once it is in
   // (and Select ends with a new playlist, off in the editor). Every action
   // on the selection clears it once done (js/refs.js, bulk() below).
-  const moreSel = h('button', { id: 'lib-sel-more', 'aria-haspopup': 'menu', onclick: (e) => bulkMenu(e.currentTarget) }, 'More ▾');
-  const toSetBtn = h('button.pri', { id: 'lib-to-set', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [...app.selection], (fresh) => { if (fresh) selMode(false); else { app.selection.clear(); sync(); } }) });
-  const selbar = h('div.selbar.row', { hidden: true, id: 'lib-selbar' },
+  // One row, on a phone too: Done, the count, All, Add to ▾ and More ▾
+  // (None and the bulk actions); the long labels on a laptop (`.lg`/`.sh`).
+  const two = (lg, sh) => [h('span.lg', lg), h('span.sh', sh)];
+  const moreSel = h('button', { id: 'lib-sel-more', 'aria-haspopup': 'menu', 'aria-label': 'More', onclick: (e) => bulkMenu(e.currentTarget) }, two('More ▾', '⋯'));
+  const toSetBtn = h('button.pri', { id: 'lib-to-set', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [...app.selection], (fresh) => { if (fresh) selMode(false); else { app.selection.clear(); sync(); } }) }, two('Add to playlist ▾', 'Add to ▾'));
+  const selbar = h('div.selbar', { hidden: true, id: 'lib-selbar' },
+    h('button.sm', { id: 'lib-sel-done', title: 'Done: end Select', 'aria-label': 'Done' }, two('Done', '✕')),
     h('span.grow', selCount, ' selected', selOff),
-    h('button', { id: 'lib-all', onclick: selectAll }, 'Select all shown'),
-    h('button', { id: 'lib-none', onclick: () => { app.selection.clear(); sync(); } }, 'None'),
-    toSetBtn, moreSel,
-    h('button', { id: 'lib-sel-done', onclick: () => selMode(false) }, 'Done'));
+    h('button.sm', { id: 'lib-all', title: 'Select all shown', onclick: selectAll }, two('Select all shown', 'All')),
+    toSetBtn, moreSel);
+  selbar.firstChild.onclick = () => selMode(false);
   // The user's tags (js/tags.js), once the card has any or Details asks.
   let tg = null;
   const tagsMod = () => import('./tags.js').then(async (m) => { await m.tags(); tg = m; return m; });
@@ -110,6 +113,20 @@ export async function mount(el) {
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
       canvas, cap, body));
 
+  // A phone's detail sheet: closed by its ✕, by Select, and by scrolling
+  // the list under it (it stays open on a laptop, where it is a column).
+  const phone = matchMedia('(max-width:760px)');
+  const closeSheet = () => side.classList.remove('open');
+  let sheetAt = null;
+  const onScroll = (e) => {
+    if (!phone.matches || !side.classList.contains('open') || side.contains(e.target)) return;
+    const y = e.target.scrollTop ?? scrollY;
+    sheetAt ??= [e.target, y];
+    if (sheetAt[0] !== e.target) sheetAt = [e.target, y];
+    else if (Math.abs(y - sheetAt[1]) > 48) closeSheet();
+  };
+  addEventListener('scroll', onScroll, { capture: true, passive: true });
+
   // On a phone the chips scroll sideways: fade an edge while more is off that side.
   // ★ 4+: one chip beside the platforms once something is rated.
   const starChip = h('button.chip', { id: 'lib-star-chip', hidden: true, onclick: () => {
@@ -152,6 +169,7 @@ export async function mount(el) {
     it.pick?.();
     tree.refresh();
     side.classList.add('open');
+    sheetAt = null;
     body.hidden = false;
     const e = it.e, gif = it.path[0] != '@';
     dTitle.textContent = label(e);
@@ -204,6 +222,7 @@ export async function mount(el) {
   function selMode(v) {
     selecting = v;
     if (!v) app.selection.clear();
+    else closeSheet(); // (a phone: the detail sheet would cover what is picked)
     selBtn.classList.toggle('on', v);
     sync();
   }
@@ -212,8 +231,7 @@ export async function mount(el) {
     if (n) selecting = true;
     selCount.textContent = n;
     selbar.hidden = !selecting;
-    toSetBtn.disabled = moreSel.disabled = !n;
-    toSetBtn.textContent = `Add ${n ? n.toLocaleString() + ' ' : ''}to playlist ▾`;
+    toSetBtn.disabled = !n;
     unseen();
     tree.refresh();
   }
@@ -277,8 +295,9 @@ export async function mount(el) {
     const paths = [...app.selection].filter((p) => p.startsWith('/gifs/'));
     let once = false;
     const done = () => { if (once) tree.refresh(); else { once = true; app.selection.clear(); sync(); } };
-    if (!paths.length) { toast('select some GIFs first', 'bad'); return; }
-    actions(btn, 'lib-bulk', [
+    const none = ['lib-none', 'Select none', () => { app.selection.clear(); sync(); }];
+    if (!paths.length) { actions(btn, 'lib-bulk', [none], 'Nothing selected'); return; }
+    actions(btn, 'lib-bulk', [none,
       ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
       ['lib-bulk-rate', 'Rate…', () => tagsMod().then((m) => m.bulkRate(btn, paths, done))],
       app.device && ['lib-bulk-move', 'Move to folder…', () => bulk('bulkMove', paths)],

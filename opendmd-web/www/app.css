@@ -93,12 +93,13 @@ button.grip{border:0;padding:0 4px;min-height:28px;cursor:grab;touch-action:none
 .bar{height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--acc);width:0}
 details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
-.selbar{position:sticky;bottom:0;background:var(--bg2);border:1px solid var(--acc);border-radius:var(--r);padding:8px 12px;margin-top:8px}
-@media (max-width:760px){.selbar{bottom:66px}}
+.selbar{position:sticky;bottom:0;background:var(--bg2);border:1px solid var(--acc);border-radius:var(--r);padding:8px 12px;margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:nowrap}.selbar>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.selbar>button{flex:none}.selbar .sh{display:none}
+@media (max-width:760px){.selbar{bottom:66px;padding:8px;gap:6px}.selbar .lg{display:none}.selbar .sh{display:inline}#lib-sel-off{display:none}}
 .log{max-height:200px;overflow:auto;font-size:13px}
 #toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9}
 @media (max-width:760px){#toasts{left:12px;right:12px;bottom:74px}}
 .toast{background:var(--bg3);border-left:3px solid var(--acc);border-radius:var(--r);padding:8px 12px;max-width:420px;box-shadow:0 4px 16px #0008}
+.toast.prog{min-width:min(320px,100%)}.toast.prog .bar{margin-top:8px;height:4px}.toast.prog .row{flex-wrap:nowrap}
 .toast.bad{border-left-color:var(--bad)}.toast.ok{border-left-color:var(--ok)}
 .toast button{margin-left:8px;min-height:24px;color:var(--acc)}
 .banner{border:1px solid var(--acc);background:#2a2418;border-radius:var(--r);padding:12px;margin:0 0 16px}
@@ -119,7 +120,6 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
   .libhead{grid-template:"q q q a" "n n f b" "r r r r"/minmax(0,1fr) auto auto auto;gap:8px 12px}
   #lib-count{font-size:13px}
   .vlist{height:calc(100dvh - 312px)}
-  #lib-selbar>span{flex:1 1 50%}#lib-sel-done{order:1}#lib-all,#lib-to-set{order:2}
   #lib-r2{overflow-x:auto;scrollbar-width:none}#lib-r2>*{flex:none;overflow:visible;max-width:none}
   #lib-r2.more{--fr:transparent}#lib-r2.less{--fl:transparent}
   #lib-r2:is(.more,.less){-webkit-mask-image:linear-gradient(to right,var(--fl,#000),#000 48px,#000 calc(100% - 48px),var(--fr,#000));mask-image:linear-gradient(to right,var(--fl,#000),#000 48px,#000 calc(100% - 48px),var(--fr,#000))}

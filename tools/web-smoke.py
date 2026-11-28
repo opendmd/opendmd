@@ -1837,7 +1837,7 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#library")
     page.wait_for_selector("#lib-select", timeout=20000)
-    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
+    page.wait_for_function("document.querySelector('#lib-selbar b')?.textContent !== ''", timeout=20000)
     page.evaluate("([p, r, t]) => import('./js/tags.js').then(async (m) => (await m.tags()).set(p, r, t))", [g[0], 3, ["relink"]])
     wait_tags(overlay, lambda t: g[0] in t)
 
@@ -1845,7 +1845,7 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
         page.evaluate("ps => import('./js/state.js').then(m => { m.app.selection.clear(); ps.forEach((p) => m.app.selection.add(p)); })", paths)
         if not page.is_visible("#lib-selbar"):
             page.click("#lib-select")
-        page.wait_for_function(f"document.querySelector('#lib-to-set').textContent.startsWith('Add {len(paths)} ')", timeout=10000)
+        page.wait_for_function(f"document.querySelector('#lib-selbar b').textContent === '{len(paths)}'", timeout=10000)
 
     def bulk(item):
         page.click("#lib-sel-more")
@@ -1958,7 +1958,7 @@ def _selection_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     page.on("dialog", lambda d: asked.append(d.message))
     page.goto(base + "/#library")
     page.wait_for_selector("#lib-select", timeout=20000)
-    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
+    page.wait_for_function("document.querySelector('#lib-selbar b')?.textContent !== ''", timeout=20000)
 
     def search(q, n):
         page.fill("#lib-search", q)
@@ -3135,11 +3135,14 @@ def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     # The Library done mounting (its first sync() labels the bar's button):
     # a selection there before that turns Select on, and the click below
     # would then turn it off and clear the picks.
-    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
+    page.wait_for_function("document.querySelector('#lib-selbar b')?.textContent !== ''", timeout=20000)
     pick = f"async (ps) => {{ const {{ app }} = await import('./js/state.js'); ps.forEach((p) => app.selection.add(p)); }}"
     page.evaluate(pick, g[:3])
     page.click("#lib-select")
-    check(page.inner_text("#lib-to-set") == "Add 3 to playlist ▾" and page.is_visible("#lib-none"), f"target: the bar reads '{page.inner_text('#lib-to-set')}', with None")
+    check(page.inner_text("#lib-to-set") == "Add to playlist ▾" and page.inner_text("#lib-selbar b") == "3",
+          f"target: the bar reads '{page.inner_text('#lib-selbar')}' on one row, Add to playlist ▾")
+    sb = page.eval_on_selector_all("#lib-selbar > *", "els => els.filter(e => e.offsetParent).map(e => { const r = e.getBoundingClientRect(); return Math.round(r.top + r.height / 2); })")
+    check(max(sb) - min(sb) <= 4, f"target: the selection bar is one row (its items' middles {sb})")
     page.click("#lib-to-set")
     page.wait_for_selector("#pl-target")
     page.wait_for_function("[...document.querySelectorAll('#pl-target [data-path] small')].every(s => s.textContent)", timeout=10000)
@@ -3157,6 +3160,7 @@ def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     check(page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar") and page.is_disabled("#lib-to-set"),
           "target: the selection clears once added, Select stays on")
     page.evaluate(pick, g[:2])
+    page.click("#lib-sel-more")
     page.click("#lib-none")
     left = page.evaluate("async () => (await import('./js/state.js')).app.selection.size")
     check(left == 0 and page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar"), "target: None unpicks, Select stays on")

@@ -33,7 +33,7 @@
 import { app, listOr, platName } from './state.js';
 import { art } from './artmod.js';
 import { authorOf } from './gifs.js';
-import { h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
+import { $, h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {
   title: 'Give it a title',
@@ -328,14 +328,31 @@ export async function removeGif(path, name) {
 // done stay done, their references rewritten). -> {done, left}: `left` the
 // paths not done (the one that failed and those after it), null when
 // cancelled.
+// While it runs, a progress line over the toasts: "Moving 3 of 6 GIFs…",
+// a bar and Stop (the GIF under way finishes; those not begun stay
+// selected), then "Updating playlists…" once the files are done.
 async function batch(pairs, verb, done) {
-  if (pairs.length > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${pairs.length.toLocaleString()} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
-  toast(`${verb === 'Deleted' ? 'Deleting' : verb === 'Moved' ? 'Moving' : 'Renaming'} ${pairs.length.toLocaleString()} GIFs…`);
-  const r = await (await refs()).relink(pairs);
-  const n = r.done.length.toLocaleString();
-  if (r.failed) toast(`${verb} ${n} of ${pairs.length.toLocaleString()}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${verb === 'Deleted' ? 'deleted' : 'moved'} (${r.failed.error.message})`, 'bad');
-  else toast(`${verb} ${n} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
-  return { done: r.done, left: r.failed ? pairs.slice(r.done.length).map((p) => p.from) : [] };
+  const N = pairs.length, n = N.toLocaleString();
+  if (N > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${n} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
+  const ing = { Deleted: 'Deleting', Moved: 'Moving' }[verb] || 'Renaming';
+  let stop = false;
+  const bar = h('i'), msg = h('span.grow', `${ing} ${n} GIFs…`);
+  const stopB = h('button.sm', { id: 'bulk-stop', onclick: () => { stop = true; stopB.disabled = true; stopB.textContent = 'Stopping…'; } }, 'Stop');
+  const box = h('div.toast.prog', { id: 'bulk-prog', role: 'status' }, h('div.row', msg, stopB), h('div.bar', bar));
+  $('#toasts').append(box);
+  const step = (k, tidy) => {
+    msg.textContent = tidy ? 'Updating playlists…' : `${ing} ${(k + 1 > N ? N : k + 1).toLocaleString()} of ${n} GIFs…`;
+    bar.style.width = `${(100 * k) / N}%`;
+    if (tidy) stopB.hidden = true;
+  };
+  step(0);
+  let r;
+  try { r = await (await refs()).relink(pairs, step, () => stop); } finally { box.remove(); }
+  const k = r.done.length.toLocaleString(), how = verb === 'Deleted' ? 'deleted' : 'moved';
+  if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
+  else if (r.done.length < N) toast(`Stopped: ${how} ${k} of ${n}. The rest are still selected`, 'ok');
+  else toast(`${verb} ${k} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
+  return { done: r.done, left: pairs.slice(r.done.length).map((p) => p.from) };
 }
 
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
