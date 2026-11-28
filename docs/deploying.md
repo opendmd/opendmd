@@ -147,7 +147,7 @@ On a stock card the tree (7,970 copies, 9,662 entries with their
 directories) takes about 60 requests, about 4 minutes, while the panel played (the deletes
 hold the card, so expect late frames meanwhile).
 
-The default playlist is `/filelist.txt` ("All files" in the app); `{"set":""}`
+The default playlist is `/filelist.txt` ("All GIFs" in the app); `{"set":""}`
 selects it, `{"set":"filelist.hall"}` a root manifest, `{"set":"<name>"}`
 `/sets/<name>.txt`.
 

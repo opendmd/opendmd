@@ -29,7 +29,7 @@ filelist.xmas
 - `gifs/` holds the animations, one folder per category. The
   Library shows the same folders. Make a new folder and you have a new
   category.
-- `filelist.txt` is the list the panel plays: **All files** in the web
+- `filelist.txt` is the list the panel plays: **All GIFs** in the web
   app. It doesn't have to list every GIF on the card. When you add GIFs
   from the web app, it offers to add them to the playlist that's playing.
 - `filelist.hall` and `filelist.xmas` are the Halloween and
@@ -122,7 +122,7 @@ is dark at night or playback is paused. The whole DMDoS pack is ready
 after about four hours of that. Turn on **Night mode** under Settings ›
 Schedule, set to turn the panel off rather than dim it, and it happens
 overnight; or pause playback for a while. **Ready to play** under Settings
-› Advanced shows how far it has got, and **Prepare remaining files** does the
+› Advanced shows how far it has got, and **Prepare remaining GIFs** does the
 rest from your browser.
 
 ## If a card starts failing

@@ -9,9 +9,9 @@ open **Playlists** to choose what plays.
 
 On a computer the views are listed down the left side, and on a phone along
 the bottom. They are **Now**, **Library**, **Playlists**, **Formulas** and
-**Settings**. A pill in the header, on every view, says what's playing (or
-Paused, Switching playlist…, No card, Card can't be read, Panel not
-reachable); tap it to go to Now. On a phone it takes the place of the
+**Settings**. A pill in the header says what's playing (or Paused,
+Switching playlist, No card, Card can't be read, Panel not reachable);
+tap it to go to Now. On Now it only shows when something is wrong. On a phone it takes the place of the
 hostname. Finding art on the web is the OpenDMD website's: the Library's
 **Find art online** opens its [Studio](https://opendmd.dev/studio/#import).
 
@@ -187,7 +187,7 @@ colours doesn't get the switch.
 
 ![A playlist open in the editor](../images/playlists.png)
 
-A playlist is the set of GIFs the panel cycles through. **All files** is
+A playlist is the set of GIFs the panel cycles through. **All GIFs** is
 the default and plays everything listed on your card; **Halloween** and
 **Christmas** appear too if your card has those lists.
 
@@ -403,7 +403,7 @@ Safe again if GIFs look damaged.
 
 **Ready to play** shows how many GIFs have been prepared for their
 smoothest playback. The display does this by itself while it is dark at
-night or paused; **Prepare remaining files** does the rest now, from your
+night or paused; **Prepare remaining GIFs** does the rest now, from your
 browser.
 
 **Moving pictures** has two switches for GIFs that move fast. **Sync to the

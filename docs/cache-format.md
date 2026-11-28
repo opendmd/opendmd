@@ -109,7 +109,7 @@ passes over a seekable source — the first collects colours, frame count, size
 and loop count, the second writes the GIF a frame at a time with the LZW
 streamed out as it is made — in bounded memory (below). `recode_gif`, the
 in-memory entry point, *is* that function over a `Cursor`. `opendmd-pack convert`, the browser (`prepareGif`, in the art wasm module
-that `www/js/artmod.js` loads on first use, for "Prepare remaining files",
+that `www/js/artmod.js` loads on first use, for "Prepare remaining GIFs",
 Add GIFs and the Studio) and
 the device's cache builder therefore write identical files: checked over the
 whole stock card (`encodeprobe`: 11,001 byte-identical, the 38 past 256

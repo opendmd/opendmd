@@ -52,9 +52,12 @@ Playlists editor have their own (`#settings/play`, `#settings/look`,
 the old `#settings/device` leads to WiFi), so a link or the back
 button lands on them.
 
-A **status pill** in the header, on every view, says what is playing, or
-Paused, Switching playlist…, No card, Card can't be read or Panel not
-reachable; a tap goes to Now. On a phone it replaces the hostname.
+A **status pill** in the header says what is playing, or Paused,
+Switching to “X”… (a playlist chosen from this page), Reading the
+playlist… (any other reread), No card, Card can't be read or Panel not
+reachable; a tap goes to Now. On Now it shows only a state that isn't
+playing. Off Now it reads the slim status (`?now=1`) every 20 s, and the
+full one when the link comes back. On a phone it replaces the hostname.
 
 - **Now** — what the panel is playing: the title, then its platform,
   category and flags, then where it is in the playlist ("14 of 10,162"),
@@ -192,7 +195,7 @@ reachable; a tap goes to Now. On a phone it replaces the hostname.
   Smooth motion setting follow) and in every playlist and favourite that
   names it. **Delete** asks first, then removes the GIF, its copy and every
   playlist line and favourite; a folder left empty goes too.
-- **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
+- **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All GIFs**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
   and `/sets/*.txt`. A tap opens one in the editor (`js/pledit.js`, loaded
@@ -220,12 +223,12 @@ reachable; a tap goes to Now. On a phone it replaces the hostname.
   `Filter` (platforms, folders, title words, tags (Favourite is one chip), **Leave out** flags,
   shuffle with a seed, at most N) over any playlist; its last row is **Add
   N GIFs** / **Replace with N GIFs**. **Save** / **Save & play** (`PUT
-  /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All files,
+  /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All GIFs,
   a root manifest's file name, or a set's name — which the device applies
   in a few seconds), kept in reach at the bottom; every list row has a
   **▶ Play** button (disabled on the one playing), and its **…** has
   **Rename…**, **Duplicate** and **Delete…**. Deleting the
-  active playlist switches the display back to All files first. Rename and
+  active playlist switches the display back to All GIFs first. Rename and
   Duplicate are the web app's (no request renames a set): the lines `PUT
   /api/sets/<new>`, the overrides read and written to `<new>.meta`; a
   rename then moves `config.set` if it plays, rewrites schedule rules that
@@ -285,7 +288,7 @@ reachable; a tap goes to Now. On a phone it replaces the hostname.
     memory and its floor, late frames, refresh rate, GIFs started) with
     **Reload playlist** (`POST /api/reindex`) and **Reboot**; **Card
     speed**; the **Ready to play** card ("9,826 of 10,133 files prepared",
-    from `GET /api/cache`) with **Prepare remaining files**, which works
+    from `GET /api/cache`) with **Prepare remaining GIFs**, which works
     out what the playlist in play is missing (`GET /api/cache/list`) and
     encodes and uploads it in the background, one file at a time, with
     progress, an ETA and a stop button (starting again carries on), and
@@ -406,6 +409,20 @@ from a folder's last word). The file is read once per card and written
 whole after a change, one write at a time; a size that differs from the
 last read or write (another browser, a PC) is read again first and the
 page's changes applied over it.
+
+**Favourites, now and next.** The heart writes the tag, and (so a
+favourite plays more often on today's firmware, which reads weights, not
+tags) `w=3` in the playlist playing, only for a GIF in it, only when it
+shuffles, and never past the 1,024 overrides the player keeps for a
+playlist (refused, with a toast). Undo puts the tags and the weights back
+as they were. A weight above 1 with no tag (a favourite from before the
+tag) is adopted into the tag when that playlist's overrides are read.
+Overrides files are written as the tags are: read again first, this
+page's own changes put over them. Decided for stage 2 (not built here):
+favourites move to a card-wide `/sets/.favourites` file the panel keeps;
+stage 2 adopts the `favourite` tags from `/sets/.tags` and strips them,
+and the old star ratings become plain tags. A Formula picked by hand stays
+on the panel until it is changed.
 
 **The search** (`opendmd_core::query`): the Library's box takes free
 words (a title or file name, as before) and terms — `platform:md,snes`,
