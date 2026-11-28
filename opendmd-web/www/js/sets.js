@@ -93,7 +93,7 @@ export async function mount(el) {
       const r = await (await smartMod()).refresh(p.path, true);
       // (None: let go of meanwhile, deleted, renamed or saved by hand.)
       if (r) toast(r.added || r.removed ? `“${p.label}”: +${r.added} −${r.removed}` : `“${p.label}” is up to date`, 'ok');
-    } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
+    } catch (e) { toast(`Couldn’t refresh: ${e.message || e}`, 'bad'); }
     emit('refreshed', p.path);
     loadSets();
   }
@@ -146,8 +146,8 @@ export async function mount(el) {
       // (Its text forgotten again after: a refresh's read answered meanwhile keeps it.)
       await sm.letGo(path, async () => { await unread(path); await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
       app.texts.delete(path);
-      toast(`deleted "${set}"`, 'ok');
-    } catch (e) { toast('delete: ' + e.message, 'bad'); }
+      toast(`Deleted “${p.label}”`, 'ok');
+    } catch (e) { toast('Couldn’t delete: ' + e.message, 'bad'); }
     loadSets();
   }
 
@@ -207,18 +207,18 @@ export async function mount(el) {
     if (!n || n === p.value) return;
     if (!SET_NAME.test(n)) { toast(SET_NAME_RULE, 'bad'); return; }
     const same = lc(n) === lc(p.value);
-    if (!same && taken(n)) { toast(`a playlist named “${n}” exists`, 'bad'); return; }
+    if (!same && taken(n)) { toast(`A playlist named “${n}” exists`, 'bad'); return; }
     try {
       // A change of case alone names the same file on the card: by way of another name.
       if (same) { const t = free(n); await copyTo(p, t, true); await copyTo({ path: `/sets/${t}.txt`, value: t }, n, true); }
       else await copyTo(p, n, true);
       toast(`Renamed “${p.label}” to “${n}”`, 'ok');
-    } catch (e) { toast('rename: ' + e.message, 'bad'); }
+    } catch (e) { toast('Couldn’t rename: ' + e.message, 'bad'); }
     loadSets();
   }
   async function duplicate(p) {
     const n = free(p.root ? p.label : p.value);
-    try { await copyTo(p, n, false); toast(`Duplicated as “${n}”`, 'ok'); } catch (e) { toast('duplicate: ' + e.message, 'bad'); }
+    try { await copyTo(p, n, false); toast(`Duplicated as “${n}”`, 'ok'); } catch (e) { toast('Couldn’t duplicate: ' + e.message, 'bad'); }
     loadSets();
   }
 

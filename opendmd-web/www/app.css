@@ -105,7 +105,7 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .toast{background:var(--bg3);border-left:3px solid var(--acc);border-radius:var(--r);padding:8px 12px;max-width:420px;box-shadow:0 4px 16px #0008}
 .toast.prog{min-width:min(320px,100%)}.toast.prog .bar{margin-top:8px;height:4px}.toast.prog .row{flex-wrap:nowrap}
 .toast.bad{border-left-color:var(--bad)}.toast.ok{border-left-color:var(--ok)}
-.toast button{margin-left:8px;min-height:24px;color:var(--acc)}
+.toast button{margin-left:8px;min-height:24px;color:var(--acc)}.toast .x{color:var(--mut);margin-left:4px}
 .banner{border:1px solid var(--acc);background:#2a2418;border-radius:var(--r);padding:12px;margin:0 0 16px}
 [hidden]{display:none!important}
 .grow>input,.grow>select,label.stack>input,label.stack>select{width:100%}

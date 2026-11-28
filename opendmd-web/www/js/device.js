@@ -261,23 +261,23 @@ export function deviceTab({ f, save, banner, sched, live }) {
 
   async function reindex() {
     try {
-      toast('reading the playlist again… the panel holds its frame');
+      toast('Reading the playlist again… the panel holds its frame');
       const r = await app.src.reindex();
       toast(`Playlist ready: ${r.entries.toLocaleString()} GIFs`, 'ok');
-    } catch (e) { toast('reload: ' + e.message, 'bad'); }
+    } catch (e) { toast('Couldn’t reload: ' + e.message, 'bad'); }
   }
 
   async function waitForBoot(msg) {
     for (let i = 0; i < 45; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      try { const s = await app.refreshStatus(); msg(`back up: ${s.version} ${s.variant}`); return; } catch { msg(`rebooting… ${2 * (i + 1)} s`); }
+      try { const s = await app.refreshStatus(); msg(`Back up: ${s.version} ${s.variant}`); return; } catch { msg(`Rebooting… ${2 * (i + 1)} s`); }
     }
-    msg('the device has not come back after 90 s — check its serial log');
+    msg('The display has not come back after 90 s — check its serial log');
   }
 
   async function reboot() {
     if (!confirm('Reboot the display?')) return;
-    try { await app.src.reboot(); toast('rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('reboot: ' + e.message, 'bad'); }
+    try { await app.src.reboot(); toast('Rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('Couldn’t reboot: ' + e.message, 'bad'); }
   }
 
   // --- playback cache ---------------------------------------------------

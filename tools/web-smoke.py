@@ -1668,7 +1668,7 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
         page.wait_for_timeout(1000)
         check(len(held) == 1 and not back and not (sets / "sm-r.txt").exists() and not smart_line("sm-r"),
               f"smart: a refresh still reading a playlist when it is deleted writes nothing ({back}, {(sets / 'sm-r.txt').exists()}, {bool(smart_line('sm-r'))})")
-        said = page.evaluate("window.__toasts.map((t) => t.textContent).filter((t) => t.includes('“sm-r”'))")
+        said = page.evaluate("window.__toasts.map((t) => t.textContent).filter((t) => t.includes('“sm-r”') && !t.startsWith('Deleted “sm-r”'))")  # (the delete's own toast aside)
         kept = page.evaluate("import('./js/state.js').then((m) => m.app.texts.has('/sets/sm-r.txt'))")
         check(not said and not kept, f"smart: that refresh says nothing, and the deleted playlist's text is not kept ({said}, kept {kept})")
     finally:
@@ -1945,6 +1945,7 @@ def stop_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     check(t.startswith("Moving 1 of 4 GIFs") and page.is_visible("#bulk-stop"), f"stop: the progress line ({t!r})")
     refused = page.evaluate("() => import('./js/details.js').then((m) => m.busy())")
     check(refused is True, "stop: a second batch while one runs is refused")
+    page.wait_for_function("document.querySelector('#bulk-prog')?.textContent.startsWith('Moving 2 of 4')", timeout=20000)
     page.click("#bulk-stop")
     page.wait_for_selector("#bulk-prog", state="detached", timeout=30000)
     t = last_toast(page, "ok")

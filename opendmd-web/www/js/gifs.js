@@ -70,7 +70,7 @@ export async function appendTo(path, paths) {
     const text = await app.text(path, true);
     const have = new Set(lines(text || '').map(lc));
     const add = paths.filter((p) => !have.has(lc(p)) && have.add(lc(p))), n = paths.length - add.length;
-    if (!add.length) { toast(`already in “${name}”`); return true; }
+    if (!add.length) { toast(`Already in “${name}”`); return true; }
     const body = (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n';
     await savePlaylist(path, body);
     // Open in the editor: it gains them too (its Save would put the old list
@@ -84,7 +84,7 @@ export async function appendTo(path, paths) {
     }
     toast(`${add.length.toLocaleString()} added to “${name}”${n ? ` · ${n.toLocaleString()} already in it` : ''}`, 'ok');
     return true;
-  } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); return false; }
+  } catch (e) { toast(`Couldn’t add to “${name}”: ${e.message}`, 'bad'); return false; }
 }
 
 // A new playlist of these GIFs, in the editor with its name to fill in.

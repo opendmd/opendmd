@@ -178,13 +178,13 @@ export function editor(se, ctx) {
   }
   async function refreshNow() {
     const d = app.draft;
-    if (!d.path || dirty(d)) { toast('save the playlist first', 'bad'); return; }
+    if (!d.path || dirty(d)) { toast('Save the playlist first', 'bad'); return; }
     try {
       const r = await (await import('./smart.js')).refresh(d.path, true);
       if (r) { d.smartPaths = d.paths.join('\n'); d.smart = (await import('./smart.js')).get(d.path); }
       header();
       toast(r && (r.added || r.removed) ? `+${r.added} −${r.removed}` : 'Up to date', 'ok');
-    } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
+    } catch (e) { toast(`Couldn’t refresh: ${e.message || e}`, 'bad'); }
   }
 
   se.append(h('div.card', { id: 'set-editor' },
@@ -294,9 +294,9 @@ export function editor(se, ctx) {
   // True once saved.
   async function save(andActivate) {
     const n = name.value.trim().replace(/\.txt$/, '');
-    if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return false; }
+    if (!n) { toast('Give the playlist a name', 'bad'); name.focus(); return false; }
     if (!SET_NAME.test(n)) { toast(SET_NAME_RULE, 'bad'); return false; }
-    if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return false; }
+    if (!app.draft.paths.length) { toast('The playlist is empty', 'bad'); return false; }
     const path = `/sets/${n}.txt`;
     if (ctx.known().includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return false;
     // Changed by hand, a smart playlist stops following its search.
@@ -315,7 +315,7 @@ export function editor(se, ctx) {
       if (andActivate && app.activeSet !== n) await ctx.activate({ value: n, label: n });
       await ctx.loadSets();
       return true;
-    } catch (e) { toast('save: ' + e.message, 'bad'); return false; }
+    } catch (e) { toast('Couldn’t save: ' + e.message, 'bad'); return false; }
   }
   // Before the editor lets go of the playlist (another view, the list,
   // another playlist): changes not saved are saved, or put back — with an

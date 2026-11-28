@@ -226,7 +226,7 @@ export function scheduleCard() {
   nLevel.addEventListener('input', debounce(saveNight, 400));
 
   async function load() {
-    try { sched = await app.src.schedule(); sched.rules ||= []; renderRules(); renderNight(); offerSeasons(); } catch (e) { toast('schedule: ' + e.message, 'bad'); }
+    try { sched = await app.src.schedule(); sched.rules ||= []; renderRules(); renderNight(); offerSeasons(); } catch (e) { toast('Couldn’t read the schedule: ' + e.message, 'bad'); }
   }
 
   // A season's rule, first (the first that matches wins): its playlist all

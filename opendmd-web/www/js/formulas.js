@@ -322,7 +322,7 @@ async function toGif(f) {
     const a = h('a', { href: URL.createObjectURL(file), download: file.name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast(`downloaded ${file.name}`, 'ok');
+    toast(`Downloaded ${file.name}`, 'ok');
     return;
   }
   app.gifIn = Promise.resolve({ file, init: { title, platform: 'FX', category: 'Demoscene' } });

@@ -114,7 +114,7 @@ if (found) {
   };
   on('status', powerSafe);
   powerSafe(s);
-  app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
+  app.refreshConfig().catch((e) => toast('Couldn’t read the settings: ' + e.message, 'bad'));
   route();
 } else if ((app.demo = await demoCard(app.wasm.cardPath))) {
   // The web demo: its own card, in memory; a card folder of yours can replace it.

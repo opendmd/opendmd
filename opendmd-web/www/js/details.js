@@ -300,9 +300,9 @@ export async function editDialog(path, opts) {
   if (!to || to === path) return null;
   try {
     await renameGif(path, to);
-    toast(`renamed to “${label(app.wasm.parsePath(to))}”`, 'ok');
+    toast(`Renamed to “${label(app.wasm.parsePath(to))}”`, 'ok');
     return to;
-  } catch (e) { toast(`renaming: ${e.message}`, 'bad'); return null; }
+  } catch (e) { toast(`Couldn’t rename: ${e.message}`, 'bad'); return null; }
 }
 
 // --- Renaming and deleting ----------------------------------------------------
@@ -356,19 +356,21 @@ async function batch(pairs, verb, done) {
   running = true;
   try { r = await (await refs()).relink(pairs, step, () => stop); } finally { box.remove(); running = false; }
   const k = r.done.length.toLocaleString(), how = verb === 'Deleted' ? 'deleted' : 'moved';
+  // (A GIF that failed is named, and playlists that couldn't follow say so too.)
   if (r.tidy) tidyFailed(r, verb);
-  else if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
-  else if (r.done.length < N) toast(`Stopped: ${how} ${k} of ${n}. The rest are still selected`, 'ok');
+  if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
+  else if (r.tidy) { /* said */ } else if (r.done.length < N) toast(`Stopped: ${how} ${k} of ${n}. The rest are still selected`, 'ok');
   else toast(`${verb} ${k} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
   return { done: r.done, left: pairs.slice(r.done.length).map((p) => p.from) };
 }
 
 // The GIFs moved, but what names them (playlists, tags) couldn't follow:
-// said, with Retry until it works.
+// said, and kept up (whatever view is shown) until Retry works or it is
+// dismissed: playlists left naming GIFs that have gone need it.
 function tidyFailed(r, verb) {
   toast(`${verb} ${r.done.length.toLocaleString()} GIF${r.done.length === 1 ? '' : 's'}. Playlists couldn’t be updated: ${r.tidy.message}`, 'bad', ['Retry', async () => {
     try { await (await refs()).follow(r.done); toast('Playlists updated', 'ok'); } catch (e) { tidyFailed({ ...r, tidy: e }, verb); }
-  }]);
+  }], true);
 }
 
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
