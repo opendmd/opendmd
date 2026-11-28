@@ -191,7 +191,7 @@ fn signatures_file() -> Option<Value> {
 // digits>")]`, with the table and the signatures. Once set the gallery must
 // stay GALLERY SIGNED by exactly that key: deleting the key file, the table
 // entry or the signatures, or a different key, fails. Empty: no key yet.
-const PINNED: &[(u8, &str)] = &[];
+const PINNED: &[(u8, &str)] = &[(0, "6094459a742c8a4040292f86a7513ae20c257dfb6bff25ea6c42c7cdf77b79a7")];
 
 /// The table the firmware compiles in is the committed key files and the
 /// pinned hex, id for id, and none of them is a test vector's throwaway key.

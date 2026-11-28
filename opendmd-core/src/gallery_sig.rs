@@ -58,7 +58,7 @@ pub const SIG_LEN: usize = 64;
 //
 // THE SIGNING COMMIT EDITS THE NEXT LINE BY HAND, and nothing else here:
 // `&[]` becomes `&[(0, include_bytes!("../../firmware/keys/gallery.pub"))]`.
-pub const GALLERY_KEYS: &[(u8, &[u8; KEY_LEN])] = &[];
+pub const GALLERY_KEYS: &[(u8, &[u8; KEY_LEN])] = &[(0, include_bytes!("../../firmware/keys/gallery.pub"))];
 
 /// The lowest signing revision this firmware takes. A published Formula
 /// found harmful is revoked by signing the rest again at a higher `rev` and
