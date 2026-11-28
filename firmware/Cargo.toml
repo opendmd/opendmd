@@ -160,6 +160,12 @@ bench = []
 # not with `probe`, whose frame-timing histograms are ~12.5 KB of .bss (the
 # start heap lang-probe-a lacked, 2026-10-28).
 psi-probe = ["psi", "opendmd-core/psi-stats", "opendmd-core/psi-compiler"]
+# psi-probe's refresh mode alone (src/psi_probe/refresh.rs): the rows of
+# opendmd-psi/tests/measured.rs that `make psi-stale` lists, measured again
+# with the Formulas as they are now, in one boot (`psi-probe: refresh|`
+# lines in /filelist-psi-probe.txt); tools/psi-refresh.py reads them.
+# `make fw-release FW_RELEASE_FEATURES=psi-probe,psi-refresh DIST=...`.
+psi-refresh = ["psi-probe", "jit"]
 # The paint probe (src/paint_probe.rs): the paint steps, the overlay and
 # `under(x, y)` timed against the cost model, once at boot (`psi-probe:
 # paint:` lines, /filelist-paint-probe.txt). No compiler (build.rs compiles
