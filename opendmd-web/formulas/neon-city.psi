@@ -1,7 +1,7 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Neon city"
-about "A night drive through a neon megacity under a storm: neon towers, a holo screen, lightning, and rain if you want it"
+about "A night drive through a neon megacity under a storm: neon towers, air traffic, lightning, and rain if you want it"
 control lightning 0..1 = .5 "Lightning" -- 0: none; 1: a storm overhead
 control rain 0..1 = 0 "Rain"            -- 0: a dry storm (the road still wet); 1: a downpour at its height
 loop forever
@@ -12,7 +12,8 @@ smooth
 -- with a hazy violet row behind them and a magenta glow over it all;
 -- each tower is lined with neon, a lit roof or a lit edge, in its own
 -- colour (some changing), one carries a holo screen, and the wet road
--- catches the haze. Four lanes, a dashed cyan middle line and neon kerbs;
+-- catches the haze. Lights cross the sky: traffic between the towers,
+-- an aircraft high up. Four lanes, a dashed cyan middle line and neon kerbs;
 -- the car is dark, with a red light bar and a cyan glow under it. It
 -- storms: lightning, behind the towers:
 -- the sky and the far row flicker a cold blue, the near towers stand
@@ -43,8 +44,12 @@ palette struck = #000, #2a3a78, #34448a, #404e98, #4e58a4, #6060ac, #8a5cac,
   #a040ff, #ff40ff, #ff2a9a, #20f0ff, #fff
 
 -- The weather's own colours, all painted: the rain as it is and as a
--- flash lights it; the bolt, then its afterimage fading
-palette storm = rain #6878a8, rainLit #a8b8ec, bolt #fff, #8c96c4, #474e78
+-- flash lights it; the bolt, then its afterimage fading; and the lights
+-- of what flies over the city: two lanes of traffic (each way its own
+-- colour, the far lane dimmer), one that passes close, and an aircraft's
+-- beacon
+palette storm = rain #6878a8, rainLit #a8b8ec, bolt #fff, #8c96c4, #474e78,
+  fly #b07828, #a01c30, #ffc050, #ff3040, #ffe8b0, #ff5060, beacon #b01828
 
 -- Across the road, left to right, in 30ths of its half width (the middle
 -- at 31): 3 kerb, 1 asphalt, 2 a lane line, 4 the middle line; past
@@ -164,8 +169,9 @@ fn sheet(first) {
 }
 
 draw {
-  -- Painted, back to front, over the pixels: the bolt, the rain, the
-  -- car, then the neon and the holo screen, which nothing covers.
+  -- Painted, back to front, over the pixels: the bolt, the traffic, the
+  -- rain, the car, then the neon and the holo screen, which nothing
+  -- covers.
 
   -- The bolt: from the top of the panel down to just over the roof, in
   -- three jagged strokes and a short fork off the first bend. It keeps to
@@ -183,6 +189,50 @@ draw {
     line(kinkX, roof*.72, left + 3, roof - 1, pal(storm, flashed))
     line(bendX, roof*.4, bendX + side*1.6, roof*.4 + 2.5, pal(storm, flashed))
   }
+
+  -- Traffic over the city, as lights a pixel across. One passes close,
+  -- in front of the towers, now and then: its row and its way are each
+  -- pass's own, and it comes in at one edge and leaves at the other
+  -- (`zipX` is its head; it is off the panel most of the time).
+  -- `rained` is the seconds gone by, counted off the rain's clock.
+  rained = (falls + fallPart) * .25
+  zipAt = rained*.06 + .5
+  zipLuck = hash(floor(zipAt), seed + 9)
+  zipWay = zipLuck < .5 ? 1 : -1
+  zipX = 63.5 + zipWay*(frac(zipAt)*1170 - 164 - zipLuck*900)
+  zipY = 2 + floor(frac(zipLuck*16)*8)
+
+  -- An aircraft, high and slow, behind everything: a red beacon, and a
+  -- white strobe every second and a quarter. It is hidden where a tower of
+  -- either row stands in front of it (worked out as the pixels do).
+  airAt = rained*.02 + .3
+  airX = floor(frac(airAt)*330 - 100)
+  airY = hash(floor(airAt), seed + 13) < .5
+  airNear = airX + nearShift
+  airTop = max((airNear%8 < 7) * (22 + hash(floor(airNear/8)%22, seed)*13), 25 + hash(seed, floor((airX + nearShift*.44) / 6))*9)
+
+  -- The aircraft, where no tower hides it
+  if 31 - airY >= airTop {
+    pset(airX, airY, pal(storm, frac(rained*.8) < .07 ? storm.bolt : storm.beacon))
+  }
+
+  -- Two lanes of traffic behind the near towers, the far one higher,
+  -- slower and dimmer: in each, one light at a time crosses the panel,
+  -- one way or the other (each way keeps to its own row), and is hidden
+  -- while a near tower stands in front of it, showing again in the gaps
+  for k < 2 {
+    at = rained*(.035 + k*.04) + k*.37
+    luck = hash(floor(at), k + seed)
+    over = (at - floor(at))*450 - 100 - luck*220
+    flyX = floor(luck < .5 ? over : 127 - over)
+    nearAt = flyX + nearShift
+    if 29 - k*3 + (luck < .5) >= (nearAt%8 < 7) * (22 + hash(floor(nearAt/8)%22, seed)*13) {
+      pset(flyX, 2 + k*3 - (luck < .5), pal(storm, storm.fly + (k*2 + (luck >= .5))*storm.step))
+    }
+  }
+
+  -- The one that passes close, with a short trail
+  line(zipX, zipY, zipX - zipWay*2, zipY, pal(storm, storm.fly + (4.5 - zipWay*.5)*storm.step))
 
   -- Rain, when there is any: three sheets of six streaks, one more as
   -- the control and the shower bring it (a sheet not falling costs
@@ -207,12 +257,13 @@ draw {
   -- every other one, down the right-hand edge of the rest (and of any
   -- whose roof is above the panel); each tower its own colour, a third of
   -- them changing
+  neonLeft = firstTower*8 + floor(towerLeft)
   for k < 17 {
     id = firstTower + k
-    left = floor(id*8 + towerLeft)
+    left = neonLeft + k*8
     top = floor(hash(id%22, seed)*13 + 21.9999)
     edge = id%2 or top > 31
-    line(left + edge*6, 31 - top, left + 6, edge ? 11 : 31 - top, pal(city, city.violet + (id + turn%4*(id%3 < 1))%4*city.step))
+    line(edge ? left + 6 : left, 31 - top, left + 6, edge ? 11 : 31 - top, pal(city, city.violet + (id + turn%4*(id%3 < 1))%4*city.step))
   }
 
   -- One tower carries a holo screen across its face, under its roof
@@ -255,13 +306,19 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 
 -- What each pixel shows: below the horizon, what is across the road
 -- there; above it, the towers: 0 sky, 1 the far row, 2 the near row, 3 a
--- lit window. Each number's colour is the street's below the horizon
--- (the asphalt wet near the horizon, where it shows the haze) and the
--- sky's above it; what is painted goes over it (the road's cyan lines
--- are the window's colour). The colours are the city's as the lightning
--- has them this frame.
-towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
-pal(lit, pick(across[px*scale + start] + towers,
+-- lit window (each worked out only on its own rows: the towers above
+-- the horizon, the road below it). Each number's colour is the street's
+-- below the horizon (the asphalt wet near the horizon, where it shows
+-- the haze) and the sky's above it; what is painted goes over it (the
+-- road's cyan lines are the window's colour). The colours are the city's
+-- as the lightning has them this frame.
+scene skyline when 1 - below {
+  towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
+}
+scene street when below {
+  road = across[px*scale + start]
+}
+pal(lit, pick(road + towers,
     below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
     below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
     below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
