@@ -539,8 +539,9 @@ server can show a controller a false state, never change the panel's.
   `/gifs/Sent/`, checks both SHA-256s at the end and that the GIF is a GIF
   and the copy a prepared copy (a GIF89a with its `OPENDMD1LZW` hint at a
   cap of at most 9, `docs/cache-format.md`), renames the GIF into place,
-  moves the copy to its place under `/cache/`, and plays the GIF once if
-  `play` (then the playlist carries on). It lands in no playlist.
+  moves the copy to its place under `/cache/`, and plays the GIF if
+  `play`, kept until something else plays as a LAN `POST /api/play`
+  (then the playlist carries on). It lands in no playlist.
 - **The last `credit`** of a transfer says how it ended. Landed (after the
   last card write and both hash checks): `{id, upto: <total>, k, done:
   true, name}`, `name` the file name it was saved under in `/gifs/Sent/`

@@ -1792,7 +1792,7 @@ fn swap(root: &str, canvas: &mut Canvas) {
         }
         t
     };
-    let keep = opendmd_core::hand_picked(GATE);
+    let keep = Some(opendmd_core::hand_picked());
     let h0 = heap();
     let mut after_gif = Vec::new();
     for _ in 0..4 {
@@ -1975,7 +1975,7 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     };
     // As main.rs's `PlayNow` sends it.
     let play = |e: &mut Engine, canvas: &mut Canvas, path: &str, now: Duration| -> std::io::Result<()> {
-        let keep = opendmd_core::hand_picked(path);
+        let keep = Some(opendmd_core::hand_picked());
         crate::room_for_formula(Some(&mut *e), canvas);
         match e.retune(path, now, keep, opendmd_core::fx_psi::Retune::Play) {
             Some(r) => r,

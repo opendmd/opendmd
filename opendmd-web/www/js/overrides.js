@@ -6,12 +6,27 @@
 // /api/overrides?set=); the page never says so.
 
 import { app, playlistLabel, setValue } from './state.js';
-import { h, on, emit, toast, label } from './util.js';
+import { h, on, emit, toast, label, isFormula } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
 // Favourite's weight on/off (js/tags.js setFav; Now's heart).
 export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV });
+
+// A `loop forever` Formula (a bundled one's source from formulas.json, one
+// of yours read from the card): it has no loop to count, so "Loop N times"
+// does nothing for it (the player leaves `loops` out). False when unsure.
+let bundled;
+async function endless(path) {
+  if (!isFormula(path)) return false;
+  const p = path.split('?')[0];
+  try {
+    const src = p.startsWith('@formula:')
+      ? (await (bundled ??= fetch('formulas.json').then((r) => r.json()))).find((f) => f.stem === p.slice(9))?.src
+      : p.startsWith('/') && await app.src.readText(p);
+    return /^[ \t]*loop[ \t]+forever\b/m.test(src || '');
+  } catch { bundled = null; return false; }
+}
 
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
@@ -178,8 +193,16 @@ export function menu(ov, path, x, y, extra) {
     item('ov-2x', o.dwell_x === 2, 'Twice as long', () => put({ dwell_x: o.dwell_x === 2 ? null : 2, dwell: null })),
     h('div.mr', h('span', 'Play for'), secs, h('span.muted', 'seconds'),
       h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('Seconds: 1 to 86400', 'bad'); } }, 'Set')),
-    h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
-      h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('Loops: 1 to 1000', 'bad'); } }, 'Set')));
+    loopRow);
+  const loopSet = h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('Loops: 1 to 1000', 'bad'); } }, 'Set');
+  const loopRow = h('div.mr', { id: 'ov-loop-row' }, h('span', 'Loop'), loops, h('span.muted', 'times'), loopSet);
+  // A Formula that goes on without repeating: nothing to loop.
+  endless(path).then((yes) => {
+    if (!yes) return;
+    loops.disabled = loopSet.disabled = true;
+    loopRow.title = 'This Formula goes on without repeating, so it has no loops to count';
+    loopRow.append(h('span.muted', { id: 'ov-loop-why' }, ' · it never repeats'));
+  });
   open = h('div.menu', { id: 'ov-menu', role: 'menu' }, head,
     ov.path && [item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS })),
     item('ov-longer', o.dwell || o.dwell_x || o.loops, '◔ Play longer or loop…', longer),

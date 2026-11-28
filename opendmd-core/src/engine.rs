@@ -299,18 +299,17 @@ impl DwellPolicy {
 }
 
 /// How long a file picked by hand stays on the panel (the web app's Play,
-/// `/api/play` and `/api/play/formula`, Remote control's play, the
-/// Formula editor's Show on the panel): a Formula until something else
-/// plays (another play, Next or Previous, a playlist change), looping and
-/// animating all the while; anything else one turn, as in a playlist
-/// (`None`). Played as a one-off override ([`Engine::play_now_with`]):
-/// `dwell` of `u32::MAX` s (~136 years), so the cap never comes.
-pub fn hand_picked(path: &str) -> Option<Override> {
-    let formula = crate::synth::is_formula(path) || crate::synth::formula_file(path).is_some();
-    formula.then_some(Override {
+/// `/api/play` and `/api/play/formula`, Remote control's play and its sent
+/// GIFs, the Formula editor's Show on panel): a GIF or a Formula, until
+/// something else plays (another play, Next or Previous, a playlist
+/// change), looping and animating all the while. Played as a one-off
+/// override ([`Engine::play_now_with`]): `dwell` of `u32::MAX` s (~136
+/// years), so the cap never comes.
+pub fn hand_picked() -> Override {
+    Override {
         dwell: Some(Dwell::Secs(u32::MAX)),
         ..Override::default()
-    })
+    }
 }
 
 impl Default for DwellPolicy {
@@ -1240,9 +1239,9 @@ impl Engine {
     }
 
     /// [`play_now_with`](Self::play_now_with) as a file picked by hand
-    /// plays: a Formula kept until something else plays ([`hand_picked`]).
+    /// plays: kept until something else plays ([`hand_picked`]).
     pub fn play_by_hand(&mut self, path: &str, now: Duration) -> io::Result<()> {
-        self.play_now_with(path, now, hand_picked(path))
+        self.play_now_with(path, now, Some(hand_picked()))
     }
 
     /// [`play_now`](Self::play_now), with `ov` bending this one play's
@@ -2318,8 +2317,8 @@ mod tests {
 
     /// A Formula picked by hand ([`hand_picked`]): it outlives the
     /// configured dwell and keeps animating (never held on a last frame),
-    /// through a live edit; Next ends it. A GIF picked by hand gets one
-    /// turn, as does a Formula played with no override.
+    /// through a live edit; Next ends it. A Formula played with no
+    /// override gets one turn.
     #[cfg(feature = "psi")]
     #[test]
     fn a_kept_formula_outlives_the_dwell_and_keeps_animating() {
@@ -2351,9 +2350,6 @@ mod tests {
         };
         let a = crate::fx_psi::path("gray(t)", "");
         let b = crate::fx_psi::path("rgb(t, 0, 0)", "");
-        assert!(hand_picked(&a).is_some() && hand_picked("@formula:road").is_some());
-        assert!(hand_picked("/formulas/mine.psi?a=1").is_some());
-        assert_eq!(hand_picked(gif), None, "a GIF: one turn");
 
         // On after twenty minutes, through a live edit, still drawing; Next ends it.
         let mut t = 0;
@@ -2361,7 +2357,7 @@ mod tests {
         e.note_sent();
         let (frames, stayed) = run(&mut e, &mut t, 30_000, &a);
         assert!(stayed && frames > 100, "{frames}");
-        e.retune(&b, Duration::from_millis(t), hand_picked(&b), crate::fx_psi::Retune::Edit).unwrap().unwrap();
+        e.retune(&b, Duration::from_millis(t), Some(hand_picked()), crate::fx_psi::Retune::Edit).unwrap().unwrap();
         let end = t + 20 * 60_000;
         let (frames, stayed) = run(&mut e, &mut t, end, &b);
         assert!(stayed && frames > 1000, "kept through the live edit: {frames}");
@@ -2703,7 +2699,7 @@ mod tests {
         e.tick(Duration::ZERO, &mut c).unwrap();
         let gate = crate::fx_psi::path("rgb(x, y, 0)", "name=Time+gate");
         let road = crate::fx_psi::path("rgb(y, x, 0)", "name=Endless+road");
-        let keep = hand_picked(&gate);
+        let keep = Some(hand_picked());
         e.play_now_with(&gate, Duration::from_millis(100), keep)
             .unwrap();
         let mut t = 100;
@@ -3440,7 +3436,8 @@ mod tests {
             ("by hand: forever", FOREVER.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
             ("by hand: loop 4", L4.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
             ("by hand: loop 60", L60.as_bytes(), false, d(1, 30), How::ByHand, FOR_GOOD),
-            ("by hand: GIF 4 s", &gif4, true, d(1, 30), How::ByHand, 4_000),
+            ("by hand: GIF 4 s", &gif4, true, d(1, 30), How::ByHand, FOR_GOOD),
+            ("by hand: GIF 0.5 s", &gif05, true, d(1, 30), How::ByHand, FOR_GOOD),
         ];
         let mut bad = Vec::new();
         for (what, src, gif, dwell, how, want) in rows {

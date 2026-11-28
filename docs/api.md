@@ -70,7 +70,8 @@ that file at the root, any other name is `/sets/<name>.txt`. No `/` or `..`.
 ### POST /api/play
 
 Play one file now (with the transition, from its prepared copy if there is
-one), then the playlist carries on.
+one) and keep it, looping, until something else plays; then the playlist
+carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
@@ -87,10 +88,10 @@ be card-absolute); with no playlist running it is a `503`; a formula that covers
 entirely (it reads none of `ur ug ub ul` and nothing shows through it) or is
 too heavy to draw over GIFs is a `400` with the reason.
 
-A Formula played this way (not `"over"`), with `POST /api/play/formula`
-or by Remote control's play stays until something else plays (another
-play, `/api/skip` or Previous, a playlist change, a schedule's playlist),
-looping; a GIF plays one turn of the dwell, as in a playlist. A live edit
+A GIF or Formula played this way (not `"over"`), with `POST
+/api/play/formula`, or by Remote control (its play, a GIF it sends with
+`play`) stays until something else plays (another play, `/api/skip` or
+Previous, a playlist change, a schedule's playlist), looping. A live edit
 keeps it kept. While it is kept, `/api/status` `now_playing.kept_s` is `0`
 (until changed). Night mode's `off` ends it, as it lets go of any file on
 screen, and the playlist plays when the panel comes back (with
@@ -269,7 +270,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `card_formulas` | the card's Formulas as the display prepares them in the background after it mounts the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory, queued, write_failed}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled since the card was mounted, that do not compile, not compiled yet for want of memory, not tried yet (the card was busy, or one compile a retry), and compiled but not written (the card refused the `.psb`); short of memory and not tried yet are tried again later and at the next start, a failed write at the next start only; set after the first pass and again after each retry; `null` until the first pass ends, or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `id` | the panel's stable ID: 12 characters of lowercase Crockford base32 (`0-9`, `a-z` without `i l o u`), the same through renames, updates, reboots and erases; `null` when the chip's MAC is unavailable. Hashed from the chip's factory MAC; a lookup key, never a credential (see "Network"). Also the `_opendmd._tcp` record's `id` |
-| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` `0` while a Formula played by hand (`/api/play`, `/api/play/formula`, Remote control) is kept on the panel until something else plays; `seed` while a Formula plays: the seed it was started with (Q16.16, 0 to 65,535 for 0 to 1; a `loop forever` Formula's `seed`, new at each start, kept through a live edit), so a preview draws the panel's picture; `sent` while the Formula sent with `POST /api/play/formula` plays (`@formula:~sent`): the CRC-32 (zlib's) of its compiled bytes, the send's identity (a live edit: the edit's bytes); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
+| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` `0` while a GIF or Formula played by hand (`/api/play`, `/api/play/formula`, Remote control) is kept on the panel until something else plays; `seed` while a Formula plays: the seed it was started with (Q16.16, 0 to 65,535 for 0 to 1; a `loop forever` Formula's `seed`, new at each start, kept through a live edit), so a preview draws the panel's picture; `sent` while the Formula sent with `POST /api/play/formula` plays (`@formula:~sent`): the CRC-32 (zlib's) of its compiled bytes, the send's identity (a live edit: the edit's bytes); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
 | `paused` | bool |
 | `transfer` | a file is going to or from the card on the stream task, an upload is in hand, or a Remote control send is held (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each (640 B of paths in all, none over 200 B; not the title cards, the power-on effect or a sent Formula); the index of the one on screen |
@@ -394,7 +395,7 @@ with the card, in `/opendmd.json` at its root: brightness and its
 ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
 the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
 host, attract, look, glow, `look_formula`, `boot_show`, `boot_formula`, `panel_sync`,
-`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`, `beta_updates`, `network`. A change is
+`panel_split`, `formula_jit`, `formula_arena`, `beta_updates`, `network`. A change is
 on the card the moment it is saved, whatever plays. The device keeps the
 rest itself, never on the card: the WiFi details and name, the
 location (`lat`, `lon`), the API key and the RePlayOS code (secrets), the
@@ -449,7 +450,6 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
 | `formula_jit` | `true` | the narrow JIT for Formulas on the ESP32: a Formula's pixel stage compiled to machine code at its first frame, checked against the VM there, then drawing the same bytes faster. `false` is the kill switch: every Formula plays on the VM (a kernel held is let go at its next frame). `/api/status` `now_playing.formula.jit` says which draws |
 | `formula_arena` | `false` | a dev setting, in force from the next boot: a Formula's memory (its program and VM scratch, ink and paint planes, ~19 KB) from one block set aside at boot before the network starts, so it lands in the same SRAM pool every time (`display.buffers`; the A/B for the upload residual). Costs that block for the whole boot |
-| `formula_keep` | `hold` | always `hold`: a Formula played by hand stays until something else plays (see `POST /api/play`). `turn`, `1m`, `5m` and `hold` are taken and change nothing; anything else is a `400` |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the display as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
 | `beta_updates` | `false` | "Get beta updates" (Settings › Updates): the web app's Check for updates reads `https://opendmd.dev/install/beta.json` (the newest release, beta or final) instead of `install/release.json` (the newest final release). The device only keeps the choice, so every browser sees the same one; turning it off installs nothing older (a display on a beta stays on it until a final release newer than it comes out) |
 | `lat`, `lon` | numbers or null, null | where the panel is, in degrees (north and east positive, two decimals: 0.01° is about 1 km), for the built-in inputs Formulas read: `daylight`, `sun.alt` and `season` need it (`moon.phase` and `yearday` need only the clock); both null when none is set |
@@ -469,7 +469,9 @@ next file; a new `set`, `platforms` or `shuffle` rebuilds the playlist in
 place; a new `hostname` at once (mDNS re-announces, status `mdns` says the
 name it took; DHCP sends it from the next lease renewal); a location at
 once (the sky's inputs are worked out again). WiFi changes take effect
-after a reboot.
+after a reboot. `formula_keep`, a setting older web apps send (and older
+`/opendmd.json` files hold), is taken with any value and ignored: what is
+played by hand always stays until something else plays.
 
 The location goes as a pair: `{"lat":51.51,"lon":-0.13}` sets it (rounded
 to 0.01°; `lat` −90..90, `lon` −180..180, else `400`),
@@ -928,7 +930,8 @@ the LAN API stays the only full tier: a remote controller can only play,
 skip, go back, pause, set the brightness and the playlist, list the
 playlists and the controllers, add or remove a controller, rename the
 panel and send a GIF (with its prepared copy: it lands in `/gifs/Sent/`,
-in no playlist, and plays once; at most 512 KB each and 8 MB a day; a LAN
+in no playlist, and stays on the panel until something else plays, as
+`POST /api/play`; at most 512 KB each and 8 MB a day; a LAN
 upload under way makes a send wait or refuses it), each command signed by
 a key the panel itself paired.
 

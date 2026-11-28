@@ -289,8 +289,9 @@ pub struct Status {
     /// What plays next, once the engine has picked it (`Engine::ahead_path`;
     /// empty until then).
     pub next: String,
-    /// A Formula picked by hand and kept on the panel until something else
-    /// plays (`opendmd_core::hand_picked`): the ordinal of its start.
+    /// A GIF or Formula played by hand and kept on the panel until
+    /// something else plays (`opendmd_core::hand_picked`): the ordinal of
+    /// its start.
     /// Reported only while that start is on screen.
     pub kept: Option<u64>,
     /// The `seed` the Formula on screen opened with (Q16.16, 0..1), set

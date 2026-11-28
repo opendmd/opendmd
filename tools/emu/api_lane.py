@@ -1046,6 +1046,11 @@ class Lane:
         self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
         # Kept until something else plays (opendmd_core::hand_picked): kept_s 0.
         self.expect(np.get("kept_s") == 0, "sent", f"now_playing.kept_s {np.get('kept_s')!r}, wanted 0 (until changed)")
+        # A setting changed while it plays: held, then saved within a minute
+        # (device time) and a frame (opendmd_core::save_hold), though it stays.
+        b0 = int(api.json("GET", "/api/config")[1]["brightness"])
+        save_mark, save_up = emu.mark(), int(api.status()["uptime_secs"])
+        api.json("PUT", "/api/config", {"brightness": b0 - 1 if b0 > 1 else b0 + 1})
         # Its identity (Connect P1 F0): the CRC-32 of the bytes sent, and the
         # seed it opened with.
         seed = np.get("seed")
@@ -1099,11 +1104,19 @@ class Lane:
         # Still the same start after all of that (the JIT's waits: far past
         # a turn of the dwell), and still kept.
         self.expect(np.get("kept_s") == 0, "sent", f"the sent Formula after the edits: kept_s {np.get('kept_s')!r}")
+        # (Up to 5 minutes wall for the minute of device time; the Formula stays kept meanwhile.)
+        emu.wait_for(re.compile(r"settings: saved \(held while a Formula played\)"), 300, save_mark,
+                     "the brightness change saved within a minute while the Formula stays kept")
+        held = int(api.status()["uptime_secs"]) - save_up
+        np2 = api.status()["now_playing"]
+        self.expect(np2["ordinal"] == ordinal and np2.get("kept_s") == 0 and 55 <= held <= 75, "sent",
+                    f"the save came {held} s (device time) after the change, the Formula still kept ({np2['ordinal']} vs {ordinal}, kept_s {np2.get('kept_s')!r})")
+        api.json("PUT", "/api/config", {"brightness": b0})
         api.json("POST", "/api/skip")
         st = self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
         self.expect("kept_s" not in st["now_playing"], "sent", f"kept_s {st['now_playing'].get('kept_s')!r} after Next")
         api.call("POST", "/api/play/formula?live=1", long, want=(409,))
-        self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
+        self.ok("sent", f"kept (kept_s 0) past the edits, a brightness change saved {held} s in while kept; a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
                 f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on; "
                 f"the JIT on after the show, the edits ({made} kernel made) and a=30: {first}, {after}, {wide}")
 
@@ -1546,6 +1559,10 @@ class Lane:
     # -- the load -------------------------------------------------------------
 
     def load_rounds(self, emu, api):
+        # Back to the playlist: the card GIF `bursts` played by hand is kept until
+        # something else plays, and the census's steady point is a next file ready ahead.
+        api.json("POST", "/api/skip")
+        self.wait_status(api, lambda s: "kept_s" not in s["now_playing"], 30, "the playlist again (nothing kept)")
         raws = []
         # Whether the image marks its samples (`steady true/false`, emu-census builds since the
         # steady point): then spells are compared by their steady samples alone.

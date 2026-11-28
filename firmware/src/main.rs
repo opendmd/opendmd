@@ -497,8 +497,9 @@ fn pick_up(settings: &mut Settings, next: &mut Settings, live: Live<'_>) -> Resu
 /// milliseconds (tens when a page is erased), and a raced Formula's pairs
 /// then miss their windows. They take effect at once either way (the caller
 /// applies them); [`flush_settings`] writes the settings then in force once
-/// no Formula plays (a GIF, the panel off). A change made while a Formula
-/// plays and lost to a power cut before anything else plays is the trade.
+/// no Formula plays (a GIF, the panel off), or once they have waited a
+/// minute, just after a frame (`opendmd_core::save_hold`): what is played by
+/// hand stays for hours, and a power cut would lose the change.
 /// (No copy is kept: the display core clones nothing for it.)
 fn save_settings(cfg: &mut Config, next: &Settings, dirty: &mut bool, defer: bool) -> anyhow::Result<()> {
     if defer {
@@ -832,8 +833,10 @@ fn main() -> Result<()> {
     let mut log_us: u32 = 0;
     let mut fresh = true;
     // Settings changed while a Formula played, not yet in NVS
-    // (`save_settings`), and whether a Formula is what plays.
+    // (`save_settings`), since when (`SaveHold`: written within a minute
+    // and a frame), and whether a Formula is what plays.
     let mut unsaved = false;
+    let mut save_hold = opendmd_core::save_hold::SaveHold::default();
     // Remote control's last unsaved brightness (`Command::RemoteConfig`).
     #[cfg(feature = "connect")]
     let mut remote_dirty: Option<Instant> = None;
@@ -1018,9 +1021,13 @@ fn main() -> Result<()> {
             unsaved = true;
             SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
         }
-        // Settings kept back while a Formula played: written once none does.
-        if unsaved && (!formula_on || sched.off()) {
+        // Settings kept back while a Formula plays: written once none does
+        // (a GIF, the panel dark), or after a frame once they have waited a
+        // minute (below, at the blit).
+        save_hold.note(unsaved, epoch.elapsed());
+        if save_hold.due(epoch.elapsed(), !formula_on || sched.off(), false) {
             flush_settings(&mut nvs_config, &settings, &mut unsaved);
+            save_hold.written();
         }
 
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
@@ -1134,11 +1141,11 @@ fn main() -> Result<()> {
                         // `fx_psi::Retune`); one the heap can't
                         // compile beside it lets it go and is played from
                         // nothing (`Engine::retune`).
-                        // A Formula stays until something else plays (a
-                        // one-off dwell: it keeps animating; a live edit
-                        // keeps it kept); a GIF gets one turn.
-                        let keep = opendmd_core::hand_picked(&path);
-                        if keep.is_some() {
+                        // What is played by hand stays until something
+                        // else plays (a one-off dwell: it keeps looping; a
+                        // live edit keeps it kept).
+                        let keep = Some(opendmd_core::hand_picked());
+                        if opendmd_core::synth::is_formula(&path) || opendmd_core::synth::formula_file(&path).is_some() {
                             room_for_formula(engine.as_mut(), &mut canvas);
                         }
                         let r = match retune(engine.as_mut(), &path, live, epoch.elapsed(), keep) {
@@ -2442,6 +2449,12 @@ fn main() -> Result<()> {
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
                     .saturating_sub(uclock::span(tick_start, blit_start));
                 let blit_px = panel.blit_within(pic, Budget::frame(left_us));
+                // Settings held a minute while a Formula plays: written now,
+                // with the frame just sent on screen (`SaveHold`).
+                if unsaved && save_hold.due(epoch.elapsed(), false, true) {
+                    flush_settings(&mut nvs_config, &settings, &mut unsaved);
+                    save_hold.written();
+                }
                 #[cfg(feature = "psi-probe")]
                 let fx = opendmd_core::synth::is_formula(&playing.path);
                 // The blit's own time: a wait for the scan (`panel_sync`,

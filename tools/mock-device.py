@@ -762,7 +762,6 @@ DEFAULT_SETTINGS = {
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
     "formula_arena": False,     # dev: a Formula's memory set aside at boot
-    "formula_keep": "hold",     # taken and ignored (a Formula picked by hand stays until changed); GET says hold
     "api_key": "",              # "" = no key asked; never echoed back
     "lat": None,                # the panel's location, 0.01° (both or neither);
     "lon": None,                # in /api/config only, never in status
@@ -770,10 +769,6 @@ DEFAULT_SETTINGS = {
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
 BOOT_SHOWS = ("off", "short", "full")
-# The old `formula_keep` choices, still taken by PUT /api/config and
-# ignored: a Formula picked by hand (opendmd_core::hand_picked) stays until
-# something else plays.
-FORMULA_KEEP = ("turn", "1m", "5m", "hold")
 # The start-up show as a virtual file (`@boot[?len=short|full|card&..]`,
 # opendmd_core::boot): the show once (1300 / 5600 ms) or one loop of the
 # status card (16384 ms), in 10 ms frames.
@@ -820,7 +815,6 @@ FIELD_TYPES = {
     "panel_split": "bool",
     "formula_jit": "bool",
     "formula_arena": "bool",
-    "formula_keep": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
@@ -2362,7 +2356,7 @@ class Player:
         self.manifest_last_set: str | None = None
         self.index_state = "building"
         self.played: str | None = None  # an off-playlist POST /api/play
-        # A Formula picked by hand, kept until something else plays
+        # A GIF or Formula played by hand, kept until something else plays
         # (opendmd_core::hand_picked): the ordinal of its start and 0.
         self.kept: tuple[int, int] | None = None
         # The sent Formula's start and its bytes' CRC-32 (`now_playing.sent`).
@@ -2514,8 +2508,8 @@ class Player:
         return out
 
     def keep(self, path: str):
-        """main.rs PlayNow: a Formula stays until something else plays; a GIF one turn."""
-        self.kept = (self.ordinal, 0) if is_formula_ref(path) else None
+        """main.rs PlayNow: what is played by hand stays until something else plays."""
+        self.kept = (self.ordinal, 0)
 
     def kept_s(self) -> int | None:
         """Status `now_playing.kept_s` while the kept start is on screen."""
@@ -4037,7 +4031,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
                     "formula_arena": s["formula_arena"],
-                    "formula_keep": "hold",
                     "api_key_set": bool(s["api_key"]),
                     "lat": s["lat"],
                     "lon": s["lon"],
@@ -4115,6 +4108,7 @@ def make_handler(ctx: Context, quiet: bool):
                     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
                 return False
 
+            # (`formula_keep`, an older web app's: ignored as any key not here.)
             with ctx.lock:
                 before = dict(ctx.settings)
                 next_settings = dict(ctx.settings)
@@ -4184,9 +4178,6 @@ def make_handler(ctx: Context, quiet: bool):
                         return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
-                        return
-                    if field == "formula_keep" and v not in FORMULA_KEEP:
-                        self.send_error_json(400, "formula_keep must be turn, 1m, 5m or hold")
                         return
                     if field == "boot_show" and v not in BOOT_SHOWS:
                         self.send_error_json(400, "boot_show must be off, short or full")

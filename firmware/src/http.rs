@@ -798,14 +798,10 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     if let Some(v) = patch.beta_updates {
         next.beta_updates = v;
     }
-    // A Formula picked by hand stays until something else plays
-    // (`opendmd_core::hand_picked`): there is nothing to set. The web app's
-    // old choice is still taken, and changes nothing.
-    if let Some(v) = &patch.formula_keep {
-        if !matches!(v.as_str(), "turn" | "1m" | "5m" | "hold") {
-            return Err(PatchErr::bad("formula_keep must be turn, 1m, 5m or hold"));
-        }
-    }
+    // `formula_keep` (from an older web app cached in a
+    // browser, or a saved settings file) is taken and ignored: whatever is
+    // played by hand stays until something else plays
+    // (`opendmd_core::hand_picked`).
     if let Some(v) = &patch.api_key {
         if !v.is_empty() && !opendmd_core::access::valid_key(v) {
             return Err(PatchErr::bad(&format!(
@@ -918,9 +914,11 @@ pub struct ConfigPatch {
     pub(crate) formula_arena: Option<bool>,
     /// "Get beta updates" (the web app's update feed); kept, nothing else.
     pub(crate) beta_updates: Option<bool>,
-    /// Taken and ignored: a Formula picked by hand stays until something
-    /// else plays (`GET` says `hold`). The web app's old setting.
-    pub(crate) formula_keep: Option<String>,
+    /// The web app's old setting, taken and ignored (any JSON value):
+    /// what is played by hand stays until something else plays. Not in
+    /// `GET`.
+    #[allow(dead_code)]
+    pub(crate) formula_keep: Option<serde::de::IgnoredAny>,
     /// WiFi at all: `on` or `off` (`Settings::network`), in effect at the
     /// next boot.
     pub(crate) network: Option<String>,
@@ -3110,9 +3108,9 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let _ = write!(out, "{}}}", looks());
 }
 
-/// `now_playing`'s `,"kept_s":0` while a Formula picked by hand is kept on
-/// the panel (`opendmd_core::hand_picked`): `0`, until something else
-/// plays; empty otherwise.
+/// `now_playing`'s `,"kept_s":0` while a GIF or Formula played by hand is
+/// kept on the panel (`opendmd_core::hand_picked`): `0`, until something
+/// else plays; empty otherwise.
 fn kept_json(s: &Status) -> &'static str {
     match s.kept {
         Some(ordinal) if ordinal == s.ordinal => r#","kept_s":0"#,
@@ -3559,7 +3557,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"hold","api_key_set":{},"card_speed":"{}","#,
+            r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"api_key_set":{},"card_speed":"{}","#,
             r#""beta_updates":{},"network":"{}","#,
             r#""lat":{},"lon":{}}}"#
         ),

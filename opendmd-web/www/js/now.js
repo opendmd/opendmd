@@ -177,7 +177,7 @@ function mountDevice(el) {
   bright.ceil(app.config?.max_brightness);
   // (The link's state: the header's pill says it; kept, hidden, for tools/web-smoke.py.)
   const conn = h('span.dot', { id: 'now-conn', hidden: true });
-  // A Formula kept on the panel (`now_playing.kept_s`, Formulas › Keep on the panel): how long, and the way back.
+  // A GIF or Formula played by hand, kept on the panel until changed (`now_playing.kept_s`): the way back.
   const keptText = h('span.grow', { id: 'now-kept-text' });
   const keptRow = h('div.row', { id: 'now-kept', hidden: true, style: 'margin-top:8px' }, keptText,
     h('button.sm', { id: 'now-unkeep', onclick: skip }, 'Back to the playlist'));

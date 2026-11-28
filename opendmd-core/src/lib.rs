@@ -59,6 +59,7 @@ pub mod query;
 pub mod readahead;
 pub mod restarts;
 pub mod resume;
+pub mod save_hold;
 pub mod scan;
 pub mod schedule;
 pub mod scheduler;
