@@ -9,7 +9,7 @@
 
 An image built with `connect-formula-add` (it carries "formula-add: ") must
 hold the committed gallery key, firmware/keys/gallery.pub, whose hex is
-pinned in opendmd-core/tests/gallery_signatures.rs (PINNED): the two must
+pinned in opendmd-core/src/gallery_sig_set.rs (PINNED): the two must
 agree, and the key's 32 bytes must be in the image. Any image (with the
 feature or without) must hold none of the test keys: the shared vectors'
 (opendmd-core/tests/gallery-vectors.json) and the throwaway keys the tests
@@ -39,10 +39,10 @@ def die(msg: str) -> None:
 
 
 def pinned() -> dict[int, bytes]:
-    src = (REPO / "opendmd-core" / "tests" / "gallery_signatures.rs").read_text()
+    src = (REPO / "opendmd-core" / "src" / "gallery_sig_set.rs").read_text()
     m = re.search(r"^const PINNED: &\[\(u8, &str\)\] = &\[(.*)\];$", src, re.M)
     if not m:
-        die("cannot find PINNED in opendmd-core/tests/gallery_signatures.rs")
+        die("cannot find PINNED in opendmd-core/src/gallery_sig_set.rs")
     return {int(i): bytes.fromhex(h) for i, h in re.findall(r'\((\d+), "([0-9a-f]{64})"\)', m.group(1))}
 
 

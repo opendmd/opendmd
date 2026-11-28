@@ -67,7 +67,10 @@ impl Client {
             Remote::Playlists => self.playlists(),
             Remote::Formulas { after } => self.formulas(after),
             #[cfg(feature = "connect-formula-add")]
-            Remote::FormulaAdd(args, signed) => self.formula_add(k, args, signed),
+            Remote::FormulaAdd(a) => {
+                let a = *a;
+                self.formula_add(k, a.args, a.signed)
+            }
             #[cfg(feature = "connect-formula-add")]
             Remote::FormulaPart { id, off, data } => self.formula_part(k, id, off, data),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {

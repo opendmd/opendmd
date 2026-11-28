@@ -266,6 +266,8 @@ unsafe extern "C" fn d_write(pdrv: u8, buff: *const u8, sector: u32, count: u32)
 /// While unmounting (no card here any more) the IDF's FatFs functions,
 /// which still have it.
 unsafe fn sectors(pdrv: u8, write: bool, buff: *mut u8, sector: u32, count: u32) -> bool {
+    #[cfg(feature = "connect-test")]
+    worker_io::note(write);
     let card = CARD.load(Relaxed);
     if card.is_null() {
         let r = if write { ff_sdmmc_write(pdrv, buff, sector, count) } else { ff_sdmmc_read(pdrv, buff, sector, count) };
@@ -810,5 +812,51 @@ impl core::fmt::Display for Status {
             SLOWDOWNS.load(Relaxed),
             STOPS.load(Relaxed)
         )
+    }
+}
+
+/// The emulator's Connect image only (`connect-test`): the card I/O the
+/// network worker does itself (sector reads and writes, directory opens),
+/// so the lane can show a refused remote command touched no card at all
+/// (`GET /api/test/card-io`).
+#[cfg(feature = "connect-test")]
+pub mod worker_io {
+    use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::Relaxed};
+    static TASK: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
+    static READS: AtomicU32 = AtomicU32::new(0);
+    static WRITES: AtomicU32 = AtomicU32::new(0);
+    static DIRS: AtomicU32 = AtomicU32::new(0);
+
+    fn mine() -> bool {
+        // SAFETY: the calling task's own handle.
+        let me = unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() } as *mut core::ffi::c_void;
+        !me.is_null() && me == TASK.load(Relaxed)
+    }
+
+    /// The network worker, each turn: this task is the one counted.
+    pub fn mark_worker() {
+        // SAFETY: the calling task's own handle.
+        TASK.store(unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() } as *mut core::ffi::c_void, Relaxed);
+    }
+
+    pub(super) fn note(write: bool) {
+        if mine() {
+            (if write { &WRITES } else { &READS }).fetch_add(1, Relaxed);
+        }
+    }
+
+    /// A directory opened (`f_opendir`) by the caller.
+    pub fn note_dir() {
+        if mine() {
+            DIRS.fetch_add(1, Relaxed);
+        }
+    }
+
+    pub fn json() -> String {
+        #[cfg(feature = "connect-formula-add")]
+        let verifies = crate::connect::gallery_verifies();
+        #[cfg(not(feature = "connect-formula-add"))]
+        let verifies = 0;
+        format!(r#"{{"reads":{},"writes":{},"dirs":{},"verifies":{verifies}}}"#, READS.load(Relaxed), WRITES.load(Relaxed), DIRS.load(Relaxed))
     }
 }

@@ -1,5 +1,5 @@
 {
-  "about": "OpenDMD gallery signatures (opendmd_core::gallery_sig): throwaway keys only. Made by opendmd-core/tests/gallery_vectors.rs, checked by tools/gallery-sign.py selftest.",
+  "about": "OpenDMD gallery signatures (opendmd_core::gallery_sig): throwaway keys only. Made by opendmd-core/src/gallery_sig_vectors.rs, checked by tools/gallery-sign.py selftest.",
   "cases": [
     {
       "abi": 3,

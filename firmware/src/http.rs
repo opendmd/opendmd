@@ -1784,6 +1784,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // set the panel's clock, for the lane's add with the clock stepped back.
     #[cfg(feature = "connect-test")]
     server.route("/api/test/clock", Method::Post, |req| {
+        #[cfg(all(feature = "connect-formula-add", feature = "connect-test"))]
+        if query_param(req.query(), "date_fail").is_some() {
+            crate::connect::fadd_date_fail_once();
+            log::warn!("clock-test: the next Formula landing's dating fails on purpose (connect-test)");
+            return req.json(r#"{"ok":true}"#);
+        }
         let Some(t) = query_param(req.query(), "unix").and_then(|v| v.parse::<i64>().ok()) else {
             return req.bad_request("unix=<seconds>");
         };
@@ -1793,6 +1799,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         log::warn!("clock-test: the clock set to {t} on purpose (connect-test)");
         req.json(r#"{"ok":true}"#)
     })?;
+    // (`connect-test` only: the network worker's own card I/O, counted.)
+    #[cfg(feature = "connect-test")]
+    server.route("/api/test/card-io", Method::Get, |req| req.json(&crate::cardspeed::worker_io::json()))?;
     server.route("/api/reboot", Method::Post, #[optimize(size)] move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check

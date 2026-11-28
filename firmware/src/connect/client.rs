@@ -327,7 +327,10 @@ impl Client {
             pending: None,
             config_rate: Vec::new(),
             formulas_rate: proto::FormulasRate::default(),
-            #[cfg(feature = "connect-formula-add")]
+            // (The emulator's image: a short absolute life, for its lane.)
+            #[cfg(all(feature = "connect-formula-add", feature = "connect-test"))]
+            adds: opendmd_core::connect::fadd::Adds::with_lifetime(Duration::from_secs(300)),
+            #[cfg(all(feature = "connect-formula-add", not(feature = "connect-test")))]
             adds: Default::default(),
             card_due: None,
             last_use: Vec::new(),
@@ -399,6 +402,8 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     fn turn(&mut self, online: bool) {
+        #[cfg(feature = "connect-test")]
+        crate::cardspeed::worker_io::mark_worker();
         let started = Instant::now();
         self.timed = false;
         #[cfg(feature = "connect-formula-add")]
@@ -1285,6 +1290,9 @@ impl Client {
         let Some(sess) = self.sess.as_mut() else { return Ok(()) };
         let limits = proto::Limits { max_brightness: self.link.settings.lock().unwrap().max_brightness };
         let t = now_us();
+        #[cfg(feature = "connect-formula-add")]
+        let checked = sess.check_adds(&self.keys, &limits, f, core_now(), &mut self.adds);
+        #[cfg(not(feature = "connect-formula-add"))]
         let checked = sess.check(&self.keys, &limits, f, core_now());
         let us = (now_us() - t) as u32;
         #[cfg(feature = "connect-formula-add")]

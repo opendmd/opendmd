@@ -212,8 +212,26 @@ pub fn verify_body(public: &[u8; 32], body: &[u8], sig: &[u8; 64]) -> bool {
 fn formula_add_command(a: &Value) -> Result<Command, Refusal> {
     let (args, claim) = super::fadd::add_args(a)?;
     let signed = super::fadd::admit_where_it_runs(&args, &claim, &crate::gallery_sig::Trust::panel(crate::psi::psb::ABI))?;
-    Ok(Command::FormulaAdd(args, signed))
+    Ok(Command::FormulaAdd(Box::new(super::fadd::Admitted { args, signed })))
 }
+
+/// [`formula_add_command`] with the panel's adds ([`Session::check_adds`]):
+/// their verify rates, and the held add's witness taken again when its own
+/// key sends it again.
+#[cfg(feature = "connect-formula-add")]
+#[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn formula_add_with(k: KeyId, a: &Value, now: Duration, adds: &mut super::fadd::Adds) -> Result<Command, Refusal> {
+    let (args, claim) = super::fadd::add_args(a)?;
+    let signed = adds.admit(k, &args, &claim, now, &crate::gallery_sig::Trust::panel(crate::psi::psb::ABI))?;
+    Ok(Command::FormulaAdd(Box::new(super::fadd::Admitted { args, signed })))
+}
+
+/// What [`Session::check`]'s inner half takes for the panel's adds.
+#[cfg(feature = "connect-formula-add")]
+type AddsArg<'a> = Option<&'a mut super::fadd::Adds>;
+#[cfg(not(feature = "connect-formula-add"))]
+type AddsArg<'a> = core::marker::PhantomData<&'a ()>;
 
 /// The server's pre-check (P1-PLAN 2.5): a known key and a good signature,
 /// before the frame goes to the panel. `keys`: (id, public key) pairs.
@@ -418,7 +436,7 @@ pub enum Command {
     /// and the gallery's signature over them (the witness only
     /// `gallery_sig::check` makes).
     #[cfg(feature = "connect-formula-add")]
-    FormulaAdd(super::fadd::AddArgs, crate::gallery_sig::Signed),
+    FormulaAdd(Box<super::fadd::Admitted>),
     /// `formula-part`: `data` of the add `id` at stream offset `off`.
     #[cfg(feature = "connect-formula-add")]
     FormulaPart { id: u32, off: u32, data: Vec<u8> },
@@ -745,6 +763,23 @@ impl Session {
     /// allow-list and the arguments.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check(&mut self, keys: &KeyList, limits: &Limits, frame: &[u8], now: Duration) -> Result<Accepted, Refused> {
+        #[cfg(feature = "connect-formula-add")]
+        let adds = None;
+        #[cfg(not(feature = "connect-formula-add"))]
+        let adds = core::marker::PhantomData;
+        self.check_in(keys, limits, frame, now, adds)
+    }
+
+    /// [`check`](Self::check), with the panel's adds for a `formula-add`
+    /// (the firmware's: its verify rates, the held add).
+    #[cfg(feature = "connect-formula-add")]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn check_adds(&mut self, keys: &KeyList, limits: &Limits, frame: &[u8], now: Duration, adds: &mut super::fadd::Adds) -> Result<Accepted, Refused> {
+        self.check_in(keys, limits, frame, now, Some(adds))
+    }
+
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn check_in(&mut self, keys: &KeyList, limits: &Limits, frame: &[u8], now: Duration, adds: AddsArg) -> Result<Accepted, Refused> {
         let no = |k: Option<KeyId>, n: Option<u64>, err| Refused { k, n, err };
         let f = match split_command(frame) {
             Ok(f) => f,
@@ -798,6 +833,13 @@ impl Session {
         if !rate.take(now) {
             return Err(bad(Refusal::Rate));
         }
+        #[cfg(feature = "connect-formula-add")]
+        if let (Some(adds), "formula-add") = (adds, c) {
+            let cmd = formula_add_with(k, a, now, adds).map_err(bad)?;
+            return Ok(Accepted { k, n, cmd });
+        }
+        #[cfg(not(feature = "connect-formula-add"))]
+        let _ = adds;
         let cmd = parse_command(c, a, limits, entry.can_add(), keys).map_err(bad)?;
         Ok(Accepted { k, n, cmd })
     }
@@ -1379,7 +1421,7 @@ mod tests {
         let (src, kid, abi, rev) = (e["src_len"].as_u64().unwrap(), e["kid"].as_u64().unwrap(), e["abi"].as_u64().unwrap(), e["rev"].as_u64().unwrap());
         let run = |b: String| parse_command("formula-add", &json::parse(b.as_bytes()).unwrap(), &limits, true, &keys);
         match run(body("plasma", kid, abi, rev, src, &sig)) {
-            Ok(Command::FormulaAdd(a, w)) => assert!(a.signed_by(&w) && w.stem() == "plasma"),
+            Ok(Command::FormulaAdd(x)) => assert!(x.args.signed_by(&x.signed) && x.signed.stem() == "plasma"),
             other => panic!("the published signature: {other:?}"),
         }
         let mut flipped = super::super::codec::unhex::<64>(e["sig"].as_str().unwrap()).unwrap();

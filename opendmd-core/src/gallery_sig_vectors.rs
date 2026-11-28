@@ -9,11 +9,10 @@
 //! below, not computed: the test is that the verifier agrees with them.
 //!
 //! After a deliberate change: `GALLERY_VECTORS=write cargo test --features
-//! gallery-sig --test gallery_vectors`, then review the diff.
-#![cfg(feature = "gallery-sig")]
+//! gallery-sig --lib gallery_sig::vectors`, then review the diff.
 
 use ed25519_dalek::{Signer, SigningKey};
-use opendmd_core::gallery_sig::{self, Formula, Refusal, Trust, DOMAIN, KEY_LEN};
+use crate::gallery_sig::{self as gallery_sig, Formula, Refusal, Trust, DOMAIN, KEY_LEN};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256, Sha512};
 
@@ -204,7 +203,7 @@ fn code(r: Result<gallery_sig::Signed, Refusal>) -> &'static str {
 
 fn run(w: &World, c: &Case) -> &'static str {
     let keys: Vec<(u8, &[u8; KEY_LEN])> = w.keys.iter().map(|(id, k)| (*id, k)).collect();
-    let t = Trust { keys: &keys, floor: FLOOR, abi: c.player_abi };
+    let t = Trust::for_tests(&keys, FLOOR, c.player_abi);
     code(gallery_sig::check(&t, &c.f.formula(), &c.sig))
 }
 
@@ -331,7 +330,7 @@ fn build() -> Value {
         })
         .collect();
     json!({
-        "about": "OpenDMD gallery signatures (opendmd_core::gallery_sig): throwaway keys only. Made by opendmd-core/tests/gallery_vectors.rs, checked by tools/gallery-sign.py selftest.",
+        "about": "OpenDMD gallery signatures (opendmd_core::gallery_sig): throwaway keys only. Made by opendmd-core/src/gallery_sig_vectors.rs, checked by tools/gallery-sign.py selftest.",
         "domain": hex(DOMAIN),
         "max_message": gallery_sig::MAX_MESSAGE,
         "floor": FLOOR,
@@ -376,7 +375,7 @@ fn the_pinned_cases_hold() {
             psb_len: c["psb_len"].as_u64().unwrap() as u32,
             psb_sha256: unhex(c["psb_sha256"].as_str().unwrap()).try_into().unwrap(),
         };
-        let t = Trust { keys: &refs, floor: v["floor"].as_u64().unwrap() as u32, abi: c["player_abi"].as_u64().unwrap() as u8 };
+        let t = Trust::for_tests(&refs, v["floor"].as_u64().unwrap() as u32, c["player_abi"].as_u64().unwrap() as u8);
         let sig: [u8; 64] = unhex(c["sig"].as_str().unwrap()).try_into().unwrap();
         assert_eq!(code(gallery_sig::check(&t, &f, &sig)), c["expect"].as_str().unwrap(), "{}", c["name"]);
         if let Some(m) = c["message"].as_str() {

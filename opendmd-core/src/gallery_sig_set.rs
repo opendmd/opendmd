@@ -1,5 +1,5 @@
 //! The committed gallery signatures, checked by the firmware's own verifier
-//! (`opendmd_core::gallery_sig::check`, `Trust::panel`): every project
+//! (`crate::gallery_sig::check`, `Trust::panel`): every project
 //! Formula (`opendmd-web/formulas/*.psi`) has a current signature by every
 //! key the firmware trusts, over its source as sent (the file without its
 //! gallery header, what `opendmd-gallery check --out` writes) and its
@@ -16,11 +16,10 @@
 //!
 //! With `GALLERY_OUT` set (`make gallery-check`), the gallery tool's output
 //! is held to the same bytes: what the site publishes is what was signed.
-#![cfg(feature = "gallery-sig")]
 
 use std::path::{Path, PathBuf};
 
-use opendmd_core::gallery_sig::{self, Formula, Trust, GALLERY_KEYS, KEY_LEN};
+use crate::gallery_sig::{self as gallery_sig, Formula, Trust, GALLERY_KEYS, KEY_LEN};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -296,7 +295,7 @@ mod red {
         let k = key("ok");
         let pk = k.verifying_key().to_bytes();
         let keys = [(0u8, &pk)];
-        let t = Trust { keys: &keys, floor: 1, abi: opendmd_psi::psb::ABI };
+        let t = Trust::for_tests(&keys, 1, opendmd_psi::psb::ABI);
         let fs = set();
         assert_eq!(check_set(&t, &fs, Some(&file(&k, &fs)), true), Ok(Outcome::Signed { formulas: 2, signatures: 2, keys: 1 }));
     }
@@ -306,7 +305,7 @@ mod red {
         let k = key("ok");
         let pk = k.verifying_key().to_bytes();
         let keys = [(0u8, &pk)];
-        let t = Trust { keys: &keys, floor: 1, abi: opendmd_psi::psb::ABI };
+        let t = Trust::for_tests(&keys, 1, opendmd_psi::psb::ABI);
         let fs = set();
         let good = file(&k, &fs);
         let fails = |v: &Value, fs: &[Published], what: &str| {
@@ -347,7 +346,7 @@ mod red {
         let k2 = key("two");
         let pk2 = k2.verifying_key().to_bytes();
         let keys2 = [(0u8, &pk), (1u8, &pk2)];
-        let t2 = Trust { keys: &keys2, floor: 1, abi: opendmd_psi::psb::ABI };
+        let t2 = Trust::for_tests(&keys2, 1, opendmd_psi::psb::ABI);
         assert!(check_set(&t2, &fs, Some(&good), true).is_err(), "a changeover: key 1's signatures missing");
         let mut both = good.clone();
         for f in &fs {
@@ -362,7 +361,7 @@ mod red {
     /// committed, no signatures; it is reported as unsigned, never signed.
     #[test]
     fn no_key_committed_is_its_own_state() {
-        let t = Trust { keys: &[], floor: 1, abi: opendmd_psi::psb::ABI };
+        let t = Trust::for_tests(&[], 1, opendmd_psi::psb::ABI);
         let fs = set();
         assert_eq!(check_set(&t, &fs, None, false), Ok(Outcome::Unsigned(2)));
         assert!(check_set(&t, &fs, None, true).is_err(), "a key file committed, the table empty");

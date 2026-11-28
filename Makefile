@@ -186,7 +186,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	gallery-tool gallery-out gallery-sign gallery-check gallery-check-only release
+	gallery-tool gallery-out gallery-sign gallery-check gallery-check-only emu-image-connect-noadd emu-connect-noadd release
 
 # No request URL the web app makes may match EasyPrivacy or EasyList (uBlock
 # Origin / Brave blocked /api/stat?). Fetches the lists once a day into
@@ -201,7 +201,7 @@ test:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,connect-formula-add,panel-id
 	@echo "==> Testing $(CORE) with gallery-sig alone (the gallery's signature: its vectors and red cases)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --lib gallery_sig
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --test gallery_vectors
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --lib gallery_sig::vectors
 	@echo "==> Testing $(CORE) as every release builds Connect: without connect-formula-add, no formula-add on the allow-list"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features connect --lib formula_add_is_absent_without_its_feature
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
@@ -552,10 +552,10 @@ gallery-tool:
 # $(WEB)/formulas/signatures.json; run it when a Formula, the compiler or the
 # ABI changes, and commit the file. gallery-check (in make check; no key
 # needed): every committed signature through the firmware's own verifier
-# (opendmd-core tests/gallery_signatures.rs), and again in Python; a stale,
+# (opendmd-core src/gallery_sig_set.rs), and again in Python; a stale,
 # missing or foreign signature fails. With no gallery key committed yet it
 # says GALLERY UNSIGNED and passes (a panel then refuses every add); once
-# the key is pinned (tests/gallery_signatures.rs PINNED, set by the signing
+# the key is pinned (src/gallery_sig_set.rs PINNED, set by the signing
 # commit) only GALLERY SIGNED passes. Also run by make test (CI).
 GALLERY_OUT := $(CURDIR)/target/gallery-out
 GALLERY_KEY ?= $(HOME)/.config/opendmd/gallery.key
@@ -570,8 +570,8 @@ gallery-sign: gallery-out
 gallery-check: gallery-out
 	@$(MAKE) --no-print-directory gallery-check-only
 gallery-check-only:
-	@echo "==> The gallery's signatures ($(WEB)/formulas/signatures.json) by the firmware's verifier (opendmd-core tests/gallery_signatures.rs)"
-	@cd $(CORE) && GALLERY_OUT=$(GALLERY_OUT) RUSTUP_TOOLCHAIN=stable cargo test -q --features gallery-sig --test gallery_signatures -- --nocapture > $(GALLERY_OUT).check.log 2>&1; \
+	@echo "==> The gallery's signatures ($(WEB)/formulas/signatures.json) by the firmware's verifier (opendmd-core src/gallery_sig_set.rs)"
+	@cd $(CORE) && GALLERY_OUT=$(GALLERY_OUT) RUSTUP_TOOLCHAIN=stable cargo test -q --features gallery-sig --lib gallery_sig::set -- --nocapture > $(GALLERY_OUT).check.log 2>&1; \
 	  grep -oE 'GALLERY (SIGNED|UNSIGNED): .*|^test result.*|panicked.*' $(GALLERY_OUT).check.log; \
 	  grep -q '^test result: ok' $(GALLERY_OUT).check.log && grep -qE 'GALLERY (SIGNED|UNSIGNED): ' $(GALLERY_OUT).check.log || { cat $(GALLERY_OUT).check.log; exit 1; }
 	@echo "==> The gallery's signatures again, in Python (tools/gallery-sign.py verify)"
@@ -1471,6 +1471,19 @@ emu-image-connect: emu-connect-certs
 emu-connect-psb:
 	@mkdir -p $(EMU_CONNECT_DIR)/psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
+# The same lane on an image without connect-formula-add (as every release):
+# `formulas` says no abi or gk, a signed add is not on the allow-list, and the
+# image holds no gallery key (gallery-key-check, in fw-release-variant).
+EMU_CONNECT_NOADD_DIR = $(EMU_DIR)/connect-noadd
+EMU_CONNECT_NOADD_IMAGE = $(EMU_CONNECT_NOADD_DIR)/dist/opendmd-$(FW_VERSION)-connect-4mb-full.bin
+emu-image-connect-noadd: emu-connect-certs
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	OPENDMD_CONNECT_HOST=connect.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_HOLD_S=30 OPENDMD_CONNECT_PAIR_TTL_S=$(EMU_CONNECT_PAIR_TTL_S) \
+	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_NOADD_DIR)/target DIST=$(EMU_CONNECT_NOADD_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-connect-noadd: emu-build emu-card emu-connect-psb gallery-out
+	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect-noadd &&) \
+	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_NOADD_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb --gallery $(GALLERY_OUT) --no-adds $(EMU_ARGS)
 emu-connect: emu-build emu-card emu-connect-psb gallery-out
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb --gallery $(GALLERY_OUT) $(EMU_ARGS)

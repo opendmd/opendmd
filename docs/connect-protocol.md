@@ -389,9 +389,8 @@ id, the compiled format, a signing revision, the stem, and the source's and
 the compiled file's lengths and SHA-256s (`opendmd_core::gallery_sig`). The
 panel checks that signature when it takes the command, after the
 command's own signature check has returned (one after the other, never one
-inside the other; on the firmware, on a task of its own, so the network
-worker's stack holds one verify at a time) and right after the argument
-rules, before the rate, the day's count, the card or anything else: over the
+inside the other) and right after the argument rules, before the rate, the
+day's count, the card or anything else: over the
 stem, sizes and hashes the add names (the argument stem, never the stem it
 lands under), which are the ones the parts are then held to. Every refusal
 (a key id the firmware does not trust, another compiled format, a revision
@@ -400,24 +399,42 @@ under the firmware's floor, a signature that does not verify) is
 returns, which no other code can make. A file named `<stem>.psr` (an
 earlier test image's format) is no file of the panel's.
 
+What a verify costs is bounded before it is spent: the cheap refusals (key
+id, format, revision) run first, with no allocation; then the verify rates,
+per key one in 2 s with a burst of 2 and per panel one a second with a burst
+of 3 (`rate`); the held add sent again by its own key, the same signed
+statement, is not verified again (its witness is compared). The firmware
+runs the verify on a task of its own (11 KB, at the network worker's
+priority on its core, started only with its stack, 4 KB and the 20 KB shedding
+line free, else `busy`), waits at most a second for it (else `busy`; the
+task owns all it touches and ends on its own), so the network worker's
+stack holds one verify at a time and can never wait for one forever.
+
 1. `formula-add {id, stem, kid, abi, rev, sig, src_size, src_sha256,
    psb_size, psb_sha256}`: `id` a non-zero 32-bit number; `stem` the
    gallery's slug, `[a-z0-9-]`, 1 to 40, a letter or digit first; `kid`
    and `abi` 0 to 255, `rev` 0 to 2^32-1, `sig` strict base64url of exactly
    64 bytes (out of range or malformed: `bad-arg`); `src_size` 1 to 16,384
    and `psb_size` 6 to 8,192 (more: `too-big`); both hashes hex. Then the
-   signature (`not-allowed`). Then, before the card is read: the add's own
-   rate (one in 2 s per panel: `rate`), the same add signed again (`r
-   {next}` from where it was, or `done` again if it landed), another key's
-   add under way (`busy`), 16 adds started in the last day of the panel's
-   uptime (`quota`; counted in RAM when an add begins; a restart starts it
-   again, and nothing remote can restart a panel). The panel looks for
-   where it lands: the stem, else `<stem>-2` … `<stem>-9` (a stem is taken
-   when its `.psi` or `.psb` is there); a remote add never overwrites. A
-   taken stem whose source has the signed length and `src_sha256` is the
-   same Formula: `r {done: true, stem}`, nothing written. None free, or 128
-   Formulas on the card: `quota`. Otherwise `r {next: 0}`. Also `no-card`,
-   `busy` (a LAN transfer or update on the card).
+   signature (`not-allowed`). Then, before the card is read: the card-read
+   rate (one directory pass for an add per key in 2 s and per panel in 1 s:
+   `rate`; a pass that finds the Formula already there counts too), the same
+   add signed again (`r {next}` from where it was, or `done` again if it
+   landed), another key's add under way (`busy`), the adds started in the
+   last day of the panel's uptime, 16 per key and 32 in all (`quota`;
+   counted in RAM when an add begins; a restart starts it again, and nothing
+   remote can restart a panel). A held add has an absolute life of 15
+   minutes from its start, however often it is sent again (and is dropped
+   after 10 minutes without a part). The panel looks for where it lands:
+   every taken stem among the stem and `<stem>-2` … `<stem>-9` whose source
+   has the signed length is hashed, so the same Formula is found wherever
+   it landed before; else the first free stem (a stem is taken when its
+   `.psi` or `.psb` is there); a remote add never overwrites. The same
+   source found with a current `.psb`: `r {done: true, stem}`, nothing
+   written; found with its `.psb` missing or not current (not dated, a mark,
+   another format): the add goes on and puts back only the `.psb`. None
+   free, or 128 Formulas on the card: `quota`. Otherwise `r {next: 0}`. Also
+   `no-card`, `busy` (a LAN transfer or update on the card).
 2. `formula-part {id, off, data}`: `data` base64url (no padding, canonical)
    of 1 to 384 bytes (512 characters: the largest such body stays within
    700 bytes), strictly at the panel's `next`; the stream is the source then
@@ -425,7 +442,9 @@ earlier test image's format) is no file of the panel's.
    `not-allowed`, before the card. A part out of order is `bad-arg` and
    nothing is written; another key's is `not-allowed`.
 3. On the last part the panel checks both SHA-256s against the signed ones
-   (a tampered part: `bad-arg`, nothing kept), that the source is UTF-8 with
+   (a tampered part: `bad-arg`, nothing kept), reads both part files back
+   from the card and hashes them against the signature again (a mismatch is
+   a card fault: `bad-arg`, nothing kept), that the source is UTF-8 with
    no NUL, that the compiled file is `PSB` with this player's ABI and that
    every program in it passes `psb::verify` (behind a heap gate; below it
    `busy`, the bytes kept for the same `formula-add` signed again); then

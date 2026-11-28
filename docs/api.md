@@ -344,9 +344,16 @@ curl -s "$DMD/api/exists?path=/filelist.txt"
 Only in the emulator's Connect image (the `connect-test` feature; a release,
 a beta and every other build have no such route): `?unix=N` sets the
 panel's clock to N seconds since 1970, so the lane can step it back in the
-middle of a Formula's add (protocol 5.7). `200 {"ok":true}`; no `unix`:
-`400`. It logs `clock-test: …`, which `tools/release-test-features-check.sh`
+middle of a Formula's add (protocol 5.7); `?date_fail=1` instead makes the
+next landing's dating fail. `200 {"ok":true}`; neither: `400`. It logs `clock-test: …`, which `tools/release-test-features-check.sh`
 refuses in a release image.
+
+### GET /api/test/card-io
+
+Only in the emulator's Connect image (`connect-test`): the card I/O the
+network worker has done itself since boot, `{"reads":N,"writes":N,"dirs":N,"verifies":N}`
+(sector transfers, directory opens; and `verifies`, the gallery signature checks run), so the lane can show a refused remote
+command touched no card at all.
 
 ### POST /api/reboot
 

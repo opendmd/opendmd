@@ -36,16 +36,30 @@ pub const MAX_PSB: u32 = 8 * 1024;
 /// One part's bytes, at most: its 512 base64url characters keep the
 /// largest `formula-part` body within the 700 bytes a command may be.
 pub const MAX_PART: usize = 384;
-/// Adds that may start in a day of uptime ([`Adds`], in RAM: a restart
-/// starts it again, and nothing remote can restart a panel). It bounds
-/// abandoned adds' part files; what may land is bounded by the signature.
+/// Adds one key may start in a day of uptime, and all keys together
+/// ([`Adds`], in RAM: a restart starts it again, and nothing remote can
+/// restart a panel). It bounds abandoned adds' part files; what may land is
+/// bounded by the signature.
 pub const DAY_ADDS: usize = 16;
+pub const PANEL_DAY_ADDS: usize = 32;
 pub const DAY: Duration = Duration::from_secs(24 * 3600);
+/// A held add's whole life, from its start, however often it is sent
+/// again (the firmware's test image may set a shorter one).
+pub const LIFETIME: Duration = Duration::from_secs(15 * 60);
+/// Gallery signature checks (an Ed25519 verify each, on a task of its own):
+/// per key one every 2 s with a burst of 2; per panel one a second with a
+/// burst of 3. Taken before the verify; a held add sent again by its own key
+/// is not verified again (its witness is compared instead).
+pub const VERIFY_KEY: (u64, u64) = (500_000, 2_000_000);
+pub const VERIFY_PANEL: (u64, u64) = (1_000_000, 3_000_000);
+/// One card read for an add (its directory pass: a new add, or the same
+/// Formula found already there) per key in 2 s, per panel in 1 s.
+pub const PANEL_ADD_EVERY: Duration = Duration::from_secs(1);
 /// Formulas the card may hold for an add to be taken (sources counted in the
 /// add's own directory pass).
 pub const MAX_FORMULAS: usize = 128;
-/// One `formula-add` a panel takes in this long (its own rate: a refused or
-/// over-quota key cannot make the panel read the card four times a second).
+/// One card read for an add per key in this long ([`PANEL_ADD_EVERY`] for
+/// the panel): a key cannot make the panel read the card four times a second.
 pub const ADD_EVERY: Duration = Duration::from_secs(2);
 /// An add with no progress for this long is dropped (its part files too).
 pub const STALE: Duration = Duration::from_secs(600);
@@ -73,6 +87,15 @@ impl AddArgs {
     }
 }
 
+/// A `formula-add` the gallery's signature admitted: its arguments and the
+/// witness over them (boxed in the command: every command's frames stay
+/// the size they were).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Admitted {
+    pub args: AddArgs,
+    pub signed: Signed,
+}
+
 /// `formula-add`'s signature fields: the gallery key's id, the compiled
 /// format and the signing revision it was signed for, and the signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +112,51 @@ pub struct Claim {
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn admit(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust) -> Result<Signed, Refusal> {
-    let f = crate::gallery_sig::Formula {
+    crate::gallery_sig::check(t, &formula_of(args, c), &c.sig).map_err(|_| Refusal::NotAllowed)
+}
+
+/// A gallery signature check to run, owning all it needs (nothing borrowed
+/// from the caller's stack: a runner may give up waiting for it).
+#[derive(Debug)]
+pub struct VerifyJob {
+    args: AddArgs,
+    claim: Claim,
+    trust: crate::gallery_sig::Trust<'static>,
+}
+
+impl VerifyJob {
+    /// The check itself ([`admit`]).
+    pub fn run(self) -> Result<Signed, Refusal> {
+        admit(&self.args, &self.claim, &self.trust)
+    }
+}
+
+/// Where the gallery's signature check runs: given the job, its result, or
+/// `None` when it could not run it, or gave up waiting (`busy`). The
+/// firmware runs it on a task of its own ([`set_verify_runner`]), off the
+/// network worker's stack; with none set (the host), in place.
+pub type Runner = fn(Box<VerifyJob>) -> Option<Result<Signed, Refusal>>;
+static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
+
+/// The firmware's [`Runner`] (once, at start).
+pub fn set_verify_runner(r: Runner) {
+    let _ = RUNNER.set(r);
+}
+
+/// [`admit`] through the [`Runner`], after its cheap refusals
+/// (`gallery_sig::precheck`: no allocation, no task).
+pub fn admit_where_it_runs(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust<'static>) -> Result<Signed, Refusal> {
+    crate::gallery_sig::precheck(t, &formula_of(args, c)).map_err(|_| Refusal::NotAllowed)?;
+    // (Boxed: only a pointer moves through the frames below, the worker's.)
+    let job = Box::new(VerifyJob { args: args.clone(), claim: c.clone(), trust: *t });
+    match RUNNER.get() {
+        Some(run) => run(job).unwrap_or(Err(Refusal::Busy)),
+        None => job.run(),
+    }
+}
+
+fn formula_of<'a>(args: &'a AddArgs, c: &Claim) -> crate::gallery_sig::Formula<'a> {
+    crate::gallery_sig::Formula {
         kid: c.kid,
         abi: c.abi,
         rev: c.rev,
@@ -98,39 +165,37 @@ pub fn admit(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust) -> Result
         src_sha256: args.src_sha256,
         psb_len: args.psb_size,
         psb_sha256: args.psb_sha256,
-    };
-    crate::gallery_sig::check(t, &f, &c.sig).map_err(|_| Refusal::NotAllowed)
-}
-
-/// Where the gallery's signature check runs: a function given the check
-/// that runs it to the end (true) or could not (false: `busy`). The firmware
-/// runs it on a task of its own ([`set_verify_runner`]), off the network
-/// worker's stack, which has no room for a second Ed25519 verify's frames
-/// beside the command's; with none set (the host), in place.
-pub type Runner = fn(&mut (dyn FnMut() + Send)) -> bool;
-static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
-
-/// The firmware's [`Runner`] (once, at start).
-pub fn set_verify_runner(r: Runner) {
-    let _ = RUNNER.set(r);
-}
-
-/// [`admit`] through the [`Runner`]: the same check, run where the
-/// firmware puts it, one after the command's own (never inside it).
-pub fn admit_where_it_runs(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust) -> Result<Signed, Refusal> {
-    let mut out = None;
-    let mut job = || out = Some(admit(args, c, t));
-    let ran = match RUNNER.get() {
-        Some(run) => run(&mut job),
-        None => {
-            job();
-            true
-        }
-    };
-    if !ran {
-        return Err(Refusal::Busy);
     }
-    out.unwrap_or(Err(Refusal::Busy))
+}
+
+/// Tokens in millionths, refilled at a rate and capped (the verify rates).
+#[derive(Debug, Clone, Copy)]
+struct Tokens {
+    micro: u64,
+    last: Duration,
+}
+
+impl Tokens {
+    fn full(cap: u64, now: Duration) -> Tokens {
+        Tokens { micro: cap, last: now }
+    }
+
+    fn take(&mut self, now: Duration, (per_s, cap): (u64, u64)) -> bool {
+        let dt = now.saturating_sub(self.last).as_micros().min(u128::from(u64::MAX)) as u64;
+        self.micro = self.micro.saturating_add(dt.saturating_mul(per_s) / 1_000_000).min(cap);
+        self.last = self.last.max(now);
+        if self.micro >= 1_000_000 {
+            self.micro -= 1_000_000;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn has(&self, now: Duration, (per_s, cap): (u64, u64)) -> bool {
+        let dt = now.saturating_sub(self.last).as_micros().min(u128::from(u64::MAX)) as u64;
+        self.micro.saturating_add(dt.saturating_mul(per_s) / 1_000_000).min(cap) >= 1_000_000
+    }
 }
 
 /// The stem rule for an add.
@@ -192,6 +257,19 @@ pub fn b64url(b: &[u8]) -> String {
         }
     }
     s
+}
+
+/// SHA-256 fed in pieces (the firmware's read-back of a part file).
+#[derive(Default)]
+pub struct Hash(Sha256);
+
+impl Hash {
+    pub fn update(&mut self, b: &[u8]) {
+        self.0.update(b);
+    }
+    pub fn finish(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
 }
 
 /// SHA-256 of what `r` reads, in 512-byte pieces (a card file's).
@@ -264,7 +342,12 @@ pub struct Held {
     pub next: u32,
     src: Sha256,
     psb: Sha256,
+    /// Its last progress (a part), and its start (its absolute life).
     pub at: Duration,
+    pub born: Duration,
+    /// Its `.psi` is on the card already, the same source: only the `.psb`
+    /// is to be put back (a refill, the design's step 6).
+    pub refill: bool,
     /// Landed (its `done` may be asked again within [`STALE`]).
     pub landed: bool,
 }
@@ -303,59 +386,137 @@ pub enum Pre {
     New,
 }
 
-/// The panel's adds: one held at a time, the adds started in the last day
-/// of uptime, the add's rate.
-#[derive(Debug, Default)]
+/// The panel's adds: one held at a time; the adds started in the last day of
+/// uptime, per key and in all; the card reads for adds, per key and in all;
+/// the gallery verifies' rates, per key and in all.
+#[derive(Debug)]
 pub struct Adds {
     pub held: Option<Held>,
-    /// When each add of the last [`DAY`] began (at most [`DAY_ADDS`]).
-    started: Vec<Duration>,
-    last_add: Option<Duration>,
+    started: Vec<(KeyId, Duration)>,
+    reads: Vec<(KeyId, Duration)>,
+    panel_read: Option<Duration>,
+    verify_keys: Vec<(KeyId, Tokens)>,
+    verify_panel: Option<Tokens>,
+    lifetime: Duration,
+}
+
+impl Default for Adds {
+    fn default() -> Adds {
+        Adds::with_lifetime(LIFETIME)
+    }
 }
 
 impl Adds {
-    /// The held add, if it is not stale at `now` (else it is dropped and
-    /// its id returned: its part files to remove now).
+    /// With a held add's absolute life `lifetime` ([`LIFETIME`] normally).
+    pub fn with_lifetime(lifetime: Duration) -> Adds {
+        Adds { held: None, started: Vec::new(), reads: Vec::new(), panel_read: None, verify_keys: Vec::new(), verify_panel: None, lifetime }
+    }
+
+    fn live(&self, h: &Held, now: Duration) -> bool {
+        now.saturating_sub(h.at) < STALE && (h.landed || now.saturating_sub(h.born) < self.lifetime)
+    }
+
+    /// The held add, if it is still live at `now` (else it is dropped and
+    /// its id returned: its part files to remove now): no progress for
+    /// [`STALE`], or not landed within its absolute life.
     pub fn expire(&mut self, now: Duration) -> Option<u32> {
-        if self.held.as_ref().is_some_and(|h| now.saturating_sub(h.at) >= STALE) {
+        if self.held.as_ref().is_some_and(|h| !self.live(h, now)) {
             return self.held.take().map(|h| h.args.id);
         }
         None
     }
 
-    /// Before anything is read from the card (and after the signature):
-    /// the add's own rate, the same add again, another key's add under way,
-    /// the adds started in the last day of uptime.
-    pub fn pre(&mut self, k: KeyId, args: &AddArgs, now: Duration) -> Result<Pre, Refusal> {
-        let rated = self.last_add.is_some_and(|t| now.saturating_sub(t) < ADD_EVERY);
-        if let Some(h) = &mut self.held {
-            if h.k == k && &h.args == args && now.saturating_sub(h.at) < STALE {
-                // (Its checks tried again, with all the bytes in: rated too.)
-                let whole = !h.landed && h.next == h.args.total();
-                if whole && rated {
-                    return Err(Refusal::Rate);
-                }
-                if whole {
-                    self.last_add = Some(now);
-                }
-                h.at = now;
-                return Ok(if h.landed { Pre::Landed { stem: h.target.clone() } } else { Pre::Resume { next: h.next } });
+    /// The gallery's signature for `k`'s add (the command's parser, before
+    /// anything else): the cheap refusals; the held add sent again by its own
+    /// key, the same signed statement, takes its witness again (no verify);
+    /// else the verify rates (`rate`), then the verify where the firmware
+    /// runs it.
+    pub fn admit(&mut self, k: KeyId, args: &AddArgs, c: &Claim, now: Duration, t: &crate::gallery_sig::Trust<'static>) -> Result<Signed, Refusal> {
+        crate::gallery_sig::precheck(t, &formula_of(args, c)).map_err(|_| Refusal::NotAllowed)?;
+        if let Some(h) = self.held.as_ref().filter(|h| h.k == k && &h.args == args && self.live(h, now)) {
+            let w = &h.signed;
+            if (w.kid(), w.abi(), w.rev(), w.sig()) == (c.kid, c.abi, c.rev, &c.sig) {
+                return Ok(w.clone());
             }
+        }
+        let key = match self.verify_keys.iter().position(|(x, _)| *x == k) {
+            Some(i) => i,
+            None => {
+                // (Bounded: the oldest bucket goes past 32 keys; the key
+                // list holds 16.)
+                if self.verify_keys.len() >= 32 {
+                    self.verify_keys.remove(0);
+                }
+                self.verify_keys.push((k, Tokens::full(VERIFY_KEY.1, now)));
+                self.verify_keys.len() - 1
+            }
+        };
+        let panel = self.verify_panel.get_or_insert(Tokens::full(VERIFY_PANEL.1, now));
+        if !self.verify_keys[key].1.has(now, VERIFY_KEY) || !panel.has(now, VERIFY_PANEL) {
+            return Err(Refusal::Rate);
+        }
+        self.verify_keys[key].1.take(now, VERIFY_KEY);
+        panel.take(now, VERIFY_PANEL);
+        admit_where_it_runs(args, c, t)
+    }
+
+    fn last_read(&self, k: &KeyId) -> Option<Duration> {
+        self.reads.iter().find(|(x, _)| x == k).map(|&(_, t)| t)
+    }
+
+    /// Before anything is read from the card (and after the signature):
+    /// the card-read rate (per key and in all), the same add again, another
+    /// key's add under way, the adds started in the last day (per key and
+    /// in all). Nothing is counted here: [`note_read`](Self::note_read)
+    /// and [`begin`](Self::begin) do, once the card is read.
+    pub fn pre(&mut self, k: KeyId, args: &AddArgs, now: Duration) -> Result<Pre, Refusal> {
+        let rated = self.last_read(&k).is_some_and(|t| now.saturating_sub(t) < ADD_EVERY)
+            || self.panel_read.is_some_and(|t| now.saturating_sub(t) < PANEL_ADD_EVERY);
+        let live = self.held.as_ref().is_some_and(|h| self.live(h, now));
+        if let Some(h) = self.held.as_ref().filter(|h| live && h.k == k && &h.args == args) {
+            // (Its checks tried again, with all the bytes in: a card read,
+            // rated too. Sent again, it is never made younger.)
+            let whole = !h.landed && h.next == h.args.total();
+            if whole && rated {
+                return Err(Refusal::Rate);
+            }
+            let p = if h.landed { Pre::Landed { stem: h.target.clone() } } else { Pre::Resume { next: h.next } };
+            if whole {
+                self.note_read(k, now);
+            }
+            return Ok(p);
         }
         if rated {
             return Err(Refusal::Rate);
         }
-        self.last_add = Some(now);
-        // (A landed add holds nothing; a stalled one of another key does
-        // until it is stale.)
-        if self.held.as_ref().is_some_and(|h| h.k != k && !h.landed && now.saturating_sub(h.at) < STALE) {
+        // (A landed add holds nothing; a live one of another key does.)
+        if self.held.as_ref().is_some_and(|h| live && h.k != k && !h.landed) {
             return Err(Refusal::Busy);
         }
-        self.started.retain(|&t| now.saturating_sub(t) < DAY);
-        if self.started.len() >= DAY_ADDS {
+        self.day_room(k, now)?;
+        Ok(Pre::New)
+    }
+
+    /// The card is read for `k`'s add now (its directory pass): counted
+    /// against the card-read rate, per key and in all (an add found already
+    /// there too).
+    pub fn note_read(&mut self, k: KeyId, now: Duration) {
+        match self.reads.iter_mut().find(|(x, _)| *x == k) {
+            Some(r) => r.1 = now,
+            None => {
+                self.reads.retain(|&(_, t)| now.saturating_sub(t) < DAY);
+                self.reads.push((k, now));
+            }
+        }
+        self.panel_read = Some(now);
+    }
+
+    fn day_room(&mut self, k: KeyId, now: Duration) -> Result<(), Refusal> {
+        self.started.retain(|&(_, t)| now.saturating_sub(t) < DAY);
+        if self.started.len() >= PANEL_DAY_ADDS || self.started.iter().filter(|(x, _)| *x == k).count() >= DAY_ADDS {
             return Err(Refusal::Quota);
         }
-        Ok(Pre::New)
+        Ok(())
     }
 
     /// The card said where it lands: held, counted (`Quota` past the day's
@@ -385,16 +546,20 @@ impl Adds {
     /// Adds::default().begin([0; 8], a, w, "x".into(), Default::default()).unwrap();
     /// ```
     pub fn begin(&mut self, k: KeyId, args: AddArgs, signed: Signed, target: String, now: Duration) -> Result<Option<u32>, Refusal> {
+        self.begin_as(k, args, signed, target, false, now)
+    }
+
+    /// [`begin`](Self::begin), `refill`: the source is on the card already
+    /// (its hash the signed one) and only the `.psb` is to be put back.
+    pub fn begin_as(&mut self, k: KeyId, args: AddArgs, signed: Signed, target: String, refill: bool, now: Duration) -> Result<Option<u32>, Refusal> {
         if !args.signed_by(&signed) {
             return Err(Refusal::BadArg);
         }
+        // (The day's room first: nothing held is given up for a refusal.)
+        self.day_room(k, now)?;
         let dropped = self.held.take().filter(|h| !h.landed).map(|h| h.args.id);
-        self.started.retain(|&t| now.saturating_sub(t) < DAY);
-        if self.started.len() >= DAY_ADDS {
-            return Err(Refusal::Quota);
-        }
-        self.started.push(now);
-        self.held = Some(Held { k, args, signed, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, landed: false });
+        self.started.push((k, now));
+        self.held = Some(Held { k, args, signed, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, born: now, refill, landed: false });
         Ok(dropped)
     }
 
@@ -404,7 +569,8 @@ impl Adds {
         if self.held.is_none() {
             return Err(Refusal::NotAllowed);
         }
-        let h = self.held.as_mut().filter(|h| h.args.id == id && !h.landed && now.saturating_sub(h.at) < STALE).ok_or(Refusal::BadArg)?;
+        let live = self.held.as_ref().is_some_and(|h| self.live(h, now));
+        let h = self.held.as_mut().filter(|h| live && h.args.id == id && !h.landed).ok_or(Refusal::BadArg)?;
         if h.k != k {
             return Err(Refusal::NotAllowed);
         }
@@ -562,11 +728,125 @@ mod tests {
     fn start(adds: &mut Adds, k: KeyId, a: AddArgs, now: Duration) -> Result<Pre, Refusal> {
         let p = adds.pre(k, &a, now)?;
         if p == Pre::New {
+            adds.note_read(k, now);
             let stem = a.stem.clone();
             let w = witness(&a);
             adds.begin(k, a, w, stem, now)?;
         }
         Ok(p)
+    }
+
+    /// The vectors' test key A as a `'static` trust, and its claim over `a`.
+    fn test_trust() -> crate::gallery_sig::Trust<'static> {
+        use ed25519_dalek::SigningKey;
+        let seed: [u8; 32] = Sha256::digest(b"opendmd-gallery throwaway test key, never a real one: A").into();
+        let public: &'static [u8; 32] = Box::leak(Box::new(SigningKey::from_bytes(&seed).verifying_key().to_bytes()));
+        let keys: &'static [(u8, &'static [u8; 32])] = Box::leak(Box::new([(0u8, public)]));
+        crate::gallery_sig::Trust::for_tests(keys, 1, 3)
+    }
+
+    fn claim(a: &AddArgs) -> Claim {
+        use ed25519_dalek::{Signer, SigningKey};
+        let seed: [u8; 32] = Sha256::digest(b"opendmd-gallery throwaway test key, never a real one: A").into();
+        let c = Claim { kid: 0, abi: 3, rev: 1, sig: [0; 64] };
+        let sig = SigningKey::from_bytes(&seed).sign(crate::gallery_sig::message(&formula_of(a, &c)).unwrap().as_bytes()).to_bytes();
+        Claim { sig, ..c }
+    }
+
+    /// The verify's own guards: the cheap refusals before anything; the
+    /// verify rates (per key one in 2 s, burst 2; per panel one a second,
+    /// burst 3) before the verify; the held add sent again by its own key
+    /// takes its witness again with no verify (here: with no verify left
+    /// in the rate); any change to the statement is verified anew.
+    #[test]
+    fn admit_guards_the_verify() {
+        let tr = test_trust();
+        let a = args(b"gray(x)\n", b"PSB\x03\x00\x00", "x");
+        let c = claim(&a);
+        let mut adds = Adds::default();
+        for (what, bad) in [("kid", Claim { kid: 9, ..c.clone() }), ("abi", Claim { abi: 4, ..c.clone() }), ("rev", Claim { rev: 0, ..c.clone() })] {
+            assert_eq!(adds.admit(K, &a, &bad, t(0), &tr), Err(Refusal::NotAllowed), "{what}");
+        }
+        assert!(adds.verify_keys.is_empty() && adds.verify_panel.is_none(), "the cheap refusals spend no rate");
+        // Two for the key at once, then one in 2 s.
+        let garbage = Claim { sig: [7; 64], ..c.clone() };
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::NotAllowed));
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::NotAllowed));
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::Rate), "the key's burst used");
+        assert_eq!(adds.admit(K, &a, &garbage, Duration::from_millis(1900), &tr), Err(Refusal::Rate));
+        assert_eq!(adds.admit(K, &a, &garbage, t(2), &tr), Err(Refusal::NotAllowed), "one in 2 s");
+        // The panel's: three keys at once take its burst of 3 (one left over
+        // from above refilled), the next key is rated.
+        let mut p = Adds::default();
+        for (i, k) in [[3u8; 8], [4; 8], [5; 8]].into_iter().enumerate() {
+            assert_eq!(p.admit(k, &a, &garbage, t(10), &tr), Err(Refusal::NotAllowed), "key {i}");
+        }
+        assert_eq!(p.admit([6; 8], &a, &garbage, t(10), &tr), Err(Refusal::Rate), "the panel's burst used");
+        // The held add, sent again by its own key: its witness, no verify.
+        let mut h = Adds::default();
+        let w = h.admit(K, &a, &c, t(0), &tr).unwrap();
+        h.admit(K, &a, &c, t(0), &tr).unwrap();
+        h.begin(K, a.clone(), w.clone(), "x".into(), t(0)).unwrap();
+        for _ in 0..10 {
+            assert_eq!(h.admit(K, &a, &c, t(0), &tr), Ok(w.clone()), "no verify: none left in the rate");
+        }
+        assert_eq!(h.admit(K2, &a, &c, t(0), &tr).map(drop), Ok(()), "another key: verified (its own rate)");
+        assert_eq!(h.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::Rate), "another statement: verified, rated");
+    }
+
+    /// A held add's life is absolute: sent again, it is not made younger;
+    /// past it, it goes, and its parts are refused.
+    #[test]
+    fn a_held_add_has_an_absolute_life() {
+        let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
+        let a = args(&src, &psb, "x");
+        let mut adds = Adds::with_lifetime(t(90));
+        start(&mut adds, K, a.clone(), t(0)).unwrap();
+        for s in [20, 40, 60, 80] {
+            assert_eq!(start(&mut adds, K, a.clone(), t(s)), Ok(Pre::Resume { next: 0 }));
+            adds.part(K, 7, 0, &src[..1], t(s)).ok();
+            adds.held.as_mut().unwrap().next = 0;
+        }
+        assert_eq!(adds.expire(t(89)), None);
+        assert_eq!(adds.expire(t(90)), Some(7), "90 s from its start, whatever was sent since");
+        assert_eq!(adds.part(K, 7, 0, &src[..1], t(91)), Err(Refusal::NotAllowed));
+    }
+
+    /// The day's count and the card-read rate are per key, with a ceiling
+    /// for the panel; a refusal gives up nothing held; only a card read
+    /// counts against the read rate.
+    #[test]
+    fn per_key_counts_and_the_panel_ceiling() {
+        let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
+        let mut adds = Adds::default();
+        let mut now = 10u64;
+        let mut go = |adds: &mut Adds, k: KeyId, id: u32| {
+            now += 3;
+            let r = start(adds, k, AddArgs { id, ..args(&src, &psb, "x") }, t(now));
+            // (Each lands: a landed add holds nothing.)
+            adds.landed("x", t(now));
+            r
+        };
+        for i in 0..DAY_ADDS as u32 {
+            assert_eq!(go(&mut adds, K, 1 + i), Ok(Pre::New));
+        }
+        assert_eq!(go(&mut adds, K, 99), Err(Refusal::Quota), "K's 17th");
+        for i in 0..DAY_ADDS as u32 {
+            assert_eq!(go(&mut adds, K2, 100 + i), Ok(Pre::New), "K2 has its own 16");
+        }
+        assert_eq!(go(&mut adds, [9; 8], 200), Err(Refusal::Quota), "the panel's 32");
+        // A refused begin keeps the held add.
+        let held = adds.held.as_ref().map(|h| h.args.id);
+        let b = AddArgs { id: 300, ..args(&src, &psb, "x") };
+        assert_eq!(adds.begin(K, b.clone(), witness(&b), "x".into(), t(now + 10)), Err(Refusal::Quota));
+        assert_eq!(adds.held.as_ref().map(|h| h.args.id), held);
+        // `pre` alone reads nothing: no rate spent.
+        let mut r = Adds::default();
+        for i in 0..5u32 {
+            assert_eq!(r.pre(K, &AddArgs { id: 500 + i, ..args(&src, &psb, "x") }, t(1)), Ok(Pre::New));
+        }
+        r.note_read(K, t(1));
+        assert_eq!(r.pre(K, &args(&src, &psb, "x"), t(2)), Err(Refusal::Rate));
     }
 
     /// An add is held only with a signature over exactly its bytes, and a
@@ -633,13 +913,15 @@ mod tests {
         adds.part(K, 7, 0, &src[..5], t(1)).unwrap();
         // Signed again (a new session): from where it was, never rated.
         assert_eq!(start(&mut adds, K, a.clone(), t(1)), Ok(Pre::Resume { next: 5 }));
-        // The add's own rate: another add within 2 s.
-        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(1)), Err(Refusal::Rate));
+        // The card-read rate: the same key's other add within 2 s, any
+        // key's within 1 s of the panel's last read.
+        let mut b = a.clone();
+        b.id = 9;
+        assert_eq!(adds.pre(K, &b, t(1)), Err(Refusal::Rate), "the key's 2 s");
+        assert_eq!(adds.pre(K2, &args(&src, &psb, "y"), Duration::from_millis(500)), Err(Refusal::Rate), "the panel's 1 s");
         // Another key while it is held: busy.
         assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(3)), Err(Refusal::Busy));
         // The same key's other add replaces it.
-        let mut b = a.clone();
-        b.id = 9;
         assert_eq!(adds.pre(K, &b, t(6)), Ok(Pre::New));
         assert_eq!(adds.begin(K, b.clone(), witness(&b), "x".into(), t(6)), Ok(Some(7)));
         adds.landed("x-2", t(7));

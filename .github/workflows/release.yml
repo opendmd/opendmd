@@ -287,6 +287,8 @@ jobs:
             tools/release-connect-check.sh "$app" "$VERSION"
             # No emulator lane's test hooks (tools/release.sh runs the same check).
             tools/release-test-features-check.sh "$app"
+            # The gallery key: none without formula-add, the committed one with it, never a test key.
+            uv run --quiet tools/gallery-key-check.py "$app"
             manifest="$(jq -r .version "dist/manifest-$v.json")"
             test "$manifest" = "$VERSION" || { echo "::error::dist/manifest-$v.json says $manifest, want $VERSION"; exit 1; }
             # The offline install (docs/deploying.md "Offline installs"): the six
