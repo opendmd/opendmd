@@ -19,7 +19,7 @@
 //! |---|---|
 //! | `w=<f>` | relative weight in shuffle (`3` = favourite, `0.5` = play less; 1 is the default) |
 //! | `dwell=<s>` | holds the panel for `s` seconds (1..=86,400) |
-//! | `dwell=<k>x` | the configured dwell times `k` (0 < k <= 100) |
+//! | `dwell=<k>x` | `k` times its usual turn, in whole loops (0 < k <= 100; `engine::Playing::dwell`) |
 //! | `loops=<n>` | plays exactly `n` loops (1..=1,000) and moves on |
 //!
 //! Parsing is tolerant in the manifest parser's way (BOM, CRLF, blank lines,
