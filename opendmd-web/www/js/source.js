@@ -10,7 +10,7 @@
 // Paths are card-absolute (`/gifs/Consoles/X.gif`). Nothing is cached here;
 // a file's bytes live only as long as the caller holds them.
 
-import { enc, base, store, toast } from './util.js';
+import { enc, base, store, toast, emit } from './util.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -74,7 +74,13 @@ export async function dfetch(url, init = {}, ms = 90000) {
     init.signal?.addEventListener('abort', () => ctl.abort());
     let r;
     // (No answer at all: `link`, js/util.js unreachable.)
-    try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } catch (e) { if (e instanceof TypeError) e.link = true; throw e; } finally { clearTimeout(t); }
+    // (Said in plain words, never the browser's "Failed to fetch"; the
+    // status pill hears of it, and of the link back: js/pill.js.)
+    try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } catch (e) {
+      if (e instanceof TypeError) { e.link = true; e.message = 'Panel not reachable'; emit('link', false); }
+      throw e;
+    } finally { clearTimeout(t); }
+    emit('link', true);
     if (r.status !== 401 || !await askKey()) return r;
   }
 }

@@ -9,8 +9,9 @@
 // when first typed), the user's tags and stars from js/tags.js. Ticks (Select mode, the Add pane) work on GIFs and whole folders.
 // Keys: ↑/↓, Home/End, PgUp/PgDn, → opens or steps in, ← closes or steps
 // out, Enter, Space ticks. Each folder is listed once a session, shared by
-// every tree. Imported by library.js and pledit.js; its own size line with
-// thumbs.js and tree.css (loaded here).
+// every tree, and kept in this browser (IndexedDB, below) so the next visit
+// shows it at once. Imported by library.js and pledit.js; its own size
+// line with thumbs.js and tree.css (loaded here).
 
 import { app, listOr } from './state.js';
 import { art } from './artmod.js';
@@ -43,32 +44,125 @@ function needs(tags, again) {
     .catch(() => {}).finally(() => { waiting = false; again(); });
 }
 
-// A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
-export function listCat(c) {
+// The folder listings kept in this browser (on a device): IndexedDB
+// `odmd-lists`, one record per card and folder (`<card key>|/gifs/<c>`,
+// and `|/gifs` for the folders): the names, as the card last listed them.
+// Shown at once, then listed from the card once a session in the
+// background (the first time each is wanted); a change replaces it, and
+// the trees redraw. A folder the app itself changes (a move, an add, a
+// delete: `gifs`) loses its record, so nothing stale is shown after.
+// (No IndexedDB, a private window, or one slow to open: no cache, the card's listings only.)
+let dbQ = null;
+const db = () => (dbQ ??= new Promise((res) => {
+  setTimeout(() => res(null), 1500);
+  try {
+    const r = indexedDB.open('odmd-lists', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('l');
+    r.onsuccess = () => res(r.result);
+    r.onerror = r.onblocked = () => res(null);
+  } catch { res(null); }
+}));
+// get (`v` undefined), put, or delete (`v` null); never throws.
+async function kept(dir, v) {
+  const d = app.device && app.cardKey && await db();
+  if (!d) return null;
+  const key = app.cardKey + '|' + dir;
+  return new Promise((res) => {
+    try {
+      const s = d.transaction('l', v === undefined ? 'readonly' : 'readwrite').objectStore('l');
+      const r = v === undefined ? s.get(key) : v === null ? s.delete(key) : s.put(v, key);
+      r.onsuccess = () => res(r.result ?? null);
+      r.onerror = () => res(null);
+    } catch { res(null); }
+  });
+}
+// Listed from the card this session (the rest are only as kept).
+const checked = new Set();
+// A directory's names (GIF files or folders), from the card; kept.
+async function fresh(dir, dirs) {
+  const names = (await listOr(dir)).filter((f) => (dirs ? f.dir : !f.dir && /\.gif$/i.test(f.name))).map((f) => f.name);
+  checked.add(dir);
+  kept(dir, names);
+  return names;
+}
+const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+// Per folder: this session's listing ({p: what lists holds, card: the
+// card's own listing, items or null}); and kept ones whose re-list failed,
+// to try again (`recheck`): folder -> {n tries, at: not before}.
+const metas = new Map(), stale = new Map();
+
+// A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could
+// not be read. `own`: the card's own listing, never a kept one (a smart
+// playlist must not be written from a list the card may have changed since).
+export function listCat(c, own) {
   const dir = `/gifs/${c}`;
+  const items = (names) => names.map((name) => {
+    const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
+    return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
+  }).sort(cmp);
+  // (Forgotten while it was being read — a move or a delete answered
+  // meanwhile —: what it read is not kept, or a search would take the
+  // folder as listed and find GIFs that have left it.)
+  // (`me.p`: this listing's promise, read when it answers: never before.)
+  const me = {}, keep = (l) => {
+    if (lists.get(c) !== me.p) return l;
+    got.set(c, l);
+    counts()[c] = l.length;
+    store.set(countsFor, countsOf);
+    return l;
+  };
   if (!lists.has(c)) {
-    const p = listOr(dir).then((fs) => {
-      const l = fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
-        const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
-        return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
-      }).sort(cmp);
-      // (Forgotten while it was being read — a move or a delete answered
-      // meanwhile —: what it read is not kept, or a search would take the
-      // folder as listed and find GIFs that have left it.)
-      if (lists.get(c) !== p) return l;
-      got.set(c, l);
-      counts()[c] = l.length;
-      store.set(countsFor, countsOf);
-      return l;
-    }, () => { if (lists.get(c) === p) lists.delete(c); return null; });
-    lists.set(c, p);
+    me.p = (async () => {
+      const old = !checked.has(dir) && await kept(dir);
+      if (!old) { const l = items(await fresh(dir)); me.card = Promise.resolve(l); return keep(l); }
+      // Kept: shown now; the card's own listing, when it comes, wins: it
+      // replaces what `lists` holds too, so every caller after gets it.
+      me.card = fresh(dir).then((names) => {
+        stale.delete(c);
+        const l = items(names);
+        if (lists.get(c) !== me.p || same(names, old)) return l;
+        lists.set(c, me.p = Promise.resolve(l));
+        keep(l);
+        for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); t.update(); }
+        return l;
+      }, () => {
+        // (Not marked checked: asked again at the next look, a while later each time.)
+        const n = (stale.get(c)?.n || 0) + 1;
+        stale.set(c, { n, at: Date.now() + Math.min(120000, 5000 * 2 ** n) });
+        return null;
+      });
+      return keep(items(old));
+    })().catch(() => { if (lists.get(c) === me.p) lists.delete(c); return null; });
+    lists.set(c, me.p);
+    metas.set(c, me);
   }
-  return lists.get(c);
+  const m = metas.get(c);
+  if (!own) return lists.get(c);
+  // The card's own; its re-list having failed, asked again now (a smart
+  // playlist or Add by filter waiting on it must not wait for the Library).
+  return lists.get(c).then(async (l) => {
+    const r = l && m?.card ? await m.card : l;
+    if (r || !stale.has(c) || own === 'again') return r;
+    stale.delete(c);
+    lists.delete(c);
+    metas.delete(c);
+    return listCat(c, 'again');
+  });
+}
+// Kept listings whose re-list failed, listed again once their wait is up
+// (the Library calls it when it is shown).
+export function recheck() {
+  for (const [c, s] of stale) if (s.at <= Date.now() && !checked.has(`/gifs/${c}`)) { lists.delete(c); metas.delete(c); listCat(c); }
 }
 export function forget(c) {
-  for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); }
-  // (A search showing lists it again: its count would leave the folder out.)
-  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); }
+  for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); metas.delete(k); }
+  // (Changed by the app: its record goes. Everything: listed afresh, kept records shown meanwhile.)
+  if (c) { checked.delete(`/gifs/${c}`); kept(`/gifs/${c}`, null); } else checked.clear();
+  // (A search showing lists it again: its count would leave the folder out.
+  // A folder open, changed by the app: the folders read again now, so its
+  // rows of GIFs that have gone don't linger, asking for their stills.)
+  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); else if (c && t.open.has(c)) t.reload(); }
 }
 on('gifs', forget);
 on('card', () => forget());
@@ -126,17 +220,28 @@ export class Tree {
   ticking() { return this.o.ticking?.() ?? false; }
 
   // The folders under /gifs (listed again each call), then the open ones' GIFs.
+  // (The first time, the folders kept in this browser show while the card's own are read.)
   async load() {
     this.dirty = false;
-    let dirs = [];
-    try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { this.o.onError?.('listing the folders: ' + e.message); }
-    const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: niceName(cat) };
-    this.folders = [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)].map(f);
-    for (const c of this.open) this.fill(c);
-    this.update();
+    const show = (dirs) => {
+      dirs = [...dirs].sort(byNice);
+      const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: niceName(cat) };
+      this.folders = [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)].map(f);
+      // (Only folders that are there: one left empty and removed is not asked for.)
+      for (const c of this.open) if (dirs.includes(c)) this.fill(c);
+      // (A search showing: a folder new since it gathered is listed too.)
+      if (this.q.trim()) this.gather();
+      this.update();
+    };
+    const old = !this.folders.length && !checked.has('/gifs') && await kept('/gifs');
+    const read = fresh('/gifs', true).then((dirs) => { if (!old || !same(old, dirs)) show(dirs); }, (e) => { this.o.onError?.('listing the folders: ' + e.message); if (!old) show([]); });
+    // (Kept: shown now, and the card's listing redraws when it differs.)
+    if (old) show(old); else await read;
     return this.folders;
   }
   real() { return this.folders.map((f) => f.cat); }
+  // load(), once for a burst of changes (a batch forgets folder after folder).
+  reload() { clearTimeout(this.rt); this.rt = setTimeout(() => this.load(), 50); }
   items(cat) { return got.get(cat); }
   // Ask for a folder's GIFs; the tree updates when they come.
   fill(cat) {
@@ -201,9 +306,13 @@ export class Tree {
   // One pass: the rows; every match (`res`); the platforms' counts.
   update() {
     const [text, okQ, okP] = this.match(), rows = [], res = [], pc = new Map();
-    let pool = 0, matched = 0;
+    // (`all`: every GIF on the card, as far as known: a folder not listed
+    // yet counts as last seen; `some`: one was never seen, `all` is less.)
+    let pool = 0, matched = 0, all = 0, some = false;
     for (const f of this.folders) {
       const items = this.items(f.cat), open = text ? !this.shut.has(f.cat) : this.open.has(f.cat);
+      const n = items ? items.length : counts()[f.cat];
+      if (n == null) some = true; else all += n;
       let hits = null;
       if (items && (text || open)) {
         hits = [];
@@ -242,7 +351,7 @@ export class Tree {
       const i = rows.findIndex((r) => (r.path || 'd' + r.cat) === key);
       this.focusRow(i >= 0 ? i : Math.min(a._i, rows.length - 1));
     }
-    this.o.onUpdate?.({ shown: res.length, pool, matched, plats: pc, busy: (text && (this.gathering || waiting)) || rows.some((r) => r.ld), bad: this.bad, text, err: this.err });
+    this.o.onUpdate?.({ shown: res.length, pool, all, some, matched, plats: pc, busy: (text && (this.gathering || waiting)) || rows.some((r) => r.ld), bad: this.bad, text, err: this.err });
   }
 
   render(r, it, i) {

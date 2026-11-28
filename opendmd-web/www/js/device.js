@@ -1,12 +1,14 @@
-// Settings › Device (imported when the tab is first open; its own size
-// line): the player's status, the playback cache, network (its own Save; a
-// new name is live at once), offline mode, reload and reboot, and About. Panel timing
-// (js/panel.js), Firmware and Security (js/firmware.js) are modules of
-// their own, loaded with it.
+// Settings' WiFi, Updates, Advanced and About tabs (imported when the
+// first of them opens; its own size line): network (its own Save; a new
+// name is live at once), offline mode and Security on WiFi; Firmware on
+// Updates; the player's status, reload and reboot, card speed, the
+// playback cache, Moving pictures and Panel timing on Advanced; where and
+// what the player is on About. Panel timing (js/panel.js), Firmware and
+// Security (js/firmware.js) are modules of their own, loaded with it.
 
 import { app, playlistLabel, setPath } from './state.js';
 import * as prep from './prepare.js';
-import { h, clear, on, toast, base, note, saver, bytes, uptime, SITE } from './util.js';
+import { h, clear, on, toast, label, niceName, note, saver, bytes, uptime, SITE } from './util.js';
 
 // The HTTP API this firmware speaks, on the site: a release's own page
 // (dev/api/v<version>.html, frozen when it was published) when the player
@@ -16,9 +18,9 @@ import { h, clear, on, toast, base, note, saver, bytes, uptime, SITE } from './u
 export const apiDoc = (s) => SITE + (/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(s?.version) && s.www_version === 'v' + s.version
   ? `dev/api/v${s.version}.html` : 'dev/api.html');
 
-// ctx: {f, save, banner, sched, thumbs, live} from settings.js; `live()`
-// while the tab is open and the view up.
-export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
+// ctx: {f, save, banner, sched, live} from settings.js; `live()` while
+// Advanced is open and the view up. -> {groups: {tab: [nodes]}, show, hide}.
+export function deviceTab({ f, save, banner, sched, live }) {
   const c = app.config, netH = h('h3', 'Network'), net = saver(netH);
   Object.assign(f, {
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
@@ -100,7 +102,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   banner.append('Saved. WiFi changes take effect after a reboot. ', h('button.sm', { onclick: reboot }, 'Reboot now'));
   // --- playback cache
   const cacheLine = h('b', { id: 'pc-count' }, '…');
-  const cacheBtn = h('button', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining files');
+  const cacheBtn = h('button', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining GIFs');
   const cacheBar = h('i');
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
@@ -118,16 +120,18 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true }), pt = h('div.grp', { id: 'st-panel', hidden: true }), ps = h('div.grp', { id: 'st-sync', hidden: true });
   import('./firmware.js').then((m) => m.fwCards(fw, sec));
   import('./panel.js').then((m) => { m.syncCard(ps); m.panelCard(pt); });
-  el.append(h('div.grp', { id: 'st-status' }, h('h3', 'Status'), facts, cardNote,
-    h('div.row', { style: 'margin-top:12px' },
-      h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
-      h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
+  const groups = {
+    advanced: [h('div.grp', { id: 'st-status' }, h('h3', 'Status'), facts, cardNote,
+      h('div.row', { style: 'margin-top:12px' },
+        h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
+        h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
     h('div.grp', { id: 'st-cs', hidden: c.card_speed == null }, csH, h('div.form.f2', h('label.stack', 'Speed', csSel)), csCap, csSlow),
     h('div.grp', { id: 'pc' }, pcH,
       note('Prepared GIFs start sooner and play in less memory', 'Preparing leaves your GIF files as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox, thumbs()),
-    h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the display raises the open OpenDMD-Setup access point.'),
+      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
+    ps, pt],
+    wifi: [h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the display raises the open OpenDMD-Setup access point.'),
       h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
@@ -137,7 +141,10 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', ...ent.checked ? ['wifi_eap_ttls'] : [], 'hostname'], netRun) }, 'Save network')), moved, off),
-    ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
+    sec],
+    updates: [fw],
+    about: [h('div.grp', h('h3', 'About'), about)],
+  };
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
   function renderFacts(s) {
@@ -254,23 +261,23 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
 
   async function reindex() {
     try {
-      toast('reading the playlist again… the panel holds its frame');
+      toast('Reading the playlist again… the panel holds its frame');
       const r = await app.src.reindex();
       toast(`Playlist ready: ${r.entries.toLocaleString()} GIFs`, 'ok');
-    } catch (e) { toast('reload: ' + e.message, 'bad'); }
+    } catch (e) { toast('Couldn’t reload: ' + e.message, 'bad'); }
   }
 
   async function waitForBoot(msg) {
     for (let i = 0; i < 45; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      try { const s = await app.refreshStatus(); msg(`back up: ${s.version} ${s.variant}`); return; } catch { msg(`rebooting… ${2 * (i + 1)} s`); }
+      try { const s = await app.refreshStatus(); msg(`Back up: ${s.version} ${s.variant}`); return; } catch { msg(`Rebooting… ${2 * (i + 1)} s`); }
     }
-    msg('the device has not come back after 90 s — check its serial log');
+    msg('The display has not come back after 90 s — check its serial log');
   }
 
   async function reboot() {
     if (!confirm('Reboot the display?')) return;
-    try { await app.src.reboot(); toast('rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('reboot: ' + e.message, 'bad'); }
+    try { await app.src.reboot(); toast('Rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('Couldn’t reboot: ' + e.message, 'bad'); }
   }
 
   // --- playback cache ---------------------------------------------------
@@ -281,8 +288,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     clearTimeout(cachePoll);
     try {
       const r = await app.src.cache();
-      if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} files · counting prepared files…`;
-      else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} files prepared` + (r.state === 'counting' ? ' · recounting…' : '');
+      if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} GIFs · counting prepared GIFs…`;
+      else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} GIFs prepared` + (r.state === 'counting' ? ' · recounting…' : '');
       const a = r.auto, run = a?.state === 'running';
       autoBox.hidden = !a;
       if (a) { autoLine.textContent = autoText(a, r) + '. '; always.checked = a.mode === 'always'; }
@@ -292,41 +299,43 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   function autoText(a, r) {
     const n = (x) => x.toLocaleString(), e = a.eta_s, nt = sched.night();
     if (a.mode === 'off') return 'Automatic preparing is off';
-    if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All files are prepared';
+    if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All GIFs are prepared';
     const m = (t) => +t.slice(0, 2) * 60 + +t.slice(3), len = nt?.mode == 'off' && ((m(nt.to) - m(nt.from) + 1440) % 1440 || 1440) * 60;
     // Waiting for its turn (playing, a GIF change, a late frame) is the normal sentence.
     const waits = !a.reason || ['playing', 'gif on screen', 'transition', 'late frame'].includes(a.reason);
     return (a.state !== 'running' ? (!waits ? `Automatic preparing is waiting (${a.reason})`
-      : 'Files are prepared automatically when the panel is idle' + (a.mode === 'always' ? ', and a little while playing' : ''))
-      : a.policy === 'drip' ? 'Preparing files slowly while playing' : 'Preparing files automatically while the panel is idle')
+      : 'GIFs are prepared automatically when the panel is idle' + (a.mode === 'always' ? ', and a little while playing' : ''))
+      : a.policy === 'drip' ? 'Preparing GIFs slowly while playing' : 'Preparing GIFs automatically while the panel is idle')
       + (r.prepared != null ? ` · ${n(r.prepared)} of ${n(r.total)}` : '')
       + (e == null ? '' : len ? ` · about ${Math.ceil(e / len)} night${e > len ? 's' : ''} left` : ` · about ${e < 5400 ? mins(e) : Math.round(e / 3600) + ' hours'} of idle time left`);
   }
   function mins(s) { return s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; }
   function renderJob(j) {
-    cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this file…' : 'Stop') : 'Prepare remaining files';
+    cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this GIF…' : 'Stop') : 'Prepare remaining GIFs';
     cacheBtn.disabled = j.stopping;
     const n = j.tried, dmg = j.damaged.length, net = j.net.length, num = (x) => x.toLocaleString();
     const files = (k, what) => `${num(k)} ${what}${k === 1 ? '' : 's'}`;
     cacheBar.style.width = j.todo ? `${(100 * n) / j.todo}%` : j.phase === 'finished' ? '100%' : '0';
     const left = prep.eta();
-    const skipped = dmg ? ` · ${files(dmg, 'damaged file')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
-    cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
+    const skipped = dmg ? ` · ${files(dmg, 'damaged GIF')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
+    cacheMsg.textContent = j.phase === 'checking' ? 'Finding the GIFs that are not prepared yet…'
       : j.phase === 'preparing' ? `${num(n)} of ${num(j.todo)} · ${num(j.done)} prepared` + (dmg ? ` · ${num(dmg)} damaged skipped` : '')
-        + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
-      : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped
+        + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${label(app.wasm.parsePath(j.current))}` : '')
+      : j.phase === 'finished' ? (j.todo ? files(j.done, 'GIF') + ' prepared' : dmg ? 'Every other GIF is already prepared' : 'Every GIF is already prepared') + skipped
       : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on' : '';
     // Once a run is over: what was skipped, and what could not be fetched.
-    const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map((r) => h('div', r))));
-    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => `${d.path} — ${d.reason}`)),
-      !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'file')} — `),
-        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which files', j.net)));
+    // (Each GIF by its title and folder, never its path: `data-path` for tools/web-smoke.py.)
+    const said = (p) => `${label(app.wasm.parsePath(p))} (${niceName(p.split('/')[2] || '')})`;
+    const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map(([p, r]) => h('div', { 'data-path': p }, said(p) + (r ? ' — ' + r : '')))));
+    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged GIFs', j.damaged.map((d) => [d.path, d.reason])),
+      !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'GIF')} — `),
+        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which GIFs', j.net.map((p) => [p]))));
     clear(cacheErr, j.errors.map((e) => h('div', e)));
     if (!j.running && j.phase !== 'idle') loadCache();
   }
   on('prepare', renderJob);
   const show = () => { off.hidden = app.config?.network == null; csSay(); renderFacts(app.status); renderJob(prep.job); loadCache(); };
   show();
-  // Leaving the tab: no more cache polls, and a panel test in progress ends.
-  return { show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };
+  // Leaving these tabs: no more cache polls, and a panel test in progress ends.
+  return { groups, show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };
 }

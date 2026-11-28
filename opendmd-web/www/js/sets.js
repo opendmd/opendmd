@@ -17,7 +17,7 @@ export async function mount(el) {
   const se = h('div.se', h('p.muted.sehint', 'Open a playlist to see and change what is in it.'));
   el.append(h('div.cols.sets', { id: 'sets' },
     h('div.sl', h('div.card', h('div.row.sp', { style: 'margin-bottom:8px' }, h('h2', { style: 'margin:0' }, 'Playlists'), h('button', { id: 'sets-new', onclick: newList }, '+ New playlist')), setsList,
-      note('“All files” plays when no other playlist is chosen', 'Changing the playlist takes a few seconds; the panel holds its frame meanwhile.'))),
+      note('“All GIFs” plays when no other playlist is chosen', 'Changing the playlist takes a few seconds; the panel holds its frame meanwhile.'))),
     se));
 
   // The editor, once something opens.
@@ -51,6 +51,9 @@ export async function mount(el) {
       return [p, n, h('div' + (ed() && p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
         h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
           p.label, !p.value && h('span.tag', 'Default'), sp && h('span.tag.smart', { title: 'Built from a search' }, 'Smart'), isActive && h('span.tag.act', 'Playing'), n),
+        // ▶: play it (the one playing says so instead).
+        app.device && h('button.play', { 'data-do': 'play', title: isActive ? 'Playing now' : `Play “${p.label}”`, 'aria-label': isActive ? `“${p.label}” is playing` : `Play “${p.label}”`,
+          disabled: isActive || app.building, onclick: () => activate(p) }, '▶\uFE0E'),
         h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
           sp && [{ 'data-do': 'refresh' }, 'Refresh', () => refreshOne(p)],
@@ -90,7 +93,7 @@ export async function mount(el) {
       const r = await (await smartMod()).refresh(p.path, true);
       // (None: let go of meanwhile, deleted, renamed or saved by hand.)
       if (r) toast(r.added || r.removed ? `“${p.label}”: +${r.added} −${r.removed}` : `“${p.label}” is up to date`, 'ok');
-    } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
+    } catch (e) { toast(`Couldn’t refresh: ${e.message || e}`, 'bad'); }
     emit('refreshed', p.path);
     loadSets();
   }
@@ -126,22 +129,12 @@ export async function mount(el) {
     } catch (e) { toast(`${p.label}: ${e.message}`, 'bad'); }
   }
 
-  async function activate(p) {
-    if (app.building) { toast('the display is still reading a playlist; try again in a moment', 'bad'); return; }
-    const set = p.value, n = p.label;
-    try {
-      toast(`switching to “${n}”…`);
-      const r = await app.src.putConfig({ set });
-      await app.refreshStatus();
-      await app.refreshConfig();
-      toast(`Playing “${n}” · ${(r.entries ?? app.status?.entries ?? 0).toLocaleString()} GIFs`, 'ok');
-    } catch (e) { toast('play: ' + e.message, 'bad'); }
-  }
+  const activate = (p) => app.playPlaylist(p);
 
   async function del(p) {
     const path = p.path, set = p.value;
     const isActive = app.device && app.activeSet === set;
-    if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
+    if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All GIFs and delete it?` : `Delete the playlist "${p.label}"?`)) return;
     try {
       await (await smartMod()).idle();
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
@@ -153,8 +146,8 @@ export async function mount(el) {
       // (Its text forgotten again after: a refresh's read answered meanwhile keeps it.)
       await sm.letGo(path, async () => { await unread(path); await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
       app.texts.delete(path);
-      toast(`deleted "${set}"`, 'ok');
-    } catch (e) { toast('delete: ' + e.message, 'bad'); }
+      toast(`Deleted “${p.label}”`, 'ok');
+    } catch (e) { toast('Couldn’t delete: ' + e.message, 'bad'); }
     loadSets();
   }
 
@@ -214,18 +207,18 @@ export async function mount(el) {
     if (!n || n === p.value) return;
     if (!SET_NAME.test(n)) { toast(SET_NAME_RULE, 'bad'); return; }
     const same = lc(n) === lc(p.value);
-    if (!same && taken(n)) { toast(`a playlist named “${n}” exists`, 'bad'); return; }
+    if (!same && taken(n)) { toast(`A playlist named “${n}” exists`, 'bad'); return; }
     try {
       // A change of case alone names the same file on the card: by way of another name.
       if (same) { const t = free(n); await copyTo(p, t, true); await copyTo({ path: `/sets/${t}.txt`, value: t }, n, true); }
       else await copyTo(p, n, true);
       toast(`Renamed “${p.label}” to “${n}”`, 'ok');
-    } catch (e) { toast('rename: ' + e.message, 'bad'); }
+    } catch (e) { toast('Couldn’t rename: ' + e.message, 'bad'); }
     loadSets();
   }
   async function duplicate(p) {
     const n = free(p.root ? p.label : p.value);
-    try { await copyTo(p, n, false); toast(`Duplicated as “${n}”`, 'ok'); } catch (e) { toast('duplicate: ' + e.message, 'bad'); }
+    try { await copyTo(p, n, false); toast(`Duplicated as “${n}”`, 'ok'); } catch (e) { toast('Couldn’t duplicate: ' + e.message, 'bad'); }
     loadSets();
   }
 

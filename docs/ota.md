@@ -332,7 +332,7 @@ The web app pack is signed with the same key and key ids
 ## The flow
 
 1. **Browser or curl**: `PUT /api/firmware` with the bundle (Settings →
-   Device → Firmware: "Update from file…", or "Check for updates", below).
+   Updates: "Update from file…", or "Check for updates", below).
    The device streams
    the body to `/update/opendmd.bin` on the card, hashing as it goes (the
    night window's heap rules apply: one transfer at a time, 4 KB buffers).
@@ -446,7 +446,7 @@ stays dark while the installer writes.
 
 ## Check for updates
 
-Settings → Device → Firmware → **Check for updates** (`js/update.js`)
+Settings → Updates → **Check for updates** (`js/update.js`)
 updates the firmware and the web app from the published release, with the
 browser doing the fetching: the player itself never goes to the internet.
 
@@ -477,7 +477,7 @@ browser doing the fetching: the player itself never goes to the internet.
   the newest final release (before the first final, both name the newest
   beta). A beta newer than the final release has its files under
   `install/firmware/beta/`, which `beta.json`'s paths name. With the
-  player's `beta_updates` setting on (Settings → Device → Firmware → **Get
+  player's `beta_updates` setting on (Settings → Updates → **Get
   beta updates**, off by default; `GET/PUT /api/config`, kept in NVS and
   the card's `/opendmd.json`), the page reads `beta.json` instead, asked
   the same way (`?v=&layout=`). Turning it off installs nothing: a player

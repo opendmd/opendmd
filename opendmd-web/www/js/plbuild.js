@@ -1,7 +1,7 @@
 // The playlist editor's "Add by filter" sheet (imported when it first
 // opens): the GIFs of a playlist, or of the whole card, that a search finds
-// — chips for platforms, folders, what to leave out, the user's tags and
-// stars, more words of the Library's search, shuffled and cut — added to
+// — chips for platforms, folders, what to leave out, the user's tags
+// (Favourite among them), more words of the Library's search, shuffled and cut — added to
 // the playlist or in place of what is in it. With "Keep this search" the
 // playlist becomes a smart one: js/smart.js writes it again whenever the
 // search finds something else.
@@ -15,7 +15,6 @@ import { h, clear, niceName, isSys, byNice, FLAGS } from './util.js';
 const picks = (box, k) => [...box.querySelectorAll('.on')].map((c) => c.dataset[k]);
 const quote = (v) => (/[\s,:]/.test(v) ? `"${v.replace(/"/g, '')}"` : v);
 const list = (k, vs) => vs.length ? [`${k}:${vs.map(quote).join(',')}`] : [];
-const STARS = [['', 'Any'], ['rating>=3', '★ 3 or more'], ['rating>=4', '★ 4 or more'], ['rating:5', '★ 5'], ['unrated', 'Not rated']];
 
 // ctx: {lists(), known(), done(paths, append, smart|null)} — smart {q, from}.
 export function builder(ctx) {
@@ -29,7 +28,6 @@ export function builder(ctx) {
   const bFlags = h('div.chips', { id: 'b-flags' }, Object.entries(FLAGS).map(([k, n]) => h('button.chip', { 'data-flag': k.toLowerCase(), onclick: tog }, n)));
   const bTagsL = h('div.lbl', { hidden: true }, 'Tagged');
   const bTags = h('div.chips', { id: 'b-tags', hidden: true });
-  const bStars = h('select', { id: 'b-stars' }, STARS.map(([v, t]) => h('option', { value: v }, t)));
   const bWords = h('input', { type: 'search', id: 'b-words', placeholder: 'e.g. by:pixelkid42 -tag:boss' });
   const bShuffle = h('input', { type: 'checkbox', id: 'b-shuffle', onchange: () => { bSeedL.hidden = !bShuffle.checked; } });
   const bSeed = h('input', { type: 'number', id: 'b-seed', value: 1, min: 0, style: 'width:90px' });
@@ -45,12 +43,12 @@ export function builder(ctx) {
     h('div.lbl', 'Folders'), bCats,
     h('div.lbl', 'Leave out'), bFlags,
     bTagsL, bTags,
-    h('div.form', { style: 'margin-top:12px' }, h('label.stack', 'Stars', bStars), h('label.stack', 'More search words', bWords)),
+    h('div.form', { style: 'margin-top:12px' }, h('label.stack', 'More search words', bWords)),
     h('div.row', { style: 'margin-top:16px' }, h('label', bShuffle, 'Shuffle'), bSeedL, h('label', 'At most', bLimit)),
-    h('label', { style: 'margin-top:12px;display:block' }, bKeep, 'Keep this search: the playlist follows it as GIFs, tags and stars change'), bCount,
+    h('label', { style: 'margin-top:12px;display:block' }, bKeep, 'Keep this search: the playlist follows it as GIFs and tags change'), bCount,
     h('div.row', { style: 'margin-top:12px' }, bAdd, bUse));
   bSeedL.append(bSeed);
-  for (const i of [baseSel, bPlat, bTitle, bShuffle, bSeed, bLimit, bStars, bWords]) i.addEventListener('change', count);
+  for (const i of [baseSel, bPlat, bTitle, bShuffle, bSeed, bLimit, bWords]) i.addEventListener('change', count);
   bWords.addEventListener('input', count);
 
   // The base playlist's text (every GIF on the card: '').
@@ -80,7 +78,7 @@ export function builder(ctx) {
     ...list('title', bTitle.value.split(',').map((s) => s.trim()).filter(Boolean)),
     ...list('-is', picks(bFlags, 'flag')),
     ...list('tag', picks(bTags, 'tag')),
-    bStars.value, bWords.value.trim(),
+    bWords.value.trim(),
     bShuffle.checked && `shuffle seed:${+bSeed.value || 0}`,
     +bLimit.value > 0 && `limit:${+bLimit.value}`,
   ].filter(Boolean).join(' ');
@@ -115,7 +113,6 @@ export function builder(ctx) {
     if (smart) {
       for (const c of el.querySelectorAll('.chip.on')) c.classList.remove('on');
       bTitle.value = bPlat.value = bLimit.value = '';
-      bStars.value = '';
       bShuffle.checked = false;
       bSeedL.hidden = true;
       bWords.value = smart.q;
