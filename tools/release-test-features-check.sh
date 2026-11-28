@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # No test-only firmware feature in a release's app image: the emulator lanes'
 # and hardware tests' hooks (nocard-test, emu-ballast, emu-census,
-# emu-crash-test, emu-oom-test, emu-wifi-soak, wifi-outage-test; and connect-formula-add,
-# Formulas added by remote, not shipped yet) each log a line no other
+# emu-crash-test, emu-oom-test, emu-wifi-soak, wifi-outage-test; connect-formula-add,
+# Formulas added by remote, not shipped yet; and the measurement probes,
+# probe, psi-probe, psi-refresh and paint-probe) each log a line no other
 # build has, so its text in the image means the feature is in it.
 # The Makefile refuses them in a build into dist/ (FW_TEST_ONLY_GUARD) and
 # tools/release.sh clears FW_RELEASE_FEATURES; this checks the image itself.
@@ -26,6 +27,8 @@ MARKERS=(
   "emu-ballast" "ballast: "
   "emu-crash-test" "emu-crash-test: "
   "connect-formula-add" "formula-add: "
+  "psi-probe, psi-refresh, paint-probe (the measurement probes)" "psi-probe: "
+  "probe (the SD and frame timing probe)" "switch tick="
   "the card-failure hooks (bench, connect-test)" "card mount(s) will fail on purpose"
 )
 
