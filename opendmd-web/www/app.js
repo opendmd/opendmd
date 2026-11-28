@@ -103,8 +103,8 @@ if (found) {
   const s = found.status;
   // The device's name; its address and version are in Settings → About.
   $('#where').textContent = s.hostname || 'OpenDMD display';
-  // No API key: one banner offering to set one (js/keynag.js), gone once set.
-  on('config', (c) => { if (c && c.api_key_set === false) import('./js/keynag.js').then((m) => m.show()); else $('#keynag')?.remove(); });
+  // What the panel is doing, on every view (js/pill.js).
+  (await import('./js/pill.js')).pill();
   // Power-safe (the ESP32-S3's brownout-loop guard, `reset_note` "power-safe: …"):
   // the panel was not started this boot; one banner until a restart starts it.
   const powerSafe = (st) => {
@@ -114,7 +114,7 @@ if (found) {
   };
   on('status', powerSafe);
   powerSafe(s);
-  app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
+  app.refreshConfig().catch((e) => toast('Couldn’t read the settings: ' + e.message, 'bad'));
   route();
 } else if ((app.demo = await demoCard(app.wasm.cardPath))) {
   // The web demo: its own card, in memory; a card folder of yours can replace it.

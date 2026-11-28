@@ -451,7 +451,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `formula_arena` | `false` | a dev setting, in force from the next boot: a Formula's memory (its program and VM scratch, ink and paint planes, ~19 KB) from one block set aside at boot before the network starts, so it lands in the same SRAM pool every time (`display.buffers`; the A/B for the upload residual). Costs that block for the whole boot |
 | `formula_keep` | `hold` | always `hold`: a Formula played by hand stays until something else plays (see `POST /api/play`). `turn`, `1m`, `5m` and `hold` are taken and change nothing; anything else is a `400` |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the display as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
-| `beta_updates` | `false` | "Get beta updates" (Settings › Device › Firmware): the web app's Check for updates reads `https://opendmd.dev/install/beta.json` (the newest release, beta or final) instead of `install/release.json` (the newest final release). The device only keeps the choice, so every browser sees the same one; turning it off installs nothing older (a display on a beta stays on it until a final release newer than it comes out) |
+| `beta_updates` | `false` | "Get beta updates" (Settings › Updates): the web app's Check for updates reads `https://opendmd.dev/install/beta.json` (the newest release, beta or final) instead of `install/release.json` (the newest final release). The device only keeps the choice, so every browser sees the same one; turning it off installs nothing older (a display on a beta stays on it until a final release newer than it comes out) |
 | `lat`, `lon` | numbers or null, null | where the panel is, in degrees (north and east positive, two decimals: 0.01° is about 1 km), for the built-in inputs Formulas read: `daylight`, `sun.alt` and `season` need it (`moon.phase` and `yearday` need only the clock); both null when none is set |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |
@@ -1160,7 +1160,7 @@ only lock, and it travels in clear text on your network.**
   router hands out (`opendmd.lan`) is refused.
 - A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
   is a `403` (no `Origin`, as from curl, is fine).
-- **API key** (Settings → Device → Security; the web app shows a banner
+- **API key** (Settings → WiFi → Security; Settings shows a line
   while there is none, and `/setup` offers one): with `api_key` set (`PUT
   /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
   `api_key_set`), the API and the card's files (`/gifs/`, `/cache/`,

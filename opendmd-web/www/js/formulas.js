@@ -185,7 +185,7 @@ async function toList(f, btn, keep) {
   const l = S.line(f, c, q.length > MAX_PATH ? p : q);
   if (l.length > MAX_PATH) { toast('This formula is too long for a playlist', 'bad'); return; }
   const lists = await app.playlists().catch(() => []);
-  if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
+  if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All GIFs' });
   const { appendTo } = await import('./gifs.js');
   actions(btn, 'psi-pl-menu', lists.map((x) => [{ 'data-path': x.path }, x.label, () => appendTo(x.path, [l])]), 'Add to');
 }
@@ -322,7 +322,7 @@ async function toGif(f) {
     const a = h('a', { href: URL.createObjectURL(file), download: file.name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast(`downloaded ${file.name}`, 'ok');
+    toast(`Downloaded ${file.name}`, 'ok');
     return;
   }
   app.gifIn = Promise.resolve({ file, init: { title, platform: 'FX', category: 'Demoscene' } });

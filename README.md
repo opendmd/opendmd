@@ -68,10 +68,10 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 
 <!-- site:features -->
 
-- **Library:** search, browse by category and platform, preview each GIF with the panel look,
+- **Library:** search, browse by folder and platform, preview each GIF with the panel look,
   send it to the panel, and add, rename or delete GIFs.
-- **Playlists:** build them by platform, category and title words, then reorder and switch
-  between them live. A GIF can be a favourite in one playlist and play less often in another.
+- **Playlists:** build them by platform, folder and title words, then reorder and switch
+  between them live. A GIF can play more often in one playlist and less often in another.
 - **Your own art:** add GIFs and pictures from your phone or computer; anything that isn't
   128 × 32 is fitted and cropped to the panel first, or added as it is. **Find art online** opens
   the [Studio](https://opendmd.dev/studio/#import) on opendmd.dev, which finds game art and
@@ -142,7 +142,7 @@ The firmware and the web app are built on other open-source software (ESP-IDF, F
 lwIP, Mbed TLS and the Rust crates among it), listed with each licence's full text in
 [the firmware's](licenses/THIRD-PARTY-LICENSES-firmware.txt) and
 [the web app's](licenses/THIRD-PARTY-LICENSES-web.txt) third-party notices. Each release and
-the web app itself carry them (Settings › Device › About › Open-source licences).
+the web app itself carry them (Settings › About › Open-source licences).
 
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from

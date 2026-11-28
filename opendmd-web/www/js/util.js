@@ -85,12 +85,18 @@ export function debounce(fn, ms) {
 }
 
 // `act`: an optional [text, fn] button in it (the editor's Undo), which
-// keeps it up longer.
-export function toast(msg, kind = '', act) {
-  const el = h('div.toast' + (kind ? '.' + kind : ''), String(msg),
-    act && h('button.sm.txt', { onclick: () => { el.remove(); act[1](); } }, act[0]));
+// keeps it up longer. `sticky`: up until its button is pressed or it is
+// dismissed (✕): something left to do (a repair to Retry). Toasts live
+// outside the views, so a change of view keeps them. Nothing for an empty
+// message.
+export function toast(msg, kind = '', act, sticky) {
+  const t = String(msg ?? '');
+  if (!t) return;
+  const el = h('div.toast' + (kind ? '.' + kind : '') + (sticky ? '.sticky' : ''), t,
+    act && h('button.sm.txt', { onclick: () => { el.remove(); act[1](); } }, act[0]),
+    sticky && h('button.sm.txt.x', { 'aria-label': 'Dismiss', onclick: () => el.remove() }, '✕'));
   $('#toasts').append(el);
-  setTimeout(() => el.remove(), kind === 'bad' || act ? 8000 : 4000);
+  if (!sticky) setTimeout(() => el.remove(), kind === 'bad' || act ? 8000 : 4000);
 }
 
 // Card paths go into URLs one segment at a time: `NEW 2021`, `+` and `#`

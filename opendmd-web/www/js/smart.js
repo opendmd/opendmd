@@ -80,7 +80,7 @@ export async function everyGif(fresh) {
   const out = [];
   for (const c of [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)]) {
     if (fresh) forget(c);
-    const l = await listCat(c);
+    const l = await listCat(c, true);
     // (A folder that could not be read: no playlist written without its GIFs.)
     if (!l) throw new Error('a folder couldn’t be read: try again');
     for (const it of l) out.push(it.path);

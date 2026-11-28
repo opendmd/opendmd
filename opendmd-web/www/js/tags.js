@@ -1,4 +1,4 @@
-// The user's tags and star ratings of GIFs: one file for the whole card,
+// The user's tags of GIFs: one file for the whole card,
 // /sets/.tags (opendmd_core::tags through the wasm's TagBook: parsed,
 // rendered and searched in Rust, in the art module: js/artmod.js). Loaded
 // once per card, written whole after
@@ -6,12 +6,14 @@
 // change made on another browser or a PC since it was read is read again
 // first and this page's changes applied over it. Tags are the user's own
 // words: what a name says (platform, folder, Logo…, author) is a GIF's
-// details, never called a tag.
+// details, never called a tag. One is built in: `favourite` (FAV), the
+// heart. Star ratings (`r=` in the file, from before) are kept as they
+// are but no longer shown or set: tags only.
 
 import { app } from './state.js';
 import { art } from './artmod.js';
-import { actions, popup, closeMenu } from './overrides.js';
-import { h, clear, emit, toast } from './util.js';
+import { Overrides, popup, closeMenu } from './overrides.js';
+import { h, clear, emit, toast, lines, store } from './util.js';
 
 export const FILE = '/sets/.tags';
 const bytes = (t) => new TextEncoder().encode(t).length;
@@ -44,7 +46,7 @@ class Store {
 
   // Change the book (`fn(book)`), remember the change, save.
   change(fn) {
-    if (!this.ok) { toast('your tags couldn’t be read: try again', 'bad'); return Promise.resolve(); }
+    if (!this.ok) { toast('Your tags couldn’t be read: try again', 'bad'); return Promise.resolve(); }
     fn(this.book);
     this.ops.push(fn);
     emit('tags');
@@ -82,7 +84,7 @@ class Store {
         this.ops.splice(0, ops);
         // Smart playlists that read tags or stars are written again.
         import('./smart.js').then((m) => m.refreshAll((s) => s.usesTags)).catch(() => {});
-      } catch (e) { toast(`saving your tags: ${e.message}`, 'bad'); }
+      } catch (e) { toast(`Couldn’t save your tags: ${e.message}`, 'bad'); }
     })();
     await this.saving;
     this.saving = null;
@@ -101,46 +103,138 @@ export async function tags() {
   return mine;
 }
 
+// --- Favourite: the built-in tag -------------------------------------------
+
+export const FAV = 'favourite';
+// Its weight in a playlist's overrides (js/overrides.js `fav`): three times as often.
+const FAV_W = 3;
+export const isFav = (o) => !!o?.t?.includes(FAV);
+// Every tag in use for a picker, `favourite` first even when none has it.
+const offered = (s) => [FAV, ...s.names().map(([t]) => t).filter((t) => t !== FAV)];
+
+// `paths` favourites or not: the tag, and, so that a favourite still plays
+// more often, its weight in the playlist playing (the player reads that,
+// not the tags; `ov`: that playlist's overrides if the caller has them
+// loaded; `s`: the tags, when the caller has them: the tag is then changed
+// before this returns its promise, for a redraw at once). -> an undo that
+// puts back the tags and the weights exactly as they were, or null if it
+// was refused (said in a toast).
+export async function setFav(paths, on, ov, s) {
+  // The tag first, so the heart shows its new state at once; the weights
+  // (which may read the playlist) after.
+  s ??= await tags();
+  const undo = await s.bulk(paths, (o) => ({ r: o.r, t: on ? (o.t.includes(FAV) ? o.t : [...o.t, FAV]) : o.t.filter((t) => t !== FAV) }));
+  let back = null;
+  if (on) {
+    const plan = await weighing(paths, ov);
+    if (plan?.no) { await undo(); toast(plan.no, 'bad'); return null; }
+    back = await plan?.go();
+  } else back = await unweigh(paths, ov);
+  return async () => { await undo(); await back?.(); };
+}
+
+// The weights a favourite adds in the playlist playing: only for GIFs in
+// it, only when it shuffles (in order, a weight changes nothing: no
+// write, no reindex), and never past the 1,024 overrides the player keeps
+// for a playlist. -> null (nothing to write), {no: why}, or {go()}, which
+// writes them and resolves to an undo of exactly that.
+const MAX_OV = 1024;
+export async function weighing(paths, ov) {
+  if (!app.device || !app.activePath || app.config?.shuffle === false) return null;
+  const text = await app.text(app.activePath).catch(() => null);
+  if (text == null) return null;
+  const has = new Set(lines(text).map((l) => l.toLowerCase()));
+  if (ov?.path !== app.activePath) ov = await new Overrides().load(app.activePath);
+  if (!ov.ok) return null;
+  const todo = paths.filter((p) => has.has(p.toLowerCase()) && !(ov.get(p)?.w > 1));
+  if (!todo.length) return null;
+  const n = ov.map.size + todo.filter((p) => !ov.get(p)).length;
+  if (n > MAX_OV) return { no: `“${ov.name}” can give at most ${MAX_OV.toLocaleString()} GIFs settings of their own, and this would make it ${n.toLocaleString()}: favourite fewer at once` };
+  const was = new Map(todo.map((p) => [p, ov.get(p)?.w ?? null]));
+  return {
+    async go() {
+      await ov.setMany(todo.map((p) => [p, (o) => ({ ...o, w: FAV_W })]), true);
+      return () => ov.setMany([...was].map(([p, w]) => [p, (o) => ({ ...o, w })]), true);
+    },
+  };
+}
+
+// No longer favourites: their weight goes wherever it is, in every
+// playlist on the card (whether it plays, shuffles or not), so that no
+// weight left behind makes it play more often, or reads as a favourite
+// again (`adopt`). One read per playlist, a write only where one changes.
+// -> an undo putting each weight back as it was.
+async function unweigh(paths, ov) {
+  if (!app.device) return null;
+  const undos = [];
+  for (const pl of await app.playlists().catch(() => [])) {
+    const o = ov?.path === pl.path ? ov : await new Overrides().load(pl.path);
+    if (!o.ok) continue;
+    const was = paths.filter((p) => o.get(p)?.w > 1).map((p) => [p, o.get(p).w]);
+    if (!was.length) continue;
+    await o.setMany(was.map(([p]) => [p, (x) => ({ ...x, w: null })]), true);
+    undos.push(() => o.setMany(was.map(([p, w]) => [p, (x) => ({ ...x, w })]), true));
+  }
+  return undos.length ? async () => { for (const u of undos) await u(); } : null;
+}
+
+// Favourites from before the tag (a weight above 1 in a playlist, as Now's
+// ☆ wrote): adopted into the tag the first time that playlist's overrides
+// are read while it plays, once per card and playlist, ever (this
+// browser's localStorage, by card): after that the tag alone says what is
+// a favourite, so one un-hearted is never adopted back from a weight.
+// (Another browser adopts once more; un-hearting clears the weights in
+// every playlist, so there is nothing stale left to adopt.)
+export async function adopt(ov) {
+  if (!ov?.ok || ov.path !== app.activePath || !app.cardKey) return;
+  const key = 'fav.adopted.' + app.cardKey, done = store.get(key, []);
+  if (done.includes(ov.path)) return;
+  const ps = [...ov.map.values()].filter((o) => o.w > 1).map((o) => o.path);
+  const s = ps.length && await tags();
+  const add = ps.filter((p) => !isFav(s.get(p)));
+  if (add.length) await s.bulk(add, (o) => ({ r: o.r, t: [...o.t, FAV] }));
+  store.set(key, [...done, ov.path]);
+}
+
 // --- In the Library ---------------------------------------------------------
 
-const STAR = '★', NO_STAR = '☆';
-
-// A row's glyphs: its stars (`★4`) and up to two of its tags, "+n" for more.
+// A row's glyphs: ♥ for a favourite and up to two of its other tags, "+n" for more.
 export function bits(o) {
   if (!o) return null;
-  const t = o.t || [];
-  return h('span.ut', o.r ? h('i.stars', { title: `${o.r} star${o.r > 1 ? 's' : ''}` }, STAR + o.r) : null,
+  const t = (o.t || []).filter((x) => x !== FAV);
+  return h('span.ut', isFav(o) && h('i.fav', { title: 'Favourite' }, '♥'),
     t.slice(0, 2).map((x) => h('span.utag', x)), t.length > 2 && h('span.utag.more', '+' + (t.length - 2)));
 }
 
-// Details' stars and tags for `path`, drawn again on every change.
-// `onTag(tag)`: a tag's chip was picked (the Library searches for it).
-export function detail(box, path, onTag) {
+// Details' heart and tags for `path`, drawn again on every change.
+// `onTag(tag)`: a tag's chip was picked (the Library searches for it);
+// `ov`: the overrides the Library has loaded (setFav's).
+// `hbox`: where the heart goes (Details' row of actions), else with the tags.
+export function detail(box, path, onTag, ov, hbox) {
   const s = mine && app.tags;
-  if (!s) { clear(box); tags().then(() => detail(box, path, onTag)).catch(() => {}); return; }
-  const o = s.get(path) || { r: 0, t: [] };
-  const stars = h('div.stars', { id: 'lib-d-stars', role: 'radiogroup', 'aria-label': 'Stars' },
-    [1, 2, 3, 4, 5].map((n) => h('button.star' + (n <= o.r ? '.on' : ''), {
-      role: 'radio', 'aria-checked': String(n === o.r), 'aria-label': `${n} star${n > 1 ? 's' : ''}`, title: n === o.r ? 'Tap again to clear' : '',
-      'data-n': n, onclick: () => { s.set(path, n === o.r ? 0 : n, o.t); detail(box, path, onTag); box.querySelector(`[data-n="${n}"]`)?.focus(); },
-    }, n <= o.r ? STAR : NO_STAR)));
-  const list = h('datalist', { id: 'lib-tag-list' }, s.names().map(([t]) => h('option', { value: t })));
+  if (!s) { clear(box); tags().then(() => detail(box, path, onTag, ov, hbox)).catch(() => {}); return; }
+  const o = s.get(path) || { r: 0, t: [] }, fav = isFav(o);
+  const heart = h('button.chip.heart' + (fav ? '.on' : ''), { id: 'lib-d-fav', 'data-path': path, 'aria-pressed': String(fav), title: fav ? 'A favourite: plays more often' : 'Make it a favourite: plays more often',
+    'aria-label': 'Favourite', onclick: () => { setFav([path], !fav, ov, s).then((u) => u || detail(box, path, onTag, ov, hbox)); detail(box, path, onTag, ov, hbox); document.querySelector('#lib-d-fav')?.focus(); } },
+  fav ? '♥' : '♡', h('span.w', ' Favourite'));
+  const list = h('datalist', { id: 'lib-tag-list' }, offered(s).map((t) => h('option', { value: t })));
   const input = h('input', { type: 'text', id: 'lib-d-tag', placeholder: '+ Add tag', enterKeyHint: 'done', 'aria-label': 'Add a tag', maxLength: 24 });
   input.setAttribute('list', 'lib-tag-list');
   const add = () => {
     const t = s.m.cleanTag(input.value);
-    if (!t) { if (input.value.trim()) toast('a tag is letters, digits, spaces and _ . + \' - (24 at most)', 'bad'); return; }
+    if (!t) { if (input.value.trim()) toast('A tag is letters, digits, spaces and _ . + \' - (24 at most)', 'bad'); return; }
     if (o.t.includes(t)) { input.value = ''; return; }
-    s.set(path, o.r, [...o.t, t]);
-    detail(box, path, onTag);
+    if (t === FAV) setFav([path], true, ov, s); else s.set(path, o.r, [...o.t, t]);
+    detail(box, path, onTag, ov, hbox);
     box.querySelector('#lib-d-tag')?.focus();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   input.addEventListener('change', add);
-  const chips = o.t.map((t) => h('span.uchip', { 'data-tag': t },
+  const chips = o.t.filter((t) => t !== FAV).map((t) => h('span.uchip', { 'data-tag': t },
     h('button.txt', { title: `GIFs tagged ${t}`, onclick: () => onTag?.(t) }, t),
-    h('button.x', { 'aria-label': `Take off ${t}`, onclick: () => { s.set(path, o.r, o.t.filter((x) => x !== t)); detail(box, path, onTag); } }, '✕')));
-  clear(box, stars, h('div.utags', { id: 'lib-d-utags' }, chips, input, list));
+    h('button.x', { 'aria-label': `Take off ${t}`, onclick: () => { s.set(path, o.r, o.t.filter((x) => x !== t)); detail(box, path, onTag, ov, hbox); } }, '✕')));
+  if (hbox) clear(hbox, heart);
+  clear(box, h('div.utags', { id: 'lib-d-utags' }, !hbox && heart, chips, input, list));
 }
 
 // The bulk bar's Tag…: the tags on any of `paths`, each on all of them (✓),
@@ -150,7 +244,7 @@ export function detail(box, path, onTag) {
 export async function bulkTag(btn, paths, done) {
   const s = await tags(), n = new Map();
   for (const p of paths) for (const t of s.get(p)?.t || []) n.set(t, (n.get(t) || 0) + 1);
-  const was = new Map([...n].map(([t, c]) => [t, c === paths.length ? 'all' : 'some'])), now = new Map(was);
+  const was = new Map([[FAV, 'none'], ...[...n].map(([t, c]) => [t, c === paths.length ? 'all' : 'some'])]), now = new Map(was);
   const box = h('div.chips', { id: 'bulk-tags' });
   const draw = () => clear(box, [...now].map(([t, st]) => h('button.chip' + (st === 'all' ? '.on' : st === 'some' ? '.part' : ''), {
     'data-tag': t, 'aria-pressed': st === 'all' ? 'true' : st === 'some' ? 'mixed' : 'false',
@@ -160,34 +254,36 @@ export async function bulkTag(btn, paths, done) {
   input.setAttribute('list', 'bulk-tag-list');
   const plus = () => {
     const t = s.m.cleanTag(input.value);
-    if (t) { now.set(t, 'all'); input.value = ''; draw(); } else if (input.value.trim()) toast('a tag is letters, digits, spaces and _ . + \' - (24 at most)', 'bad');
+    if (t) { now.set(t, 'all'); input.value = ''; draw(); } else if (input.value.trim()) toast('A tag is letters, digits, spaces and _ . + \' - (24 at most)', 'bad');
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); plus(); } });
   draw();
   const el = h('div.menu', { id: 'bulk-tag', role: 'dialog', 'aria-label': 'Tags' }, h('div.mh', h('b', `Tags of ${paths.length.toLocaleString()} GIFs`)),
-    box, h('div.row', { style: 'margin-top:8px' }, input, h('datalist', { id: 'bulk-tag-list' }, s.names().map(([t]) => h('option', { value: t })))),
+    box, h('div.row', { style: 'margin-top:8px' }, input, h('datalist', { id: 'bulk-tag-list' }, offered(s).map((t) => h('option', { value: t })))),
     h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'bulk-tag-ok', onclick: async () => {
       plus();
       closeMenu();
+      // (Favourite on or off for them all: their weights follow, as setFav's; refused, nothing changes.)
+      const nf = now.get(FAV), fav = nf !== was.get(FAV) && nf !== 'some' ? nf === 'all' : null;
+      const plan = fav ? await weighing(paths) : null;
+      if (plan?.no) { toast(plan.no, 'bad'); return; }
       const undo = await s.bulk(paths, (o) => ({ r: o.r, t: [...o.t.filter((t) => now.get(t) !== 'none'), ...[...now].filter(([t, st]) => st === 'all' && !o.t.includes(t)).map(([t]) => t)] }));
+      const back = fav ? await plan?.go() : fav === false ? await unweigh(paths) : null;
       done?.();
-      toast(`Tagged ${paths.length.toLocaleString()} GIFs`, 'ok', ['Undo', () => undo().then(() => done?.())]);
+      toast(`Tagged ${paths.length.toLocaleString()} GIFs`, 'ok', ['Undo', () => undo().then(() => back?.()).then(() => done?.())]);
     } }, 'Apply')));
   const r = btn.getBoundingClientRect();
   popup(el, r.right - 320, r.bottom + 4);
 }
 
-// The bulk bar's Rate…: five stars, or none, for all of `paths`.
-export async function bulkRate(btn, paths, done) {
-  const s = await tags();
-  const rate = async (n) => {
-    closeMenu();
-    const undo = await s.bulk(paths, (o) => ({ r: n, t: o.t }));
-    done?.();
-    toast(n ? `Rated ${paths.length.toLocaleString()} GIFs ${STAR}${n}` : `Stars cleared from ${paths.length.toLocaleString()} GIFs`, 'ok', ['Undo', () => undo().then(() => done?.())]);
-  };
-  actions(btn, 'bulk-rate', [...[5, 4, 3, 2, 1].map((n) => [{ 'data-n': n }, STAR.repeat(n) + NO_STAR.repeat(5 - n), () => rate(n)]),
-    [{ 'data-n': 0 }, 'Clear stars', () => rate(0)]], `Stars for ${paths.length.toLocaleString()} GIFs`);
+// The bulk bar's ♥ Favourite: all of `paths` favourites (or, if they all
+// are, none), with an Undo.
+export async function bulkFav(paths, done) {
+  const s = await tags(), on = !paths.every((p) => isFav(s.get(p))), n = paths.length.toLocaleString();
+  const undo = await setFav(paths, on);
+  if (!undo) return;
+  done?.();
+  toast(on ? `${n} GIFs are favourites` : `${n} GIFs are no longer favourites`, 'ok', ['Undo', () => undo().then(() => done?.())]);
 }
 
 // Tags kept for GIFs not on the card (moved or deleted on a PC), given every

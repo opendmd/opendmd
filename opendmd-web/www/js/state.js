@@ -8,14 +8,14 @@
 // ever shows its path.
 
 import wasm from './web.js';
-import { emit, toast, base, niceName, isFormula, formulaName, unreachable } from './util.js';
+import { emit, toast, base, niceName, isFormula, formulaName, unreachable, label } from './util.js';
 
-// What a toast calls a file: a Formula by its name, a GIF by its file's.
-const name = (p) => (isFormula(p) ? formulaName(p) : base(p));
+// What a toast calls a file: a Formula by its name, a GIF by its title (never its file name).
+const name = (p) => (isFormula(p) ? formulaName(p) : label(wasm.parsePath(p)));
 
 // Root manifests with a name people know them by. Anything else shows its
 // file name.
-const LABELS = { 'filelist.txt': 'All files', 'filelist.hall': 'Halloween', 'filelist.xmas': 'Christmas' };
+const LABELS = { 'filelist.txt': 'All GIFs', 'filelist.hall': 'Halloween', 'filelist.xmas': 'Christmas' };
 // Manifests of prepared-copy paths from before copies were found
 // automatically (filelist.odm.txt, and the like). The device ignores them;
 // so does the UI.
@@ -164,7 +164,8 @@ export const app = {
     fullAt = performance.now();
     if (!this.src?.config) return null;
     const was = this.cardKey, seq = ++this.stAsked;
-    const st = await this.src.status(recent);
+    let st;
+    try { st = await this.src.status(recent); } catch (e) { if (unreachable(e)) emit('link', false); throw e; }
     // Replies can land out of order (the Now poll, a return to the tab and a
     // view's own refresh are each a request): one asked before the latest
     // applied is its caller's to read, not the app's current status. Taken
@@ -220,15 +221,32 @@ export const app = {
   async play(path) {
     try {
       await this.src.play(path);
-      toast(`on the panel: ${name(path)}`, 'ok');
+      toast(`On the panel: “${name(path)}”`, 'ok');
       return true;
     } catch (e) {
       // (In plain words: a Formula's 404/415 is the panel lacking it or unable to play it.)
       const n = name(path), f = isFormula(path);
-      toast(e.status === 501 ? e.message.replace(/^501: /, '') : e.status === 404 ? (f ? `“${n}” isn’t on the panel` : `${n}: not on the card`)
-        : e.status === 415 ? (f ? `The panel can’t play “${n}”` : `${n}: not a GIF`) : unreachable(e) ? 'Panel not reachable' : `The panel couldn’t play “${n}”`, 'bad');
+      toast(e.status === 501 ? e.message.replace(/^501: /, '') : e.status === 404 ? (f ? `“${n}” isn’t on the panel` : `“${n}” isn’t on the card`)
+        : e.status === 415 ? (f ? `The panel can’t play “${n}”` : `“${n}” isn’t a GIF`) : unreachable(e) ? 'Panel not reachable' : `The panel couldn’t play “${n}”`, 'bad');
       return false;
     }
+  },
+
+  // Play a playlist ({value, label}: PUT /api/config {set}): the display
+  // reads it again, which takes a few seconds; the panel holds its frame
+  // meanwhile. The Playlists rows' Play, Now's Playing from, the editor's
+  // Save & play. -> true once it plays.
+  async playPlaylist(p) {
+    if (this.building) { toast('The display is still reading a playlist: try again in a moment', 'bad'); return false; }
+    try {
+      toast(`Switching to “${p.label}”…`);
+      this.switching = p.label; // (the status pill says so while the display reads it)
+      const r = await this.src.putConfig({ set: p.value });
+      await this.refreshStatus();
+      await this.refreshConfig();
+      toast(`Playing “${p.label}” · ${(r.entries ?? this.status?.entries ?? 0).toLocaleString()} GIFs`, 'ok');
+      return true;
+    } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : `Couldn’t play “${p.label}”: ${e.message}`, 'bad'); return false; } finally { this.switching = null; }
   },
 
   go(view) { location.hash = '#' + view; },

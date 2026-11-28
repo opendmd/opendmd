@@ -94,7 +94,7 @@ While it waits, the panel says **Join WiFi  OpenDMD-Setup**.
     hyphens.
 
     If the OpenDMD web app pops up when you join, you can do the same
-    there under **Settings › Device › Network**. While a display has no
+    there under **Settings › WiFi**. While a display has no
     WiFi to join, it restarts every ten minutes to try again; if the setup
     network vanishes, wait a moment and join it again. A display set to
     [play from the card only](#a-display-without-wifi) makes no setup

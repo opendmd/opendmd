@@ -117,7 +117,7 @@ see one without a board, run `make sim ARGS="--play '@boot?len=full'"`.
 - [HTTP API](api.md): every route the display answers, with `curl`
   examples. The web app uses nothing else, so a script can do what it
   does. The page follows the latest docs and links the page for each
-  release, as that release described it; the web app's Settings › Device ›
+  release, as that release described it; the web app's Settings ›
   About opens the one for the display's firmware version.
 - [Psi language reference](psi-spec.md): the Formula language, every
   name it knows, its limits; the `psi` command. Its

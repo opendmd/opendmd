@@ -29,7 +29,7 @@ a linked device asks.
 ## What you need
 
 - The display on a beta version from **1.1.0-beta.3** on. To get it, switch
-  on **Get beta updates** in **Settings › Device › Firmware**, then
+  on **Get beta updates** in **Settings › Updates**, then
   **Check for updates**.
 - A recent browser on the phone or computer you'll use: Safari 17, Chrome
   137 or Firefox 129, or newer.
@@ -40,7 +40,7 @@ a linked device asks.
 
 Anyone on your WiFi who opens the web app can link their own phone, and
 keep control of the display after they leave. To stop that, set an API key
-first, in **Settings › Device › Security** (**Require a key for the API**).
+first, in **Settings › WiFi › Security** (**Require a key for the API**).
 The Remote control card reminds you until you do. With a key set, only
 someone who knows it can link a device.
 
@@ -48,7 +48,7 @@ someone who knows it can link a device.
 
 <!-- site:steps -->
 
-1. At home, open the web app and go to **Settings › Device**.
+1. At home, open the web app and go to **Settings › Remote control**.
 2. Under **Remote control**, tick **Remote control**.
 3. Wait a minute. The card says **On: ready for your devices** once the
    display is connected. Just after a restart, it waits a few minutes
@@ -64,7 +64,7 @@ your phone's.
 
 <!-- site:steps -->
 
-1. In **Settings › Device › Remote control**, press **Control from this
+1. In **Settings › Remote control**, press **Control from this
    browser away from home**.
 2. Press **Open Remote control**. The Remote control page opens on
    opendmd.dev.
@@ -81,7 +81,7 @@ Use this to link a phone that doesn't have the web app open.
 
 <!-- site:steps -->
 
-1. In **Settings › Device › Remote control**, press **Add a device**.
+1. In **Settings › Remote control**, press **Add a device**.
 2. The display shows a QR code for 5 minutes. Point the phone's camera at
    it. If it doesn't scan, step back a little.
 3. The Remote control page opens on the phone. Give the phone a name and
@@ -158,7 +158,7 @@ display over your WiFi as before.
 
 To stop a phone or computer from controlling the display:
 
-- **At home**: in **Settings › Device › Remote control**, find it under
+- **At home**: in **Settings › Remote control**, find it under
   **Linked devices** and press **Remove**.
 - **On the device itself**: on the Remote control page, press **Forget this
   panel in this browser**.

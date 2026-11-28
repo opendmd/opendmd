@@ -30,16 +30,16 @@
 // user's own (js/tags.js), never a part of the name; never bucket or a
 // copy's path.
 
-import { app, listOr } from './state.js';
+import { app, listOr, platName } from './state.js';
 import { art } from './artmod.js';
 import { authorOf } from './gifs.js';
-import { h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
+import { $, h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {
   title: 'Give it a title',
   'title-char': 'A title can’t have _ " * / : < > ? \\ | or accented letters',
   platform: 'That is not a platform name',
-  category: 'A category name can’t have / " * : < > ? \\ | or accented letters',
+  category: 'A folder name can’t have / " * : < > ? \\ | or accented letters',
   author: 'An author is one word of letters and digits, 3 or more, like “pixelkid42”',
   'needs-platform': 'An author needs a platform',
   'too-long': 'That name is too long: shorten the title',
@@ -116,28 +116,45 @@ const CSS = `.dlg{position:fixed;inset:0;z-index:25;background:#000b;overflow:au
 .dl-item .form{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .dl-item .dl-title{width:100%}
 .dl-name{margin-top:8px;word-break:break-all}
+.dl-top{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:12px 0}
+.dl-more{margin-top:4px}.dl-more>summary{color:var(--mut);font-size:13px;cursor:pointer}.dl-more .form{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:4px 0}
 .dl-err{font-size:13px;margin-top:4px}
 .dl-item input.bad{border-color:var(--bad)}
 .dl-foot{justify-content:flex-end;margin-top:12px}
-@media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:minmax(0,1fr)}}`;
+@media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:88px minmax(0,1fr);gap:8px}.dl-item img{width:88px;margin-top:24px}}`;
 
 let styled = false;
 // The dialogs' stylesheet, once (Add GIFs' fitting step, js/fit.js, uses it too).
 export function dlgStyle() { if (!styled) { document.head.append(h('style', CSS)); styled = true; } }
 
 // One dialog, one or more items; resolves to the items' results on OK, or
-// null on Cancel.
-async function dialog({ title, intro, files, inits, ok, opts, keep }) {
+// null on Cancel. `batch` (Add GIFs): one Folder for them all, at the top,
+// and with more than one GIF one Platform for all as well; each GIF then
+// asks only for its title, its own platform and author (and the name it
+// gets on the card) folded under Details. Edit details shows every field.
+async function dialog({ title, intro, files, inits, ok, opts, keep, batch }) {
   const m = await art();
   dlgStyle();
   const listing = listings(opts.categories);
   const urls = [];
   const plats = [...new Set([...m.platforms(), ...(opts.platforms || [])])].sort();
+  const platOpts = () => [h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) || p))];
   let cats = [...new Set([...opts.categories, ...inits.map((i) => i.category).filter(Boolean)])].sort(byNice);
+  const folder = batch && catSelect();
+  const many = batch && inits.length > 1, same = new Set(inits.map((i) => i.platform || ''));
+  // (Each its own: the GIFs' names say different platforms.)
+  const allPlat = many && h('select', { id: 'dl-plat-all', 'aria-label': 'Platform for all' }, same.size > 1 && h('option', { value: '*' }, 'Each its own'), platOpts());
+  if (allPlat) {
+    allPlat.value = same.size > 1 ? '*' : [...same][0];
+    allPlat.onchange = () => { if (allPlat.value !== '*') for (const it of items) it.platform.value = allPlat.value; refresh(); };
+  }
   const items = inits.map((init, i) => row(init, i, files?.[i]));
+  if (folder) fillCats(folder, inits[0]?.category);
   const okBtn = h('button.pri', { id: 'dl-ok', disabled: true, onclick: () => done(items.map((it) => it.out)) }, ok);
   const el = h('div.dlg', { id: 'dl', role: 'dialog', 'aria-modal': 'true' },
-    h('div.card', h('h2', title), h('p.muted', intro), items.map((it) => it.el),
+    h('div.card', h('h2', title), h('p.muted', intro),
+      batch && h('div.form.dl-top', h('label.stack', 'Folder', folder), allPlat && h('label.stack', 'Platform', allPlat)),
+      items.map((it) => it.el),
       h('div.row.dl-foot', h('button', { id: 'dl-cancel', onclick: () => done(null) }, 'Cancel'), okBtn)));
   let done;
   const result = new Promise((res) => { done = (v) => { el.remove(); removeEventListener('keydown', esc); for (const u of urls) URL.revokeObjectURL(u); urls.length = 0; urls.gone = 1; res(v); }; });
@@ -148,11 +165,25 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   refresh();
   return result;
 
+  // A Folder select; New folder… asks for a name and adds it to every one.
+  function catSelect() {
+    const sel = h('select', { className: 'dl-cat', 'aria-label': 'Folder' });
+    sel.onchange = () => {
+      if (sel.value === '\n') {
+        const c = (prompt('Name of the new folder') || '').trim();
+        if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
+        for (const x of folder ? [folder] : items.map((it) => it.category)) fillCats(x, x === sel ? c || x.cat : x.cat);
+      }
+      refresh();
+    };
+    return sel;
+  }
+
   function row(init, i, file) {
     const title = h('input', { type: 'text', className: 'dl-title', value: init.title || '', placeholder: 'What it shows', required: true, 'aria-label': 'Title' });
-    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
+    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, platOpts());
     platform.value = init.platform || '';
-    const category = h('select', { className: 'dl-cat', 'aria-label': 'Category' });
+    const category = folder || catSelect();
     const author = h('input', { type: 'text', className: 'dl-author', value: init.author || '', placeholder: 'optional', 'aria-label': 'Author' });
     const name = h('div.cap.mono.dl-name');
     const err = h('div.bad.dl-err');
@@ -162,36 +193,28 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     const img = src || init.path ? h('img', src ? { src, alt: '' } : { alt: '' }) : h('div');
     // (The web demo's card is in memory: the GIF's bytes, as an object URL.)
     if (!src && init.path) app.previewBytes(init.path).then((b) => { if (!urls.gone) urls.push(img.src = URL.createObjectURL(new Blob([b], { type: 'image/gif' }))); }, () => {});
+    const plat = h('label.stack', 'Platform', platform), by = h('label.stack', 'Author', author);
+    // Details: what a GIF rarely needs, and the name it gets on the card.
+    const more = h('details.dl-more', h('summary', 'Details'), h('div.form', many && plat, batch && by), file && h('div.cap.mono', file.name), name);
     const it = {
-      title, platform, category, author, init, file, out: null,
+      title, platform, category, author, init, file, out: null, more,
       el: h('div.dl-item', { 'data-i': i },
         img,
         h('div',
-          file && h('div.cap.mono', file.name),
-          h('div.form',
-            h('label.stack', 'Title', title), h('label.stack', 'Platform', platform),
-            h('label.stack', 'Category', category), h('label.stack', 'Author', author)),
-          name, err)),
+          h('div.form', h('label.stack', 'Title', title), !many && plat, !batch && h('label.stack', 'Folder', category), !batch && by),
+          err, more)),
       name, err,
     };
-    fillCats(it, init.category);
+    if (!folder) fillCats(category, init.category);
     for (const c of [title, author]) c.addEventListener('input', refresh);
-    platform.onchange = refresh;
-    category.onchange = () => {
-      if (category.value === '\n') {
-        const c = (prompt('Name of the new category') || '').trim();
-        if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
-        for (const x of items) fillCats(x, x === it ? c || x.cat : x.cat);
-      }
-      refresh();
-    };
+    platform.onchange = () => { if (allPlat && allPlat.value !== platform.value) allPlat.value = items.every((x) => x.platform.value === platform.value) ? platform.value : '*'; refresh(); };
     return it;
   }
 
-  function fillCats(it, value) {
-    clear(it.category, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New category…'));
-    it.category.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
-    it.cat = it.category.value;
+  function fillCats(sel, value) {
+    clear(sel, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
+    sel.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
+    sel.cat = sel.value;
   }
 
   // Every item's name: the next free number, and no two alike in the dialog.
@@ -201,8 +224,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     const taken = new Set();
     let bad = 0;
     for (const it of items) {
-      it.cat = it.category.value;
-      const c = it.cat;
+      const c = it.category.cat = it.category.value;
       const f = { title: it.title.value.trim(), platform: it.platform.value || null, category: c, author: it.author.value.trim() || null, flags: it.init.flags || [], ordinal: null };
       it.author.placeholder = f.platform ? 'optional' : 'optional · needs a platform';
       const l = await listing(c);
@@ -210,8 +232,10 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
       const { path = null, why = '' } = pickName(m, f, l, keep, taken);
       it.out = path && { file: it.file, category: c, name: base(path), path };
       it.title.classList.toggle('bad', !f.title);
-      it.name.textContent = path ? `→ ${base(path)}${app.device ? ` in ${c}` : ''}` : '';
+      it.name.textContent = path ? `Its name on the card: ${base(path)}${app.device ? ` in ${niceName(c)}` : ''}` : '';
       it.err.textContent = why;
+      // A problem with what Details holds (the platform, the author): open.
+      if (why && why !== WHY.title && !it.opened) it.opened = it.more.open = true;
       Object.assign(it.el.dataset, { name: path ? base(path) : '', error: why ? 'yes' : '' });
       if (path) taken.add(lc(path)); else bad++;
     }
@@ -256,8 +280,8 @@ export function addDialog(files, opts) {
   const n = files.length;
   return dialog({
     title: n > 1 ? `Add ${n} GIFs` : 'Add a GIF',
-    intro: 'A GIF’s title, platform and author are its file name on the card: that is what the Library lists, search finds and playlists filter by.',
-    files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF',
+    intro: n > 1 ? 'Give each a title: the Library lists them by title, folder and platform.' : 'Give it a title: the Library lists it by title, folder and platform.',
+    files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF', batch: true,
     // (inits: a GIF from the website's Studio, or a Formula's Save as GIF, which names its category)
     inits: files.map((f, i) => ({ ...guess(f.name), category: opts.category, ...opts.inits?.[i] })),
   });
@@ -276,9 +300,9 @@ export async function editDialog(path, opts) {
   if (!to || to === path) return null;
   try {
     await renameGif(path, to);
-    toast(`renamed to “${label(app.wasm.parsePath(to))}”`, 'ok');
+    toast(`Renamed to “${label(app.wasm.parsePath(to))}”`, 'ok');
     return to;
-  } catch (e) { toast(`renaming: ${e.message}`, 'bad'); return null; }
+  } catch (e) { toast(`Couldn’t rename: ${e.message}`, 'bad'); return null; }
 }
 
 // --- Renaming and deleting ----------------------------------------------------
@@ -287,15 +311,17 @@ const refs = () => import('./refs.js');
 
 // One GIF renamed: its references follow. Throws if the move failed.
 export async function renameGif(from, to) {
-  const { failed } = await (await refs()).relink([{ from, to }]);
-  if (failed) throw failed.error;
+  if (busy()) throw new Error('another batch is under way');
+  const r = await (await refs()).relink([{ from, to }]);
+  if (r.failed) throw r.failed.error;
+  if (r.tidy) tidyFailed(r, 'Renamed');
 }
 
 export async function removeGif(path, name) {
-  if (!confirm(`Delete “${name}” from the card? It is taken out of every playlist too. This can’t be undone.`)) return false;
-  const { failed } = await (await refs()).relink([{ from: path, to: null }]);
-  if (failed) { toast(`deleting “${name}”: ${failed.error.message}`, 'bad'); return false; }
-  toast(`deleted “${name}”`, 'ok');
+  if (busy() || !confirm(`Delete “${name}” from the card? It is taken out of every playlist too. This can’t be undone.`)) return false;
+  const r = await (await refs()).relink([{ from: path, to: null }]);
+  if (r.failed) { toast(`Couldn’t delete “${name}”: ${r.failed.error.message}`, 'bad'); return false; }
+  if (r.tidy) tidyFailed(r, 'Deleted'); else toast(`Deleted “${name}”`, 'ok');
   return true;
 }
 
@@ -304,14 +330,47 @@ export async function removeGif(path, name) {
 // done stay done, their references rewritten). -> {done, left}: `left` the
 // paths not done (the one that failed and those after it), null when
 // cancelled.
+// While it runs, a progress line over the toasts: "Moving 3 of 6 GIFs…",
+// a bar and Stop (the GIF under way finishes; those not begun stay
+// selected), then "Updating playlists…" once the files are done.
+// (One at a time: a second, begun while one runs, is refused.)
+let running = false;
+export const busy = () => running && (toast('Wait for the GIFs being moved or deleted: one batch at a time', 'bad'), true);
 async function batch(pairs, verb, done) {
-  if (pairs.length > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${pairs.length.toLocaleString()} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
-  toast(`${verb === 'Deleted' ? 'Deleting' : verb === 'Moved' ? 'Moving' : 'Renaming'} ${pairs.length.toLocaleString()} GIFs…`);
-  const r = await (await refs()).relink(pairs);
-  const n = r.done.length.toLocaleString();
-  if (r.failed) toast(`${verb} ${n} of ${pairs.length.toLocaleString()}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${verb === 'Deleted' ? 'deleted' : 'moved'} (${r.failed.error.message})`, 'bad');
-  else toast(`${verb} ${n} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
-  return { done: r.done, left: r.failed ? pairs.slice(r.done.length).map((p) => p.from) : [] };
+  if (busy()) return null;
+  const N = pairs.length, n = N.toLocaleString();
+  if (N > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${n} GIFs, one at a time; the panel may pause for a moment now and then.`)) return null;
+  const ing = { Deleted: 'Deleting', Moved: 'Moving' }[verb] || 'Renaming';
+  let stop = false;
+  const bar = h('i'), msg = h('span.grow', `${ing} ${n} GIFs…`);
+  const stopB = h('button.sm', { id: 'bulk-stop', onclick: () => { stop = true; stopB.disabled = true; stopB.textContent = 'Stopping…'; } }, 'Stop');
+  const box = h('div.toast.prog', { id: 'bulk-prog', role: 'status' }, h('div.row', msg, stopB), h('div.bar', bar));
+  $('#toasts').append(box);
+  const step = (k, tidy) => {
+    msg.textContent = tidy ? 'Updating playlists…' : `${ing} ${(k + 1 > N ? N : k + 1).toLocaleString()} of ${n} GIFs…`;
+    bar.style.width = `${(100 * k) / N}%`;
+    if (tidy) stopB.hidden = true;
+  };
+  step(0);
+  let r;
+  running = true;
+  try { r = await (await refs()).relink(pairs, step, () => stop); } finally { box.remove(); running = false; }
+  const k = r.done.length.toLocaleString(), how = verb === 'Deleted' ? 'deleted' : 'moved';
+  // (A GIF that failed is named, and playlists that couldn't follow say so too.)
+  if (r.tidy) tidyFailed(r, verb);
+  if (r.failed) toast(`${verb} ${k} of ${n}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${how} (${r.failed.error.message})`, 'bad');
+  else if (r.tidy) { /* said */ } else if (r.done.length < N) toast(`Stopped: ${how} ${k} of ${n}. The rest are still selected`, 'ok');
+  else toast(`${verb} ${k} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
+  return { done: r.done, left: pairs.slice(r.done.length).map((p) => p.from) };
+}
+
+// The GIFs moved, but what names them (playlists, tags) couldn't follow:
+// said, and kept up (whatever view is shown) until Retry works or it is
+// dismissed: playlists left naming GIFs that have gone need it.
+function tidyFailed(r, verb) {
+  toast(`${verb} ${r.done.length.toLocaleString()} GIF${r.done.length === 1 ? '' : 's'}. Playlists couldn’t be updated: ${r.tidy.message}`, 'bad', ['Retry', async () => {
+    try { await (await refs()).follow(r.done); toast('Playlists updated', 'ok'); } catch (e) { tidyFailed({ ...r, tidy: e }, verb); }
+  }], true);
 }
 
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
@@ -352,13 +411,16 @@ export async function bulkMove(paths, opts) {
   return batch(plan, 'Moved', ` to ${niceName(c)}`);
 }
 
+// A GIF as the rename preview says it: its title, then its platform and author by name.
+const said = (p) => { const e = app.wasm.parsePath(p), a = authorOf(e); return [label(e), platName(e.platform), a && 'by ' + a].filter(Boolean).join(' · '); };
+
 // Rename…: a title, platform or author for all of them; each keeps what is
 // left blank. A preview of the names first (50 at most shown).
 export async function bulkRename(paths, opts) {
   const m = await art();
   dlgStyle();
   const title = h('input', { type: 'text', id: 'br-title', placeholder: 'keep each' });
-  const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
+  const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) || p)));
   const author = h('input', { type: 'text', id: 'br-author', placeholder: 'keep each; - for none' });
   const list = h('div.cap.mono', { id: 'br-list' });
   let plan = [];
@@ -380,7 +442,7 @@ export async function bulkRename(paths, opts) {
     if (k !== seq) return;
     plan = got;
     const bad = got.find((x) => x.why), moving = got.filter((x) => x.to);
-    clear(list, bad ? h('div.bad', bad.why) : moving.slice(0, 50).map((x) => h('div.br-row', `${base(x.from)} → ${base(x.to)}`)),
+    clear(list, bad ? h('div.bad', bad.why) : moving.slice(0, 50).map((x) => h('div.br-row', `${said(x.from)} → ${said(x.to)}`)),
       !bad && moving.length > 50 && h('div', `and ${(moving.length - 50).toLocaleString()} more`));
     okBtn.disabled = !!bad || !moving.length;
   };
@@ -394,10 +456,12 @@ export async function bulkRename(paths, opts) {
 
 // Delete…: the confirm names what goes (a few titles, how many more, the
 // folders), never only a count.
-export async function bulkDelete(paths) {
-  const n = paths.length, few = paths.slice(0, 5).map((p) => `“${label(app.wasm.parsePath(p))}”`).join(', ');
+// (`opts.hidden`: how many of them the list doesn't show now; said too.)
+export async function bulkDelete(paths, opts = {}) {
+  if (busy()) return null;
+  const n = paths.length, hid = opts.hidden ? `\n${opts.hidden.toLocaleString()} of them ${opts.hidden === 1 ? 'isn’t' : 'aren’t'} shown in the list now.` : '', few = paths.slice(0, 5).map((p) => `“${label(app.wasm.parsePath(p))}”`).join(', ');
   const dirs = [...new Set(paths.map((p) => niceName(p.split('/')[2])))], where = dirs.length > 4 ? `${dirs.slice(0, 4).join(', ')} and ${dirs.length - 4} more folders` : dirs.join(', ');
-  if (!confirm(`Delete ${n.toLocaleString()} GIF${n === 1 ? '' : 's'} from the card?\n\n${few}${n > 5 ? ` and ${(n - 5).toLocaleString()} more` : ''}\nFrom ${dirs.length === 1 ? 'the folder' : 'the folders'} ${where}.\n\n${n === 1 ? 'It is' : 'They are'} taken out of every playlist too. This can’t be undone.`)) return null;
+  if (!confirm(`Delete ${n.toLocaleString()} GIF${n === 1 ? '' : 's'} from the card?\n\n${few}${n > 5 ? ` and ${(n - 5).toLocaleString()} more` : ''}\nFrom ${dirs.length === 1 ? 'the folder' : 'the folders'} ${where}.${hid}\n\n${n === 1 ? 'It is' : 'They are'} taken out of every playlist too. This can’t be undone.`)) return null;
   return batch(paths.map((from) => ({ from, to: null })), 'Deleted');
 }
 

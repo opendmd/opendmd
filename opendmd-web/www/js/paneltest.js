@@ -26,13 +26,13 @@ export function panelTest(box) {
   async function run(k, more) {
     say();
     let r;
-    try { r = await post({ setting: k }); } catch (e) { return toast('panel test: ' + e.message, 'bad'); }
+    try { r = await post({ setting: k }); } catch (e) { return toast('Panel test: ' + e.message, 'bad'); }
     // Saved at once, no trial: both values have just been seen side by side.
     // The save ends the test on the device.
     const pick = (s) => async () => {
       const v = r[s][k], [n, f] = L[k];
       say();
-      try { await app.src.putConfig({ panel: { [k]: v }, panel_confirm: true }); } catch (e) { return stop(), toast('panel timing: ' + e.message, 'bad'); }
+      try { await app.src.putConfig({ panel: { [k]: v }, panel_confirm: true }); } catch (e) { return stop(), toast('Panel timing: ' + e.message, 'bad'); }
       say(h('p', `Saved: ${n} ${f(v)}.`));
       app.refreshConfig().catch(() => {});
     };
