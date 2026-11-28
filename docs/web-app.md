@@ -415,10 +415,15 @@ favourite plays more often on today's firmware, which reads weights, not
 tags) `w=3` in the playlist playing, only for a GIF in it, only when it
 shuffles, and never past the 1,024 overrides the player keeps for a
 playlist (refused, with a toast). Undo puts the tags and the weights back
-as they were. A weight above 1 with no tag (a favourite from before the
-tag) is adopted into the tag when that playlist's overrides are read.
-Overrides files are written as the tags are: read again first, this
-page's own changes put over them. Decided for stage 2 (not built here):
+as they were. Un-hearting takes the weight off in every playlist that
+has one, playing or not, shuffled or not. A weight above 1 with no tag (a
+favourite from before the tag) is adopted into the tag the first time
+that playlist plays with the app open, once per card and playlist (this
+browser's localStorage): after that the tag alone says what is a
+favourite, so an un-hearted GIF never comes back by itself. Overrides
+files are written as the tags are: read again first, this page's own
+changes to that playlist put over them; a save that fails keeps them and
+says so, with Retry. Decided for stage 2 (not built here):
 favourites move to a card-wide `/sets/.favourites` file the panel keeps;
 stage 2 adopts the `favourite` tags from `/sets/.tags` and strips them,
 and the old star ratings become plain tags. A Formula picked by hand stays
