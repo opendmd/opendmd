@@ -117,9 +117,10 @@ pub struct Counts {
     pub stack_left: u32,
     /// The least heap a compile that was short needed (B; 0: none).
     pub min_need: u32,
-    /// Compiles checked again beside a remote add's `.psr` (read back and
-    /// loaded): none unless a `.psr` is there.
-    pub remote_checks: u32,
+    /// Compiled, but the card would not take the `.psb` (the write failed):
+    /// nothing left beside the source, so the next start compiles it again.
+    /// Not short of memory: never in a retry's list.
+    pub write_failed: u32,
 }
 
 static LAST: Mutex<Option<Counts>> = Mutex::new(None);
@@ -173,8 +174,8 @@ pub fn status_json() -> String {
     match *LAST.lock().unwrap_or_else(|p| p.into_inner()) {
         None => r#","card_formulas":null"#.into(),
         Some(c) => format!(
-            r#","card_formulas":{{"sources":{},"current":{},"prepared":{},"failed":{},"short_of_memory":{},"queued":{}}}"#,
-            c.sources, c.current, c.prepared, c.failed, c.short, c.queued
+            r#","card_formulas":{{"sources":{},"current":{},"prepared":{},"failed":{},"short_of_memory":{},"queued":{},"write_failed":{}}}"#,
+            c.sources, c.current, c.prepared, c.failed, c.short, c.queued, c.write_failed
         ),
     }
 }
@@ -190,30 +191,20 @@ struct Entry {
 }
 
 /// Every file in `card_dir` (card-absolute), in one pass.
-/// And whether the listing is whole (no read error, under the cap):
-/// nothing is removed on the strength of a cut one.
-fn list_whole(card_dir: &str) -> (Vec<Entry>, bool) {
+fn list(card_dir: &str) -> Vec<Entry> {
     use esp_idf_sys as sys;
     let mut out = Vec::new();
     let Ok(path) = std::ffi::CString::new(format!("0:{card_dir}")) else {
-        return (out, false);
+        return out;
     };
-    let mut whole = true;
     // SAFETY: plain data FatFs fills, the directory closed before return.
     unsafe {
         let mut d: sys::FF_DIR = std::mem::zeroed();
         if sys::f_opendir(&mut d, path.as_ptr()) != sys::FRESULT_FR_OK {
-            return (out, false);
+            return out;
         }
         let mut fi: sys::FILINFO = std::mem::zeroed();
-        loop {
-            if sys::f_readdir(&mut d, &mut fi) != sys::FRESULT_FR_OK {
-                whole = false;
-                break;
-            }
-            if fi.fname[0] == 0 {
-                break;
-            }
+        while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
             if fi.fattrib as u32 & sys::AM_DIR == 0 {
                 let name = std::ffi::CStr::from_ptr(fi.fname.as_ptr());
                 if let Ok(name) = name.to_str() {
@@ -227,13 +218,12 @@ fn list_whole(card_dir: &str) -> (Vec<Entry>, bool) {
                 }
             }
             if out.len() >= 4 * MAX_FILES {
-                whole = false;
                 break;
             }
         }
         sys::f_closedir(&mut d);
     }
-    (out, whole)
+    out
 }
 
 /// Card Formulas a remote `formulas` opens (a `.psb` header each), at
@@ -298,42 +288,26 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: O
     use opendmd_core::connect::proto::formula_stem_ok;
     let t0 = Instant::now();
     let h = |stem: &str| key(stem);
-    // 1. The stems with a program worth a look: a `.psb` larger than a mark;
-    // or a remote add's `.psr` with no `.psb` at all (a `.psb` of any kind
-    // wins where it plays: a mark or an empty one beside a `.psr` does not
-    // play, so it is not listed).
-    let (mut built, mut any_psb, mut psr): (Vec<u32>, Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new(), Vec::new());
+    // 1. The stems with a compiled file worth a look.
+    let mut built: Vec<u32> = Vec::new();
     let _ = built.try_reserve(64);
     let mut overflow = false;
     let found = each_file(|name, size| {
-        let full = built.len() + psr.len() >= REMOTE_PSB_MAX || any_psb.len() > 2 * REMOTE_PSB_MAX;
         if let Some(st) = stem(name, ".psb") {
-            if full {
-                overflow = true;
-                return false;
-            }
-            any_psb.push(h(st));
             if size > MARK_LEN {
+                if built.len() >= REMOTE_PSB_MAX {
+                    overflow = true;
+                    return false;
+                }
                 built.push(h(st));
-            }
-        } else if let Some(st) = stem(name, opendmd_core::synth::REMOTE_EXT) {
-            if full {
-                overflow = true;
-                return false;
-            }
-            if size > MARK_LEN {
-                psr.push(h(st));
             }
         }
         true
     });
-    any_psb.sort_unstable();
-    psr.retain(|k| any_psb.binary_search(k).is_err());
-    psr.sort_unstable();
-    built.sort_unstable();
-    if !found || (built.is_empty() && psr.is_empty()) {
+    if !found || built.is_empty() {
         return (false, None);
     }
+    built.sort_unstable();
     // 2. The smallest stems after `after` that have one (one more than is
     // opened: there are more).
     let mut cands: Vec<String> = Vec::new();
@@ -342,7 +316,7 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: O
         let Some(st) = stem(name, ".psi").filter(|s| formula_stem_ok(s)) else {
             return true;
         };
-        if after.is_some_and(|a| st <= a) || (built.binary_search(&h(st)).is_err() && psr.binary_search(&h(st)).is_err()) {
+        if after.is_some_and(|a| st <= a) || built.binary_search(&h(st)).is_err() {
             return true;
         }
         if cands.len() == REMOTE_OPENS {
@@ -373,9 +347,7 @@ pub fn remote_list(out: &mut opendmd_core::connect::proto::FormulaList, after: O
             break;
         }
         let t = Instant::now();
-        // Its `.psb`, or (none at all) its `.psr`: the file it plays from.
-        let ext = if built.binary_search(&h(st)).is_ok() { ".psb" } else { opendmd_core::synth::REMOTE_EXT };
-        let hd = head(&format!("{}/formulas/{st}{ext}", config::SD_MOUNT), 6 + 255);
+        let hd = head(&format!("{}/formulas/{st}.psb", config::SD_MOUNT), 6 + 255);
         longest = longest.max(t.elapsed());
         opened += 1;
         next = Some(st.clone());
@@ -670,6 +642,9 @@ struct Opts {
 struct Left {
     compiled: bool,
     heavy: Vec<u32>,
+    /// Compiled, but the card would not take the `.psb`: the retries skip
+    /// them too (counted as such), the next start tries.
+    unwritten: Vec<u32>,
 }
 
 /// Prepare the card's Formulas (the boot task once the card is handed
@@ -695,7 +670,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
         force_short: if cfg!(feature = "emu-census") && !online { 1 } else { 0 },
     };
     let mut shorts = Vec::new();
-    let (c, left) = pass(settings, &mut shorts, opts, &[]);
+    let (c, left) = pass(settings, &mut shorts, opts, &[], &[]);
     publish(c);
     if c.short as usize + c.queued as usize > left.heavy.len() && tries > 0 {
         // The retries are the network worker's ([`tick`]): the boot task
@@ -709,6 +684,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
             next: Instant::now() + wait,
             t0,
             heavy: left.heavy,
+            unwritten: left.unwritten,
         });
         return c;
     }
@@ -731,6 +707,8 @@ struct Retry {
     t0: Instant,
     /// Short of memory after their compile ran: skipped by the retries.
     heavy: Vec<u32>,
+    /// Their `.psb` write failed: skipped by the retries.
+    unwritten: Vec<u32>,
 }
 static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
 
@@ -751,8 +729,9 @@ fn retry_tick() {
     if room && give_way(false) {
         let mut shorts = Vec::new();
         let opts = Opts { wait: false, compiles: 1, force_short: 0 };
-        let (again, left) = pass(&r.settings, &mut shorts, opts, &r.heavy);
+        let (again, left) = pass(&r.settings, &mut shorts, opts, &r.heavy, &r.unwritten);
         r.heavy.extend(left.heavy.iter().copied());
+        r.unwritten.extend(left.unwritten.iter().copied());
         let c = r.counts;
         // The later pass counts the earlier passes' compiles as ready:
         // they are this start's prepared, not its ready.
@@ -792,15 +771,15 @@ fn finish(c: Counts, shorts: &[String], t0: Instant) {
     }
     if c.sources > 0 {
         log::info!(
-            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, {} not tried yet, in {} ms; {} checked beside a remote program",
+            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, {} not tried yet, {} card writes failed, in {} ms",
             c.sources,
             c.current,
             c.prepared,
             c.failed,
             c.short,
             c.queued,
-            t0.elapsed().as_millis(),
-            c.remote_checks
+            c.write_failed,
+            t0.elapsed().as_millis()
         );
     }
 }
@@ -903,11 +882,11 @@ fn redo_keys(path: &str) -> Vec<u32> {
 
 #[optimize(size)]
 #[inline(never)]
-fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32]) -> (Counts, Left) {
+fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32], unwritten: &[u32]) -> (Counts, Left) {
     // In flight from the listing to the last write: a crash in between
     // counts against the next start ([`boot`]); none outside it.
     guard(0).store(GUARD_MAGIC, Relaxed);
-    let r = pass_in(settings, shorts, opts, skip);
+    let r = pass_in(settings, shorts, opts, skip, unwritten);
     guard(0).store(0, Relaxed);
     guard(1).store(crashes_word(0), Relaxed);
     r
@@ -915,19 +894,10 @@ fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<Str
 
 #[optimize(size)]
 #[inline(never)]
-fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32]) -> (Counts, Left) {
+fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32], unwritten: &[u32]) -> (Counts, Left) {
     let card_dir = "/formulas";
     let dir = format!("{}{card_dir}", config::SD_MOUNT);
-    let (entries, whole) = list_whole(card_dir);
-    // The stems with a remote add's program, once (lower case, sorted): no
-    // scan of the listing per source.
-    let mut psr_stems: Vec<String> = entries
-        .iter()
-        .filter_map(|e| stem(&e.name, opendmd_core::synth::REMOTE_EXT))
-        .map(|s| s.to_ascii_lowercase())
-        .collect();
-    psr_stems.sort_unstable();
-    let has_psr = |base: &str| psr_stems.binary_search(&base.to_ascii_lowercase()).is_ok();
+    let entries = list(card_dir);
     let n_sources = entries.iter().filter(|e| stem(&e.name, ".psi").is_some()).count();
     // (In the directory's order: a sort here cost 6 KB of flash.)
     let sources = entries.iter().filter(|e| stem(&e.name, ".psi").is_some()).take(MAX_FILES);
@@ -966,13 +936,6 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
         };
         let why = match checked {
             State::Current => {
-                // (A remote add's `.psr` left beside the panel's own compile:
-                // a restart between the two. Only a build that takes adds
-                // removes one, and only on a whole listing.)
-                #[cfg(feature = "connect-formula-add")]
-                if whole && has_psr(base) {
-                    let _ = fs::remove_file(format!("{dir}/{base}{}", opendmd_core::synth::REMOTE_EXT));
-                }
                 c.current += 1;
                 continue;
             }
@@ -984,6 +947,10 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
         };
         if skip.contains(&k) {
             c.short += 1;
+            continue;
+        }
+        if unwritten.contains(&k) {
+            c.write_failed += 1;
             continue;
         }
         // Past this pass's compiles, or the card busy: queued for later.
@@ -1016,7 +983,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             c.short += 1;
             continue;
         }
-        match compile_one(settings, psi_entry, &dir, card_dir, base, k, why, has_psr(base), &mut c, shorts) {
+        match compile_one(settings, psi_entry, &dir, card_dir, base, k, why, &mut c, shorts) {
             Done::Resolved => {
                 budget = budget.saturating_sub(1);
                 left.compiled = true;
@@ -1031,6 +998,15 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
                     left.compiled = true;
                     left.heavy.push(k);
                 }
+            }
+            // (Counted as a card write failure; the next start tries again,
+            // never this start's retries.)
+            Done::WriteFailed { compiled } => {
+                if compiled {
+                    budget = budget.saturating_sub(1);
+                    left.compiled = true;
+                }
+                left.unwritten.push(k);
             }
             Done::Busy => {
                 stopped = true;
@@ -1062,22 +1038,6 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             let _ = fs::write(&redo_path, text);
         }
     }
-    // A remote program whose source is gone (a restart between an add's two
-    // renames): a build that takes adds removes it, on a whole listing only
-    // (a `.psi` past a cut one must not cost its `.psr`). A release never
-    // does: it plays a `.psr` on the VM and removes one only with its `.psi`
-    // (a LAN delete).
-    #[cfg(feature = "connect-formula-add")]
-    if whole {
-        for e in &entries {
-            if let Some(st) = stem(&e.name, opendmd_core::synth::REMOTE_EXT) {
-                if !entries.iter().any(|x| stem(&x.name, ".psi").is_some_and(|b| b.eq_ignore_ascii_case(st))) {
-                    let _ = fs::remove_file(format!("{dir}/{}", e.name));
-                }
-            }
-        }
-    }
-    let _ = whole;
     // A remote add's part files left by a restart mid-add (the boot's pass
     // only: a retry's must not take an add under way).
     for e in entries.iter().filter(|e| opts.wait && e.name.starts_with(".add-") && e.name.ends_with(".part")) {
@@ -1093,8 +1053,29 @@ enum Done {
     /// Short of memory (counted, in `shorts`): tried again later;
     /// `compiled`, after a compile ran.
     Short { compiled: bool },
+    /// Compiled, but the card would not take the `.psb` (counted as a card
+    /// write failure, logged): no `.psb` left, so the next start compiles
+    /// it again. Not short of memory, so no retry this start. `compiled`,
+    /// after a compile ran (not for a mark that would not go on).
+    WriteFailed { compiled: bool },
     /// A transfer began: tried again soon (not counted here).
     Busy,
+}
+
+/// The card did not take `what` for `/formulas/<name>`: whatever part of it
+/// was written goes (a cut `.psb` would pass for current, a cut mark for
+/// another source's), so nothing beside the source says it was tried and
+/// the next start compiles it again. Counted and logged as a card write
+/// failure, never as short of memory (that list is the retries').
+fn write_failed(psb_path: &str, name: &str, compiled: bool, c: &mut Counts) -> Done {
+    let what = if compiled { "its compiled file" } else { "its mark" };
+    let gone = fs::remove_file(psb_path).is_ok() || fs::metadata(psb_path).is_err();
+    c.write_failed += 1;
+    log::warn!(
+        "formulas: /formulas/{name}: the card would not take {what} (a card write failure){}",
+        if gone { ": prepared again at the next start" } else { "; what was written could not be removed either" }
+    );
+    Done::WriteFailed { compiled }
 }
 
 /// One source compiled and written (see the module docs): the mark, the
@@ -1110,7 +1091,6 @@ fn compile_one(
     base: &str,
     k: u32,
     why: &str,
-    has_psr: bool,
     c: &mut Counts,
     shorts: &mut Vec<String>,
 ) -> Done {
@@ -1141,8 +1121,7 @@ fn compile_one(
     // this Formula: skipped as "does not compile" for the compile's few
     // milliseconds, accepted.)
     if !put(&psb_path, &mark_bytes(psi_entry)) {
-        c.failed += 1;
-        return Done::Resolved;
+        return write_failed(&psb_path, name, false, c);
     }
     let before = crate::state::free_heap();
     let started = Instant::now();
@@ -1175,44 +1154,16 @@ fn compile_one(
             return Done::Resolved;
         }
     };
-    // (A write that failed is no compile: the file goes, a remote add's
-    // `.psr` stays, and the next start tries again.)
+    // (A test image's hook, `emu-census` only: a source `wfail*` with a
+    // `<stem>.wfail` beside it has this write fail once, the marker taken.)
+    #[cfg(feature = "emu-census")]
+    if name.starts_with("wfail") && fs::remove_file(format!("{dir}/{base}.wfail")).is_ok() {
+        log::info!("formulas: /formulas/{name}: its .psb write taken as failed (a test image)");
+        return write_failed(&psb_path, name, true, c);
+    }
     if !put(&psb_path, &bytes) {
-        let _ = fs::remove_file(&psb_path);
-        shorts.push(format!("/formulas/{name}"));
-        c.short += 1;
-        return Done::Short { compiled: true };
+        return write_failed(&psb_path, name, true, c);
     }
-    // A remote add's program beside it (a build that takes adds only): the
-    // panel's own output read back and checked before the `.psr` goes. No
-    // `.psr` (nearly always): nothing more is read. A check the heap cannot
-    // hold now keeps both, for the next start; it never costs the `.psb`.
-    #[cfg(feature = "connect-formula-add")]
-    if has_psr {
-        c.remote_checks += 1;
-        let back = fs::File::open(&psb_path).ok().and_then(|f| opendmd_core::fx_psi::read_psb(f).ok());
-        let check = |w| psi::psb::load_boxed(&bytes, w).map(drop);
-        let loaded = [psi::psb::Which::Play, psi::psb::Which::Look].map(check);
-        match opendmd_core::synth::after_own_compile(back.as_deref() == Some(&bytes[..]), &loaded) {
-            opendmd_core::synth::AfterCompile::DropRemote => {
-                if fs::remove_file(format!("{dir}/{base}{}", opendmd_core::synth::REMOTE_EXT)).is_ok() {
-                    log::info!("formulas: /formulas/{name} added by remote, compiled here: its program is the panel's now");
-                }
-            }
-            opendmd_core::synth::AfterCompile::KeepBoth => {
-                log::info!("formulas: /formulas/{name}: its own compile kept; the remote program stays until it can be checked (next start)");
-            }
-            opendmd_core::synth::AfterCompile::Redo => {
-                log::warn!("formulas: /formulas/{base}.psb did not read back as written: removed, prepared again at the next start");
-                let _ = fs::remove_file(&psb_path);
-                shorts.push(format!("/formulas/{name}"));
-                c.short += 1;
-                return Done::Short { compiled: true };
-            }
-        }
-    }
-    #[cfg(not(feature = "connect-formula-add"))]
-    let _ = has_psr;
     stamp(&psb_path, psi_entry);
     drop(_writing);
     c.prepared += 1;

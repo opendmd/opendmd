@@ -586,11 +586,22 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             };
             Command::Formulas { after }
         }
+        // (Refused after their argument rules until the panel checks the
+        // gallery's signature: `fadd::TAKEN`.)
         #[cfg(feature = "connect-formula-add")]
-        "formula-add" => Command::FormulaAdd(super::fadd::add_args(a)?),
+        "formula-add" => {
+            let args = super::fadd::add_args(a)?;
+            if !super::fadd::TAKEN {
+                return Err(Refusal::NotAllowed);
+            }
+            Command::FormulaAdd(args)
+        }
         #[cfg(feature = "connect-formula-add")]
         "formula-part" => {
             let (id, off, data) = super::fadd::part_args(a)?;
+            if !super::fadd::TAKEN {
+                return Err(Refusal::NotAllowed);
+            }
             Command::FormulaPart { id, off, data }
         }
         "send" => Command::Send(send_args(a)?),
@@ -824,12 +835,10 @@ impl FormulaList {
     }
 
     /// [`new`](Self::new), saying first what an add needs (5.7): the
-    /// compiled format this player takes (`abi`) and whether it wants the
-    /// controller's compiled file with the source (`psb`; a board that
-    /// compiles while Connect is open would say false).
+    /// compiled format this player takes (`abi`).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn with_add(card: bool, abi: u8, psb: bool) -> FormulaList {
-        FormulaList { s: format!(r#"{{"abi":{abi},"psb":{psb},"builtin":["#), has_card: card, card_open: false, more: false }
+    pub fn with_add(card: bool, abi: u8) -> FormulaList {
+        FormulaList { s: format!(r#"{{"abi":{abi},"builtin":["#), has_card: card, card_open: false, more: false }
     }
 
     /// Anything left out yet?
@@ -1325,6 +1334,28 @@ mod tests {
         let mut l = FormulaList::new(false);
         l.builtin("s", &fits);
         assert_eq!(l.finish(false, None).len(), RESULT_ROOM);
+    }
+
+    /// With `connect-formula-add` (test images only) the two commands are
+    /// on the allow-list, but every one is refused `not-allowed` after its
+    /// argument rules until the gallery's signature is checked
+    /// (`fadd::TAKEN`): well-formed ones too. Malformed ones stay `bad-arg`.
+    #[cfg(feature = "connect-formula-add")]
+    #[test]
+    fn formula_add_refuses_every_add_until_signatures_are_checked() {
+        use super::super::json;
+        let keys = KeyList::new();
+        let limits = Limits { max_brightness: 128 };
+        const { assert!(!super::super::fadd::TAKEN, "adds are taken only once the gallery's signature is checked") };
+        let sha = "22".repeat(32);
+        let add = format!(r#"{{"id":3,"stem":"rift-patrol","name":"Rift patrol","src_size":10835,"src_sha256":"{sha}","psb_size":4439,"psb_sha256":"{sha}"}}"#);
+        let part = r#"{"id":3,"off":0,"data":"bmFtZSAiUmlmdCI"}"#;
+        for (c, a) in [("formula-add", add.as_str()), ("formula-part", part)] {
+            let v = json::parse(a.as_bytes()).unwrap();
+            assert_eq!(parse_command(c, &v, &limits, true, &keys), Err(Refusal::NotAllowed), "{c}");
+        }
+        let bad = json::parse(br#"{"id":3,"stem":"../wifi"}"#).unwrap();
+        assert_eq!(parse_command("formula-add", &bad, &limits, true, &keys), Err(Refusal::BadArg), "malformed: bad-arg first");
     }
 
     /// Without `connect-formula-add` (every release and beta) the two

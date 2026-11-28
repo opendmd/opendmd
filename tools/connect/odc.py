@@ -523,9 +523,15 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
             raise Bad("bad-arg")
         return c, {"after": a.get("after")}
     if c == "formula-add":
-        return c, add_args(a)
+        args = add_args(a)
+        if not ADDS_TAKEN:
+            raise Bad("not-allowed")
+        return c, args
     if c == "formula-part":
-        return c, part_args(a)
+        args = part_args(a)
+        if not ADDS_TAKEN:
+            raise Bad("not-allowed")
+        return c, args
     if c in ("next", "prev", "pause", "playlists", "controllers"):
         return c, {}
     if c == "brightness":
@@ -644,6 +650,11 @@ ADD_MAX_SOURCE = 16 * 1024
 ADD_MIN_PSB, ADD_MAX_PSB = 6, 8 * 1024
 ADD_MAX_PART = 384
 ADD_QUOTA_ADDS, ADD_QUOTA_BYTES = 16, 256 * 1024
+# Whether a panel takes adds at all (opendmd_core::connect::fadd::TAKEN):
+# False until the gallery's signature is checked; every formula-add and
+# formula-part is refused not-allowed after its argument rules. Only a
+# test of the mock's own add flow sets it (roundtrip.py), never a panel.
+ADDS_TAKEN = False
 
 
 def add_stem_ok(s) -> bool:
@@ -731,8 +742,8 @@ class FormulaList:
     whole stays within RESULT_ROOM bytes whatever the closing; the first
     that does not fit and every one after it are left out (`more`)."""
 
-    def __init__(self, card: bool, abi: int | None = None, psb: bool = True):
-        head = "{" if abi is None else '{"abi":%d,"psb":%s,' % (abi, "true" if psb else "false")
+    def __init__(self, card: bool, abi: int | None = None):
+        head = "{" if abi is None else '{"abi":%d,' % abi
         self.s, self.has_card, self.card_open, self.more = head + '"builtin":[', card, False, False
 
     def _closing(self) -> int:

@@ -1415,12 +1415,12 @@ emu-image-connect: emu-connect-certs
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic,connect-formula-add FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 # Card Formulas for `formulas` and `formula-add` (the host's psi build: the lane puts
-# ramp on the card over the LAN, and adds the gallery's largest, rift-patrol, by remote).
+# ramp on the card over the LAN, and offers the gallery's largest, rift-patrol, by
+# remote: refused until the panel checks the gallery's signature).
 emu-connect-psb:
 	@mkdir -p $(EMU_CONNECT_DIR)/psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(WEB)/formulas/rift-patrol.psi) -o $(EMU_CONNECT_DIR)/psb/rift-patrol.psb
-	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/connect/lane-look.psi) -o $(EMU_CONNECT_DIR)/psb/lane-look.psb
 emu-connect: emu-build emu-card emu-connect-psb
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)

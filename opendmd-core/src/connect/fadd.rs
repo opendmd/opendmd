@@ -5,11 +5,13 @@
 //! The firmware writes the bytes, checks the compiled program
 //! (`psb::verify`) and lands the files (`firmware/src/connect/fadd.rs`).
 //!
-//! This is the one place a remote controller hands the panel a program
-//! (every other path refuses inline Formulas and `~sent`): it lands as
-//! `<stem>.psr`, never `.psb`, and whatever is read from a `.psr` is drawn
-//! by the VM only (`fx_psi::card_program`), until the panel's own compiler
-//! has written `<stem>.psb` from the source and removed the `.psr`.
+//! This is the one place a remote controller would hand the panel a
+//! program (every other path refuses inline Formulas and `~sent`). Only a
+//! Formula the project signed may arrive that way (the gallery's
+//! signature, `super::super::gallery_sig`), and that check is not in the
+//! panel yet: until it is, [`TAKEN`] is false and the parser refuses every
+//! `formula-add` and `formula-part` (`not-allowed`) before the firmware
+//! sees one, so nothing reaches the card.
 
 use std::time::Duration;
 
@@ -44,6 +46,14 @@ pub const MAX_FORMULAS: usize = 128;
 pub const ADD_EVERY: Duration = Duration::from_secs(2);
 /// An add with no progress for this long is dropped (its part files too).
 pub const STALE: Duration = Duration::from_secs(600);
+
+/// Whether the panel takes adds at all. False until `formula-add` checks
+/// the gallery's signature before any card access (the signed-gallery
+/// design's step 4): every add and part is refused `not-allowed` by the
+/// parser (`proto::parse_command`) after its argument rules, so no
+/// unsigned program can land, in any build. Step 4 replaces this with the
+/// signature check; nothing else may set it.
+pub const TAKEN: bool = false;
 
 /// `formula-add`'s arguments, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]

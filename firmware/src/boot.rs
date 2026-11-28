@@ -77,7 +77,7 @@ pub enum Event {
 
 /// A card Formula's compiled bytes, or why they could not be read.
 #[cfg(feature = "psi")]
-pub type CardPsb = Result<opendmd_core::fx_psi::CardProgram, opendmd_core::psi::Error>;
+pub type CardPsb = Result<Vec<u8>, opendmd_core::psi::Error>;
 
 /// The playlist's catalog as `open_catalog` returns it.
 pub type Built = anyhow::Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)>;

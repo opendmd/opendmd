@@ -85,8 +85,10 @@ fn cases(w: &World) -> Vec<Case> {
     v.push(case("ok-brightness-ceiling", "max_brightness is 128", a(1, "brightness", r#""v":128"#), "ok", "forward"));
     v.push(case("ok-playlist", "", a(1, "playlist", r#""set":"consoles""#), "ok", "forward"));
     v.push(case("ok-formulas", "what the panel can play: no arguments", a(1, "formulas", ""), "ok", "forward"));
-    v.push(case("ok-formula-add", "a Formula's source and compiled file to come (5.7)", a(1, "formula-add", &fadd("rift-patrol", 10835)), "ok", "forward"));
-    v.push(case("ok-formula-part", "a part: base64url, at most 480 bytes", a(1, "formula-part", r#""id":3,"off":0,"data":"bmFtZSAiUmlmdCI""#), "ok", "forward"));
+    // (Well-formed adds and parts are refused until the panel checks the
+    // gallery's signature: `fadd::TAKEN`.)
+    v.push(case("unsigned-formula-add", "a Formula's source and compiled file to come (5.7): refused until signatures are checked", a(1, "formula-add", &fadd("rift-patrol", 10835)), "not-allowed", "forward"));
+    v.push(case("unsigned-formula-part", "a part (base64url, at most 384 bytes): refused, as every add is", a(1, "formula-part", r#""id":3,"off":0,"data":"bmFtZSAiUmlmdCI""#), "not-allowed", "forward"));
     v.push(case("bad-formula-add-stem", "a stem with a path in it", a(1, "formula-add", &fadd("../wifi", 10)), "bad-arg", "forward"));
     v.push(case("bad-formula-add-upper", "the stem rule: lower case", a(1, "formula-add", &fadd("Rift", 10)), "bad-arg", "forward"));
     v.push(case("too-big-formula-add", "a source past 16 KB", a(1, "formula-add", &fadd("rift", 16385)), "too-big", "forward"));
@@ -441,7 +443,7 @@ fn formula_lists() -> serde_json::Value {
     let mut case = |note: &str, card: bool, builtin: Vec<(String, String)>, cards: Vec<(String, String)>, cut: bool, next: Option<&str>| {
         // (`abi`/`psb` with a note that says so.)
         let add = note.starts_with("with abi");
-        let mut l = if add { proto::FormulaList::with_add(card, 3, true) } else { proto::FormulaList::new(card) };
+        let mut l = if add { proto::FormulaList::with_add(card, 3) } else { proto::FormulaList::new(card) };
         let nb = builtin.iter().take_while(|(s, n)| l.builtin(s, n)).count();
         let nc = cards.iter().take_while(|(s, n)| l.card(s, n)).count();
         let result = l.finish(cut, next);

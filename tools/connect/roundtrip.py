@@ -322,12 +322,26 @@ async def main():
         panel.card_formulas = []
         src = b'name "Rift patrol"\n' + b"-- " + b"x" * 1200 + b"\ngray(x)\n"
         psb = b"PSB" + bytes([panel.abi]) + b"\x00\x0bRift patrol" + b"\x01" * 300
+        # A panel takes no add until it checks the gallery's signature:
+        # well-formed adds and parts are not-allowed, nothing lands.
+        ok(not odc.ADDS_TAKEN, "adds are not taken (odc.ADDS_TAKEN false, as the core's fadd::TAKEN)")
+        r = await add(src, psb, id_=10)
+        await asyncio.sleep(0.3)
+        rp = await a.command("formula-part", {"id": 10, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
+        ok(r and r.get("err") == "not-allowed" and rp and rp.get("err") == "not-allowed" and not panel.files and panel.add is None,
+           f"red: an unsigned formula-add and a formula-part: not-allowed, nothing landed ({r}, {rp})")
+        await asyncio.sleep(0.3)
+        r = await a.command("formula-add", {"id": 16, "stem": "../x", "name": "x", "src_size": 1, "src_sha256": "00" * 32, "psb_size": 6, "psb_sha256": "00" * 32})
+        ok(r and r.get("err") == "bad-arg", "red: a malformed formula-add is still bad-arg first")
+        # The mock's own add flow, for the signed adds to come (no panel
+        # takes these as they are: odc.ADDS_TAKEN is set here only).
+        odc.ADDS_TAKEN = True
         r = await add(src, psb)
-        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and panel.files["rift-patrol"] == (src, psb) and "rift-patrol" in panel.unconfirmed,
-           f"formula-add: {len(src) + len(psb)} B in parts of {odc.ADD_MAX_PART}, landed as rift-patrol, unconfirmed ({r})")
+        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and panel.files["rift-patrol"] == (src, psb),
+           f"(mock flow) formula-add: {len(src) + len(psb)} B in parts of {odc.ADD_MAX_PART}, landed as rift-patrol ({r})")
         await asyncio.sleep(0.3)
         fr = ((await a.command("formulas")) or {}).get("r") or {}
-        ok(fr.get("abi") == panel.abi and fr.get("psb") is True and ["rift-patrol", "Rift patrol"] in (fr.get("card") or []), "formulas: abi and psb said, the added one listed")
+        ok(fr.get("abi") == panel.abi and "psb" not in fr and ["rift-patrol", "Rift patrol"] in (fr.get("card") or []), "formulas: abi said (no psb flag), the added one listed")
         r = await add(src, psb, id_=12)
         ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and list(panel.files) == ["rift-patrol"], "formula-add of the same source again: done, the same stem, nothing written")
         src2 = src.replace(b"gray(x)", b"gray(y)")
@@ -350,6 +364,7 @@ async def main():
         r = await add(b"other", psb, stem="other", id_=17, parts=False)
         ok(r and r.get("err") == "quota", "formula-add past the day's 16: quota")
         panel.add_day = []
+        odc.ADDS_TAKEN = False
         panel.card_formulas = [("my-road", "My road"), ("den-clock", "Den clock")]
         panel.formulas_cmd = False
         r = await a.command("formulas")
