@@ -9817,7 +9817,12 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     err = page.inner_text(item(1, ".dl-err"))
     check(t1 == "" and "title" in err.lower() and page.is_disabled("#dl-ok"),
           f"add dialog: {hashy.name} -> no title guessed, one required ('{err}', Add disabled)")
+    # (Two GIFs: one Folder and one Platform for both at the top, each GIF's
+    # own platform and author under its Details.)
+    check(page.input_value("#dl-plat-all") == "*" and not page.is_visible(item(1, ".dl-plat")),
+          "add dialog: two GIFs of different platforms -> Platform for all says 'Each its own', each one's is under Details")
     page.fill(item(1, ".dl-title"), "Toy Story")
+    page.click(item(1, ".dl-more summary"))
     page.select_option(item(1, ".dl-plat"), "OTHER")
     page.wait_for_timeout(300)
     check("“Toy”" in page.inner_text(item(1, ".dl-err")) and page.is_disabled("#dl-ok"),

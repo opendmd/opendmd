@@ -116,28 +116,45 @@ const CSS = `.dlg{position:fixed;inset:0;z-index:25;background:#000b;overflow:au
 .dl-item .form{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .dl-item .dl-title{width:100%}
 .dl-name{margin-top:8px;word-break:break-all}
+.dl-top{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:12px 0}
+.dl-more{margin-top:4px}.dl-more>summary{color:var(--mut);font-size:13px;cursor:pointer}.dl-more .form{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:4px 0}
 .dl-err{font-size:13px;margin-top:4px}
 .dl-item input.bad{border-color:var(--bad)}
 .dl-foot{justify-content:flex-end;margin-top:12px}
-@media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:minmax(0,1fr)}}`;
+@media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:88px minmax(0,1fr);gap:8px}.dl-item img{width:88px;margin-top:24px}}`;
 
 let styled = false;
 // The dialogs' stylesheet, once (Add GIFs' fitting step, js/fit.js, uses it too).
 export function dlgStyle() { if (!styled) { document.head.append(h('style', CSS)); styled = true; } }
 
 // One dialog, one or more items; resolves to the items' results on OK, or
-// null on Cancel.
-async function dialog({ title, intro, files, inits, ok, opts, keep }) {
+// null on Cancel. `batch` (Add GIFs): one Folder for them all, at the top,
+// and with more than one GIF one Platform for all as well; each GIF then
+// asks only for its title, its own platform and author (and the name it
+// gets on the card) folded under Details. Edit details shows every field.
+async function dialog({ title, intro, files, inits, ok, opts, keep, batch }) {
   const m = await art();
   dlgStyle();
   const listing = listings(opts.categories);
   const urls = [];
   const plats = [...new Set([...m.platforms(), ...(opts.platforms || [])])].sort();
+  const platOpts = () => [h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) || p))];
   let cats = [...new Set([...opts.categories, ...inits.map((i) => i.category).filter(Boolean)])].sort(byNice);
+  const folder = batch && catSelect();
+  const many = batch && inits.length > 1, same = new Set(inits.map((i) => i.platform || ''));
+  // (Each its own: the GIFs' names say different platforms.)
+  const allPlat = many && h('select', { id: 'dl-plat-all', 'aria-label': 'Platform for all' }, same.size > 1 && h('option', { value: '*' }, 'Each its own'), platOpts());
+  if (allPlat) {
+    allPlat.value = same.size > 1 ? '*' : [...same][0];
+    allPlat.onchange = () => { if (allPlat.value !== '*') for (const it of items) it.platform.value = allPlat.value; refresh(); };
+  }
   const items = inits.map((init, i) => row(init, i, files?.[i]));
+  if (folder) fillCats(folder, inits[0]?.category);
   const okBtn = h('button.pri', { id: 'dl-ok', disabled: true, onclick: () => done(items.map((it) => it.out)) }, ok);
   const el = h('div.dlg', { id: 'dl', role: 'dialog', 'aria-modal': 'true' },
-    h('div.card', h('h2', title), h('p.muted', intro), items.map((it) => it.el),
+    h('div.card', h('h2', title), h('p.muted', intro),
+      batch && h('div.form.dl-top', h('label.stack', 'Folder', folder), allPlat && h('label.stack', 'Platform', allPlat)),
+      items.map((it) => it.el),
       h('div.row.dl-foot', h('button', { id: 'dl-cancel', onclick: () => done(null) }, 'Cancel'), okBtn)));
   let done;
   const result = new Promise((res) => { done = (v) => { el.remove(); removeEventListener('keydown', esc); for (const u of urls) URL.revokeObjectURL(u); urls.length = 0; urls.gone = 1; res(v); }; });
@@ -148,11 +165,25 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   refresh();
   return result;
 
+  // A Folder select; New folder… asks for a name and adds it to every one.
+  function catSelect() {
+    const sel = h('select', { className: 'dl-cat', 'aria-label': 'Folder' });
+    sel.onchange = () => {
+      if (sel.value === '\n') {
+        const c = (prompt('Name of the new folder') || '').trim();
+        if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
+        for (const x of folder ? [folder] : items.map((it) => it.category)) fillCats(x, x === sel ? c || x.cat : x.cat);
+      }
+      refresh();
+    };
+    return sel;
+  }
+
   function row(init, i, file) {
     const title = h('input', { type: 'text', className: 'dl-title', value: init.title || '', placeholder: 'What it shows', required: true, 'aria-label': 'Title' });
-    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, h('option', { value: '' }, 'None'), plats.map((p) => h('option', { value: p }, m.consoleName(p) || p)));
+    const platform = h('select', { className: 'dl-plat', 'aria-label': 'Platform' }, platOpts());
     platform.value = init.platform || '';
-    const category = h('select', { className: 'dl-cat', 'aria-label': 'Folder' });
+    const category = folder || catSelect();
     const author = h('input', { type: 'text', className: 'dl-author', value: init.author || '', placeholder: 'optional', 'aria-label': 'Author' });
     const name = h('div.cap.mono.dl-name');
     const err = h('div.bad.dl-err');
@@ -162,36 +193,28 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     const img = src || init.path ? h('img', src ? { src, alt: '' } : { alt: '' }) : h('div');
     // (The web demo's card is in memory: the GIF's bytes, as an object URL.)
     if (!src && init.path) app.previewBytes(init.path).then((b) => { if (!urls.gone) urls.push(img.src = URL.createObjectURL(new Blob([b], { type: 'image/gif' }))); }, () => {});
+    const plat = h('label.stack', 'Platform', platform), by = h('label.stack', 'Author', author);
+    // Details: what a GIF rarely needs, and the name it gets on the card.
+    const more = h('details.dl-more', h('summary', 'Details'), h('div.form', many && plat, batch && by), file && h('div.cap.mono', file.name), name);
     const it = {
-      title, platform, category, author, init, file, out: null,
+      title, platform, category, author, init, file, out: null, more,
       el: h('div.dl-item', { 'data-i': i },
         img,
         h('div',
-          file && h('div.cap.mono', file.name),
-          h('div.form',
-            h('label.stack', 'Title', title), h('label.stack', 'Platform', platform),
-            h('label.stack', 'Folder', category), h('label.stack', 'Author', author)),
-          name, err)),
+          h('div.form', h('label.stack', 'Title', title), !many && plat, !batch && h('label.stack', 'Folder', category), !batch && by),
+          err, more)),
       name, err,
     };
-    fillCats(it, init.category);
+    if (!folder) fillCats(category, init.category);
     for (const c of [title, author]) c.addEventListener('input', refresh);
-    platform.onchange = refresh;
-    category.onchange = () => {
-      if (category.value === '\n') {
-        const c = (prompt('Name of the new folder') || '').trim();
-        if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
-        for (const x of items) fillCats(x, x === it ? c || x.cat : x.cat);
-      }
-      refresh();
-    };
+    platform.onchange = () => { if (allPlat && allPlat.value !== platform.value) allPlat.value = items.every((x) => x.platform.value === platform.value) ? platform.value : '*'; refresh(); };
     return it;
   }
 
-  function fillCats(it, value) {
-    clear(it.category, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
-    it.category.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
-    it.cat = it.category.value;
+  function fillCats(sel, value) {
+    clear(sel, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
+    sel.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
+    sel.cat = sel.value;
   }
 
   // Every item's name: the next free number, and no two alike in the dialog.
@@ -201,8 +224,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     const taken = new Set();
     let bad = 0;
     for (const it of items) {
-      it.cat = it.category.value;
-      const c = it.cat;
+      const c = it.category.cat = it.category.value;
       const f = { title: it.title.value.trim(), platform: it.platform.value || null, category: c, author: it.author.value.trim() || null, flags: it.init.flags || [], ordinal: null };
       it.author.placeholder = f.platform ? 'optional' : 'optional · needs a platform';
       const l = await listing(c);
@@ -210,8 +232,10 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
       const { path = null, why = '' } = pickName(m, f, l, keep, taken);
       it.out = path && { file: it.file, category: c, name: base(path), path };
       it.title.classList.toggle('bad', !f.title);
-      it.name.textContent = path ? `→ ${base(path)}${app.device ? ` in ${niceName(c)}` : ''}` : '';
+      it.name.textContent = path ? `Its name on the card: ${base(path)}${app.device ? ` in ${niceName(c)}` : ''}` : '';
       it.err.textContent = why;
+      // A problem with what Details holds (the platform, the author): open.
+      if (why && why !== WHY.title && !it.opened) it.opened = it.more.open = true;
       Object.assign(it.el.dataset, { name: path ? base(path) : '', error: why ? 'yes' : '' });
       if (path) taken.add(lc(path)); else bad++;
     }
@@ -256,8 +280,8 @@ export function addDialog(files, opts) {
   const n = files.length;
   return dialog({
     title: n > 1 ? `Add ${n} GIFs` : 'Add a GIF',
-    intro: 'A GIF’s title, platform and author are its file name on the card: that is what the Library lists, search finds and playlists filter by.',
-    files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF',
+    intro: n > 1 ? 'Give each a title: the Library lists them by title, folder and platform.' : 'Give it a title: the Library lists it by title, folder and platform.',
+    files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF', batch: true,
     // (inits: a GIF from the website's Studio, or a Formula's Save as GIF, which names its category)
     inits: files.map((f, i) => ({ ...guess(f.name), category: opts.category, ...opts.inits?.[i] })),
   });
