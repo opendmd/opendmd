@@ -2,17 +2,19 @@
 
 ![Formulas: the bundled ones, and one playing in its details](../images/formulas.png)
 
-A Formula is a few lines of maths that draw on the panel, every pixel at
-once. Change a number and the picture changes as you type. Formulas are
-written in **Psi** (Ψ), OpenDMD's small language for the panel's pixels.
-You don't need to know it to start. Open one, drag a number and watch.
+A Formula is a few lines of text that the display turns into a moving
+picture. The lines say what colour a pixel is, from where it is on the
+panel and what the time is, and the display works that out for every pixel
+of every frame. Formulas are written in a small language called **Psi**
+(Ψ). You can play and change the ones that come with OpenDMD without
+learning it: in the editor, the picture changes as you edit a number.
 
 Open **Formulas** (Ψ) in the web app's menu. Formulas work in the
 [online demo](https://opendmd.dev/demo/) too, with no display at all.
 
-To write your own, start with [Make a Formula](psi-1.md). [How Psi
-thinks](psi.md) explains the ideas, and [The editor](editor.md) has every
-button and key.
+To write your own, start with [Make a Formula](psi-1.md). [How a Formula
+is run](psi.md) explains what the display does with one, and [The
+editor](editor.md) covers every button and key.
 
 ## The Formulas view
 
@@ -82,8 +84,8 @@ because only a display draws them there.
 
 A Formula can draw over a GIF instead of replacing it, with scanlines, a
 colour grade or a clock in the corner. The bundled looks are made this
-way, and the gallery has more. [How Psi thinks](psi.md#over-a-gif) shows
-how to write one.
+way, and the gallery has more. [Over a GIF](psi.md#over-a-gif) shows how
+to write one.
 
 In the editor and in a Formula's details, such a Formula is drawn over a
 sample picture. **Pick a GIF…** draws it over one of the GIFs in your

@@ -1,10 +1,13 @@
 # Psi for models: writing Formulas
 
-A compact, exact reference for a language model (or a person) writing
-**Formulas** in **Psi**, OpenDMD's language for a 128 × 32 LED panel. Every
-code block marked `psi` below is compiled by the tests
-(`opendmd-psi/tests/models.rs`); every worked example's frames are checked
-against golden hashes, so this document cannot drift from the language.
+A reference for a language model (or a person) writing
+**Formulas** in **Psi**, OpenDMD's language for a 128 × 32 LED panel. The
+tests (`opendmd-psi/tests/models.rs`) compile every code block marked `psi`
+below, check that each error block fails with the sentence in its first
+comment, check the cost table against the compiler's estimates, and check
+two frames of each worked example against golden hashes. They do not check
+the prose or the comments: a description of a picture can be wrong while
+its frames still match.
 Users see the words *Formula* and *GIF*; Psi is the language's name.
 
 **The feedback loop.** Write a candidate, then run
@@ -24,19 +27,21 @@ when the formula draws over what is under it). On a compile error it prints
 reference's error index, `/dev/psi/errors/#E###`), the line and carets, and fails:
 the tool itself exits 1 (2 for a missing file or a bad option), and
 `make psi-check` then exits 2, as make does for any failed command.
-Look at the sheet: the numbers say it runs, only the picture says it is
-right. Aim for **≤ 8 ms** (light or medium).
+Look at the sheet as well as the numbers: a formula can compile and be
+light and still draw the wrong picture. Aim for **≤ 8 ms** (light or medium).
 
 ## 1. The model
 
-A formula is evaluated **for every pixel, every frame**. The panel draws
+A formula is written as if it were evaluated **for every pixel, every
+frame**; the compiler works each value out only as often as its inputs
+change (section 13). The panel draws
 a frame every 2nd refresh of its scan (a refresh is about 8 ms: 100 to 125
 a second, by panel), every refresh with `smooth` when the formula is light
 enough, and fewer when frames take too long. It is a few lines of arithmetic ending in a colour. Per pixel there
 are no loops, arrays, strings, recursion or state between frames: each frame
 is a pure function of the pixel's position, the time, the clock, three
-sliders, and (optionally) the picture under it. For things that are not "each
-pixel decides for itself" — stars, wireframes, particles — a `draw { }` block
+sliders, and (optionally) the picture under it. For things that are not a function
+of the pixel's position (stars, wireframes, particles), a `draw { }` block
 runs **once a frame** before the pixels, loops over small `table`s and draws
 lines and dots into a canvas the pixels read back as `ink` (section 10).
 
@@ -53,11 +58,11 @@ Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
 Time `t` is the frame's time, in seconds into the loop. Which instants are
 drawn depends on the display (the panel's refresh, the rate it holds the
 formula to; the browser's preview and a saved GIF have their own), so
-write motion as a function of `t`, never as a count of frames. The loop
-wraps at exactly its length on the panel racing its scan (from OpenDMD
-1.1); a saved GIF, and the panel when it can't follow its scan (a `rate`
-layer, the glow), play whole 20 ms frames (40 with `fps 25`), so a loop
-off that grid comes out up to a frame short there (`psi check` notes it). `loop N` is also
+write motion as a function of `t`, never as a count of frames. On the
+panel the loop wraps at exactly its length. A saved GIF, and the panel
+while it plays a `rate` layer or the glow, play whole 20 ms frames, so a
+loop that is not a multiple of 0.02 s comes out up to a frame short there
+(`psi check` notes it). `loop N` is also
 the least time the formula plays for in a playlist, and the length of a GIF
 saved from it. **`phase`** is where the frame is in the loop, 0 to 1:
 exactly `t / N` (the same steps, the same frames), so write `sin(phase)`,
@@ -166,7 +171,7 @@ computer.
 | `t` | the frame's time, seconds into the loop (which instants are drawn is the display's); with `loop forever`, since the formula started, growing without end (section 11) | frame |
 | `seed` | `loop forever` only: 0..1, the same for a whole play, a new one each time it plays (section 11) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
-| `a`, `b`, `c` | the controls, in the order the `control` lines declare them (`a` is the first one's value; see below); one read without a `control` line is a slider 0..1 named after it, starting at 0 (so it reads 0 unless set) | frame |
+| `a`, `b`, `c` | the controls, in the order the `control` lines declare them (`a` is the first one's value; see below); one read without a `control` line is a slider 0..1 named after it, starting at 0 (so it reads 0 unless set; `psi check` previews it at 0.5, `--a 0` shows the panel's default) | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
@@ -205,8 +210,8 @@ dotted one can't, nor `sun`, `moon` or `replay` alone. A formula reads 24 of the
 location): a formula can follow the real sun when it can and its own cycle
 otherwise.
 
-`cx cy r angle` are exactly the formulas after their colons: the same
-steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
+`cx cy r angle` compile to exactly the formulas after their colons, with
+the same cost. Alone (not over a GIF), `ur ug ub ul`
 are 0. **Any built-in value or function name may be set as your own value**
 (`b = 0.5`, `r = 3`, `len = 2`): from then on the name is yours (a call,
 `len(…)`, is still the function; so are `since(…)`, `was(…)`, `under(…)`
@@ -216,9 +221,9 @@ for table fn`), palette names and `sun moon replay` can't be names, and a
 
 ### What a formula says it is: the declarations
 
-A formula may start with lines that say what it is. They are statements,
-not comments, so they travel with it everywhere (the panel, a playlist, a
-look, a share link), and the web app builds its controls from them.
+A formula may start with lines that say what it is. They are part of the
+formula's text, so the panel, a playlist, a look and a share link all
+read them, and the web app builds its controls from them.
 
 ```psi
 name "Spin"
@@ -246,8 +251,8 @@ gray(smoothstep(0.8, 1, k) * (r < 0.45))
   value). A link or a playlist line keeps values as `&a=…`; a slot it
   leaves out plays at the declared default.
 - **`name "…"`** (60 characters) and **`about "…"`** (120): what it is
-  called and one line about it. Text in quotes is allowed on these three
-  lines only (no `"`, `<`, `>`, `\` or tabs inside).
+  called and one line about it. Text in quotes goes only on these three
+  lines and in `print(…)` (no `"`, `<`, `>`, `\` or tabs inside).
 - **`look [blend] [amount]`** says the formula may be the panel's look,
   drawn over every GIF with that blend (over, screen, add, multiply, max,
   min; over when none) and amount (0 to 100; 100 when none) — section 8.
@@ -332,7 +337,7 @@ The last line is the colour:
 |---|---|
 | `rgb(r, g, b)` | each 0..1, clamped, rounded to 0..255 |
 | `hsv(h, s, v)` | hue in turns (wraps: `frac`), saturation and value clamped 0..1 |
-| `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps) |
+| `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps; `pal(gray, k)` is smooth, as `gray(k)`) |
 | `pal(P, k) * v` | the palette's colour with each channel times v (a light, a fog): one step |
 | `cycle(P, v, s)` | palette cycling: entry `(floor(v·32) + floor(s·32)) mod 32` of P (wraps; P not `gray`); `s` per frame or per row |
 | `gray(v)` | black to white; a bare value `v` means `gray(v)` |
@@ -357,21 +362,22 @@ nothing you wrote.
 
 ```psi
 palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
-pal(dusk, floor(y*5)/4)      -- five bands, bottom to top
+pal(dusk, floor(y*5)/4)      -- five bands, dark at the top to light at the bottom
 ```
 
 **Palette cycling.** `cycle(P, v, s)` (also `* k` and `cycle(P, v, s,
 cover)`, as `pal`) is palette P turned by `s`: entry `(floor(v·32) +
-floor(s·32)) mod 32`, so both wrap (where `pal` clamps). `s` may not vary
-along a row (E931: a value of `t`, another per-frame value, or a row value
-like `py/40`, which turns the palette per row: copper bars). P is a
+floor(s·32)) mod 32`, so both wrap (where `pal` clamps). `s` may be a per-frame value
+(`t/8`) or a per-row one (`py/40` turns each row differently, as in copper
+bars), not a per-pixel one (E931). P is a
 built-in palette or the formula's own, never `gray` (E932); each distinct
 (P, s) takes one of the three palettes `pal` and `cycle` read, with the
 formula's own they name (E933). The cost: the turn is a row step (a 32-entry copy,
 ~20 µs a frame), the pixel pays `frac(v)` and a palette look-up; with `v`
-the pixel's position alone (no `t`, no slider) the still cache keeps
-`frac(v)` and a frame is ~0.6-0.9 ms — the idiom for plasma, rings,
-water, fire drawn every refresh (`smooth`). Write the motion into `s`, not `v`; keep `s` a
+the pixel's position alone (no `t`, no slider) the panel works `frac(v)`
+out once and keeps it (the still cache, section 13) and a frame is
+~0.6-0.9 ms, light enough for `smooth`. Use it for plasma, rings, water
+and fire that move every refresh. Put the motion in `s` and keep `v` still; keep `s` a
 whole number of turns over the loop.
 
 ```psi
@@ -399,10 +405,10 @@ two scenes is `+ 16·mask` inside the index, not a second palette. A tween
 palette has 32 colours (`sky.n` is 32, `sky.step` one entry) and no named
 colours; paint can't take it (E938: its colours change every frame). It
 counts as one of the three palettes `pal` and `cycle` read when they read
-it; a palette only tweens read takes none of those (a store of 8 holds
-the formula's palettes of colours: E923; one in a half takes half a
-place). Each tween is a step once a frame (~6 µs, the estimate counts it):
-dusk, dawn and an environment's colours sliding are free per pixel.
+it; a palette only tweens read takes none of those. A formula has at
+most 8 palettes of colours of its own (E923); one used only in a tween's
+half counts as half. Each tween is a step once a frame (~6 µs, the
+estimate counts it), so it adds nothing per pixel.
 
 ```psi
 loop 8
@@ -500,10 +506,9 @@ pixel. A formula that does neither replaces the GIF (and is refused as a
 GIF look as it is). Alone, the picture under it is black. Looks are capped
 at 12 ms (a look over 8 ms is drawn every 4th refresh, about 30 a second). **Any** formula
 can be a look: a **`look screen 40`** line at its top (section 4) says how it
-goes on — the compiler puts the formula's colour on with that blend and
-coverage (`opendmd_psi::compile_look`), so a model never writes that
-itself. A formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
-`smooth` line is not used over a GIF.
+goes on. The compiler applies that blend and amount to the formula's
+colour, so the formula itself is written as if alone. A formula with layers of its own goes over only (`look` or `look over 60`). A look is drawn about 50 times a second over a GIF (25 when it takes more than 8 ms a frame): a formula's
+`smooth` line is not used there.
 
 **Moving the picture: `under(x, y)`.** In a colour expression (the last
 line, like `#f80`), `under(x, y)` is the picture under the formula at pixel
@@ -518,10 +523,11 @@ under(px + floor(sin(t*2)*2), py)
 ```
 
 Pixelate: `under(floor(px/4)*4 + 2, floor(py/4)*4 + 2)`; mirror:
-`under(127 - px, py)`; a wave: `under(px + sin(py/16 + t/2)*3, py)`; a
-colour fringe: `rgb(under(px - 1, py) … )` is not allowed (rgb takes
-values): write `mix(under(px - 1, py), under(px + 1, py), 0.5)` or read the
-channels at the pixel with `ur ug ub`.
+`under(127 - px, py)`; a wave: `under(px + sin(py/16 + t/2)*3, py)`.
+`rgb(under(…), k)` gives it a coverage, but a colour can't take its red from
+one `under` and its blue from another: for a colour fringe write
+`mix(under(px - 1, py), under(px + 1, py), 0.5)`, or read the channels at
+the pixel with `ur ug ub`.
 
 ## 9. Functions
 
@@ -563,7 +569,7 @@ plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)
   line, no layers or draw). Anything shared or saved is the written-out
   text. A model writes `fn` directly.
 
-Masks and crossfades need nothing more: a crossfade is `mix(a, b, k)` of
+A crossfade is `mix(a, b, k)` of
 two colour functions, or a second layer whose coverage moves with `t`; a
 mask is a coverage taken from a function's value (examples 23 and 24).
 
@@ -605,15 +611,15 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   `pick`: `line(…, 6/16)` for the hills, then `pal(P, pick(ink(16), …))`.
   One step a pixel (~90 ns), no `+ ½` offsets, no `floor`.
 - **Tables**: `table V = -1, 1, 0.5` at the top of the formula,
-  numbers only, 256 in all; `V[k]` is number `floor(k)` counting from 0, and
+  numbers only, up to 256 a table (1,024 in all tables and sprites); `V[k]` is number `floor(k)` counting from 0, and
   0 outside the table. Any level: per pixel `V[px % 3]` is one step, like
   `pick`. A comma may end a line and the numbers go on.
 - **Colour comes from the pixels**: `pal(ice, ink)`, `#40c0ff * ink`,
   `hsv(x, 1, ink)`, `layer screen { gray(ink) }` over a GIF — the canvas
   holds one number a pixel, the colour is the last line's.
 - **Every frame starts empty**: nothing carries over from one frame to the
-  next (trails are the panel's glow's job), so a frame is still a pure
-  function of `t`.
+  next, so a frame depends only on `t` and the other inputs. (The panel's
+  glow setting can add trails when it plays.)
 
 ```psi
 -- twelve spokes turning, brighter at the rim
@@ -629,8 +635,8 @@ hsv(x, 0.6, ink)
 
 ### Painting: colours, the last painted wins
 
-The way to draw a **scene** (things with their own colours: a sun, a car, a
-score) is to paint. Paint calls go inside `draw { }` and end in a colour:
+To draw a **picture** of things with their own colours (a sun, a car, a
+score), paint it. Paint calls go inside `draw { }` and end in a colour:
 `#rgb`/`#rrggbb`, `pal(P, v)` or `gray(v)` (never `rgb()` or a number). The
 paint canvas is laid **over** the colour line (and over every layer), and
 where two things are painted on the same pixel **the later wins**: paint
@@ -689,10 +695,11 @@ cloud field never comes back to where it was. Each time it plays it
 starts at `t = 0`, with a new `seed` (0..1, the same for the whole play):
 add `seed*1000` to a distance to start somewhere else each time.
 
-`t` here is kept exactly, however long it plays (to 1/65,536 s, for
-millions of years), but a value that grows without end can only go where it
-can come back to an ordinary number. Once a frame — `t`, and what you make
-of it with values that are the same for every pixel — it may be:
+`t` here is kept exactly (to 1/65,536 s) however long it plays. A value
+made from it is checked by the compiler: it must end up in one of the
+forms below, which bring it back into the number range. Once a frame (`t`,
+and what you make of it with values that are the same for every pixel) it
+may be:
 
 - added to, taken from, multiplied or divided by values the same all frame
   (`t*0.15 + seed*1000`, `t/8`, `t*a`): still growing;
@@ -723,7 +730,8 @@ glow = smoothstep(0, 5, t)         -- a fade-in over the first five seconds
 hsv(ahead + x*0.2, 0.8, glow*noise(x*8 + t, y*4, u))
 ```
 
-Without an envelope or a blend at a loop's seam, a drive here has none.
+A `loop forever` formula has no seam, so it needs no fade or blend where
+a loop would wrap.
 
 ## 12. Limits
 
@@ -767,13 +775,13 @@ of the VM's), and where its kernel takes the formula `psi check`, the
 editor's light / medium / heavy and the gallery's 10 ms count the JIT's
 estimate, the VM's shown beside it as "without the JIT" (`psi check` says
 when the JIT refuses one, and why: then the VM's counts). **The panel's
-refusals count the VM's**: 40 ms (a `smooth` one past 32 ms is drawn every 2nd refresh instead) and 12 ms for a look,
+refusals count the VM's**: 40 ms, and 12 ms for a look,
 by the plain VM estimate with no still cache, because the panel may have
 to draw any formula that way (the JIT off, short of memory, or failing
 its self-check; the cache refused). A formula can rate light with the
 JIT and still be refused; `psi check` then prints `refused:` and exits 1,
 and the editor says "Too heavy for the panel". The JIT's estimate is
-fitted to the panel's effect path (−13 % to +11 % on the measured
+fitted to how the panel draws a Formula (−13 % to +11 % on the measured
 Formulas); the frame the panel reports while it plays adds racing the
 beam and the writes (~15 % more, the VM's the same).
 **Hoisting is automatic**: a value is computed as rarely as its inputs
@@ -842,7 +850,7 @@ change the draw stage: it costs the same either way.
 a checker `(floor(u) + floor(v)) % 2` (~75 ns saved), `a*k + c` (~20),
 and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
 ~130 with a per-pixel `k`), `pal(P, pick(m, …))` (~50), `pal(P, ink)` and
-`gray(ink)` (~70). Nothing to write differently: the panel finds them.
+`gray(ink)` (~70). The compiler combines these by itself; write them as usual.
 
 **Two things are worked out less often than per pixel, by themselves**
 (the same pictures either way):
@@ -860,7 +868,7 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   the most (each at least ~0.4 µs a pixel), and the panel works them out
   once and keeps them (16 KB of its memory each) while it can spare the
   memory; then they and the steps only they need cost nothing a frame. It is
-  an effect's only (not a look's: a look is estimated without it), and the
+  for a Formula played on its own only (a look is estimated without it), and the
   panel may let it go at any time (then every step runs, slower, the same
   bytes). `psi check` prints both estimates. So a tunnel's depth and angle
   are free, but `depth*a` is not still (a slider moves): keep the sliders
@@ -879,8 +887,8 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   value) is ~470 ns, half the 855 of a moving one.
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (drawn every 4th refresh or less often; `smooth` needs ≤ 5 ms
-for every refresh, else it is drawn every 2nd; the panel refuses past 40 ms on the VM, 12 ms for a look, and the worked
-examples here ≤ 10). Division by a constant is a
+for every refresh, else it is drawn every 2nd; the panel refuses past 40 ms on the VM, 12 ms for a look). The worked
+examples here are ≤ 10 ms; example 35 rates heavy. Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
 
@@ -901,9 +909,9 @@ panel budgets for two scenes at once: a transition shows two). `psi check
 --ms …` also costs each frame listed as the panel draws it: every scene by
 the rows its `when` is on in that frame (a scene `when city * (py < 13)`
 costs 13 rows' worth), the draw stage's arms that frame takes, and the
-worst of them. An
-environment cycle is the idiom — each place a scene, the colour reading
-all of them, the weights making at most two non-zero at a time:
+worst of them. To cycle through places, make each place a scene, read
+all of their names in the colour line, and choose the `when` conditions so
+that at most two are on at a time:
 
 ```psi
 loop 8
@@ -936,7 +944,7 @@ rgb(lit, wave*0.3 + lit*0.5, wave)
 - **Circles**: `r` (or `len(px - 63.5, py - 15.5)` in pixels); a disc
   `step(r, 0.3)`; soft edge in pixels: `smoothstep(rad + 0.5, rad - 0.5, d)`.
   A circle about another point: `len(cx - 1, cy)`. Spokes and sweeps:
-  `angle` (`frac(angle - t/4)` turns once a loop).
+  `angle` (`frac(angle - phase)` turns once a loop).
 - **Bands and cells**: `floor(px/8)`, `px % 8`, `frac(x*4)`; checker:
   `(floor(px/8) + floor(py/8)) % 2`.
 - **Random per column/row/pixel**: `hash(px, 7)`, `hash(py, 3)`,
@@ -991,8 +999,8 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
   per-frame `sin`/`cos` and project (`64 + x*36/(z + 128)`), then `line`
   with ink from the depth. Example 32.
 - **Ranges**: keep `hsv`'s value and `rgb`'s channels in 0..1 by design
-  (`*0.5 + 0.5` maps −1..1 to 0..1); out-of-range is clamped, so overshoot
-  just flattens.
+  (`*0.5 + 0.5` maps −1..1 to 0..1); a value outside 0..1 is clamped to 0
+  or 1.
 
 ## 15. Common mistakes
 
@@ -1084,7 +1092,7 @@ gray(y)
 
 ```psi error
 -- error: the last value of `digit` is a font: normal (the default), small or bold
-gray(digit(3, px % 5, 31 - py, 2))
+gray(digit(3, px % 5, py, 2))
 ```
 
 ```psi error
@@ -1181,7 +1189,8 @@ gray(ink)
 
 Mistakes that compile but look wrong (the contact sheet shows them):
 
-- `y` is **up**: `y = 0` is the bottom row.
+- Treating `y` as up: `y = 0` is the **top** row, so a sky is `y < 0.5`
+  and the ground `py > 24`.
 - Forgetting the 4:1 aspect: `len(x - 0.5, y - 0.5)` makes ellipses
   (`r` doesn't).
 - `cx` and `cy` are in panel heights: `cx` reaches ±2, `cy` only ±0.5.
@@ -1190,13 +1199,16 @@ Mistakes that compile but look wrong (the contact sheet shows them):
 - `step(v, edge)` instead of `step(edge, v)`: the comparison is reversed.
 - A loop that jumps: something moved by `t/3` under `loop 4`.
 - `pal(rainbow, frac(…))` shows a black band where it wraps; use `hsv`.
-- `hash(x, y)` is random per *bit* of x: use `hash(px, py)` for per-pixel.
+- `hash` hashes the exact number: `hash(x, y)` and `hash(px, py)` are both
+  random per pixel but give different patterns, and scaling an input
+  (`hash(x*2, y)`) gives a new one. For blocks, hash whole numbers
+  (`hash(floor(px/4), floor(py/4))`).
 - `sin` is in turns: `sin(x*6.28)` is about six waves across, not one.
-- Slow `pal` ramps band (32 steps); `rgb`/`hsv` are smooth.
+- Slow `pal` ramps band (32 steps); `rgb`/`hsv` and `pal(gray, …)` are smooth.
 - Bright everything: `add` and `screen` layers only lighten.
 - A `draw { }` that shows nothing: no `ink` in the colour (it is then left
-  out), or y counted from the top (`line` and `dot` count **up** from the
-  bottom, as `py`), or every line off the panel.
+  out), or every line off the panel (`line` and `dot` take pixel
+  coordinates, y down from the top, as `py`).
 - `x`, `y`, `i` and `r` are built in: name a star's place `sx`, `hy`, …
 
 ## 16. Worked examples
@@ -1217,9 +1229,12 @@ gray(x)
 ### 2. Still sky
 
 A colour that depends only on `y`: computed once per row, nearly free.
+As written it is orange at the top and deep blue at the bottom (y counts
+down), an upside-down sunset; swap the ends (`1 - y` for `y`) for orange at
+the horizon.
 
 ```psi example=sunset-sky
--- a still sky: deep blue at the top to orange at the horizon
+-- a still sky: orange at the top to deep blue at the bottom
 rgb(1 - y*0.8, 0.45 - y*0.3, 0.2 + y*0.6)
 ```
 
@@ -1245,7 +1260,7 @@ mix(#001a4d, #e54d4d, cell)          -- navy where cell is 0, red where 1
 
 ### 5. Plasma
 
-Several waves summed into a hue: the classic.
+Several waves summed into a hue.
 
 ```psi example=plasma
 loop 8
@@ -1265,18 +1280,25 @@ pal(rainbow, frac(r*1.5 - t/2))
 
 ### 7. Noise fire
 
-`noise` scaled and moving up, fading with height, through a palette.
+`noise` scaled, moving and fading with height, through a palette. As
+written it is hottest at the **top** and the noise moves **down** (y counts
+down, so `y*3 - t` moves features towards larger y). For fire rising from
+the bottom, use `y*3 + t` and a factor that grows with `y`, such as
+`(y*1.2 - 0.2)`.
 
 ```psi example=noise-fire
 loop 4
--- noise rises (y*3 - t*... moves it up); hotter at the bottom
+-- the noise moves down (y*3 - t); hottest at the top
 heat = noise(x*10, y*3 - t, t/2) * (1.4 - y*1.2)
 pal(fire, clamp(heat, 0, 1))
 ```
 
 ### 8. Rain
 
-Per-column randomness with `hash(px, …)`.
+Per-column randomness with `hash(px, …)`. As written the drops move
+**up** the panel, each a bright head with a tail below it: `frac(y + t*…)`
+grows as y shrinks. For rain falling down, use `frac(y - t*…)` and put the
+bright end at the bottom of each streak.
 
 ```psi example=rain
 loop 4
@@ -1302,11 +1324,14 @@ gray(max(0, 1 - p*(14 - speed*3)) * speed/3)
 
 ### 10. Bouncing ball
 
-A shape whose position is worked out once a frame, with a soft edge.
+A shape whose position is worked out once a frame, with a soft edge. As
+written the bounce (the sharp turn of `abs(sin)`) is at `by = 4.5`, the top
+of the panel, so the ball bounces off the top edge; `by = 26.5 -
+22*abs(sin(t/2))` bounces it off the bottom.
 
 ```psi example=bouncing-ball
 loop 2
--- the ball's centre in pixels: across and back with tri, two bounces with abs(sin)
+-- the ball's centre in pixels: across and back with tri, two bounces off the top with abs(sin)
 bx = 63.5 + 55*tri(t/2); by = 4.5 + 22*abs(sin(t/2))
 d = len(px - bx, py - by)
 -- 1 inside 3.5 px, 0 past 4.5 px: a soft-edged disc
@@ -1344,7 +1369,7 @@ rgb(1, band*0.5 + 0.5, band*0.5 + 0.5)
 Following the clock: a bar filling every minute, with ticks.
 
 ```psi example=seconds-bar
--- a bar that fills across the panel every minute; the ticks mark 5 s
+-- a bar that fills across the panel every minute; ticks every 21 px (about 10 s) along the top
 s = second/60
 fill = step(x, s)
 tick = step(px % 21, 0.5) * step(py, 3)
@@ -1356,7 +1381,7 @@ rgb(fill*0.2 + tick, fill*0.8 + tick, fill + tick)
 Hours as lit dots and minutes as a bar: comparisons as masks.
 
 ```psi example=dot-clock
--- top: twelve dots, the hours lit; bottom: a bar, one pixel a minute
+-- top: a bar, one pixel a minute; bottom: twelve dots, the hours lit
 hr = hour % 12; mn = minute
 dot = step(abs(px % 10 - 4.5), 2.5) * step(abs(py - 22), 3) * step(px, 119)
 lit = step(floor(px/10), hr - 0.5)
@@ -1430,7 +1455,7 @@ A shape with coverage: only the dot covers the GIF.
 
 ```psi example=corner-badge
 loop 2
--- over a GIF: a pulsing dot in the top-right corner; elsewhere the GIF shows
+-- over a GIF: a pulsing dot in the bottom-right corner; elsewhere the GIF shows
 d = len(px - 121, py - 25)
 k = smoothstep(3.5, 2.5, d)
 layer { rgb(#ff3333, k*(0.7 + 0.3*sin(t/2))) }
@@ -1531,11 +1556,10 @@ lit = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
 hsv(x - t/4, 0.8, lit)                -- a rainbow sliding through, once a loop
 ```
 
-### 27. Big clock (the showcase)
+### 27. Big clock
 
-What only a formula can do, readable in two seconds: the real time, in
-digits that fill the panel, with a seconds bar that crosses the bottom
-row once a minute. The digits are named once a frame (`h1 h2 m1 m2`);
+The real time in four digits that fill the panel, with a seconds bar that
+crosses the top row once a minute. The digits are named once a frame (`h1 h2 m1 m2`);
 per pixel, which digit comes from `px` and its value from `pick`, the
 font's column and row from the pixel's offset in the digit (each font
 pixel 8 × 6 px: the bold font's 3 × 5 digits make 24 × 30), and `digit`
@@ -1553,7 +1577,7 @@ k = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)
 n = pick(k, h1, h2, m1, m2)    -- and its value
 col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
 row = floor(py/6)              -- its row from the top, 0 to 4 (5: below)
-bar = py < 1                   -- the bottom row is the seconds bar
+bar = py < 1                   -- the top row is the seconds bar
 lit = bar ? px < end : digit(n, col, row, bold)
 -- a rainbow drifting through the digits, tilted by row; the bar is white
 hue = py/64 + hour/24 + t/10
@@ -1565,7 +1589,7 @@ hsv(x + hue, bar ? 0 : 1, lit)
 Two colours named by their bytes, mixed by a value: a colour expression.
 
 ```psi example=dusk
--- orange at the horizon to deep blue at the top, a little brighter in the middle
+-- orange at the top to deep blue at the bottom, a little brighter in the middle
 glow = 1 - r*0.3
 mix(#ff8030, #101850, y) * glow
 ```
@@ -1604,19 +1628,22 @@ and in from the distance (squared, so far stars stay dark); a star whose
 head has left the panel is drawn far below it, where a line is skipped
 without walking a step. Written for few steps a star (every step runs 192
 times): the perspective is one division each end, the off-panel test picks
-one row for both ends. ~5.0 ms estimated: every refresh (the first version with
-these streaks estimated 6.0; the one before the eye test measured 4.4 ms).
+one row for both ends. `psi check` prints its cost; it is light enough to be
+drawn every refresh. It reads `a` with no `control` line: a slider that starts
+at 0 on the panel (the frames here are checked at 0.5); a `control` line
+(`control length = 0.5 "Streak length"`) would give it a name, a label and a
+default.
 
 ```psi example=starfield-drawn
 loop 2.4
 smooth
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
 -- each a streak from where it was a moment ago
--- a: streak length
+-- a: streak length (no control line: 0 unless set)
 back = 1 + 1/64 + (144 + a*240)/4096
 draw {
   for k < 192 {
-    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up
+    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is from the middle, across and down
     near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you
     s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago
     hx = sx*s; hy = sy*s                      -- the head, from the middle
@@ -1634,15 +1661,16 @@ pal(ice, ink)
 The corners in one table, the edges in another; each edge reads its two
 corners, turns them about y then x by per-frame angles, projects them and
 draws the line, its ink from the depth (near edges brighter, crossing
-handled by the max rule), drawn every refresh (~2.9 ms). The colour is
-the last line's: one edit.
+handled by the max rule), drawn every refresh (`psi check` prints its
+cost). The colour is set once, on the last line. Its size is `a`, a slider
+with no `control` line (0 unless set).
 
 ```psi example=wire-cube
 loop 4.8
 smooth
 -- Wireframe cube: turning about two axes and swinging across; the near
 -- edges brighter. The colour is the last line's #40c0ff
--- a: size
+-- a: size (no control line: 0 unless set)
 table V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1
 table E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
 sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
@@ -1667,16 +1695,16 @@ The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
 as tall as wide) and a place round the walls (`atan2`), a checker turning
 and travelling, the palette cycling, lit by depth in eight steps with a
 light going round. `near` and `round` depend on the pixel alone, so they
-are the still cache's: ~4.6 ms a frame with it (`smooth`; a test board
-measured 4.0 ms as an effect, p90 4.1), ~14.4 without (a look, or the panel
-short of memory: then the panel holds it at a slower rate). The twist is a number in the source, not a slider, so
+are the still cache's. `psi check` prints the cost with and without the
+still cache; without it (as a look, or with the panel short of memory) it
+is several times heavier and the panel draws it less often. The twist is a number in the source, not a slider, so
 that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
 the fade one `min` and the black middle a comparison.
 
 ```psi example=tunnel
 loop 4.8
 smooth
--- Tunnel: the time warp. Each loop the walls turn once, travel two
+-- Tunnel. Each loop the walls turn once, travel two
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
 dx = px - 63.5; dy = (15.5 - py)*2
@@ -1703,19 +1731,21 @@ pal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light
 Mode 7: each pixel's place on a turning, breathing checker is a column's
 part (`cs*sc*dx`, the column wobble) plus a row's (the row wobble, the
 rest), so a pixel adds, floors and looks up; the noise under it is
-`noise(u, v, 0)` (a whole z: the cheaper noise). Slider `a` is a picker
-(`-- a: wobble = gentle, strong, off`: the editor shows three buttons, 0,
-½ and 1; the formula reads `pick(floor(a*2 + 0.5), …)`). ~6.0 ms (every 2nd refresh).
-The floor (the native's `floor=1`) is its own example, **Rotozoom floor**:
-each row's scale by its distance (a per-row value, so the column parts are
-gone), one layer, `pal(fire, …) * fog`, ~4.3 ms drawn every refresh (`smooth`).
+`noise(u, v, 0)` (a whole z: the cheaper noise). The wobble is slider
+`a` with no `control` line (0 unless set), read as three choices by
+`pick(floor(a*2 + 0.5), …)`; written today it would be `control wobble =
+gentle, strong, off "Wobble"` and `pick(wobble, …)`. `psi check` rates it
+medium (drawn every 2nd refresh). The Mode 7 floor is a separate formula,
+**Rotozoom floor**: each row's scale by its distance (a per-row value, so
+the column parts are gone), one layer, `pal(fire, …) * fog`, light enough
+for `smooth`.
 
 ```psi example=rotozoom
 loop 9.6
 -- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing
 -- twice, gliding two checkers across and one down; under it a noise
 -- texture turning the other way twice as fast; rows and columns wobble.
--- a: wobble = gentle, strong, off
+-- a: wobble, 0 gentle, 0.5 strong, 1 off (no control line: 0 unless set)
 sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
 s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
 zoom = 2                                         -- try 1 to 4
@@ -1740,7 +1770,8 @@ pal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)
 
 A sky that drifts for ever and is a different sky each time it plays:
 two noises of a distance that grows without end, one per pixel (the clouds)
-and one per row (a haze band), and `seed` to start somewhere else.
+and one per row (a haze band), and `seed` to start somewhere else. It
+rates heavy (`psi check`: about 8.5 ms), drawn every 4th refresh.
 
 ```psi example=clouds-forever
 loop forever
@@ -1789,9 +1820,12 @@ hsv(0.33 - py/100, 0.7, k)
 ### 37. Night city (a palette of its own, a sprite for its index)
 
 Windows lit at random in a skyline: the colours are a palette of the
-formula's own (sky, building, three window colours), each pixel picks its
-place in it — a sprite of a building's pattern, a hash per window and a
-per-row sky — with one `pal` step instead of three `pick`s.
+formula's own, and each pixel picks its place in it (from a sprite of a
+building's pattern and a hash per window) with one `pal` step instead of
+`pick`s. As written it shows three of the palette's five colours: the sky
+(entry 1), the walls (2) and lit windows (3). Entry 4 is never chosen, and
+entry 0 (`py > 24` outside a building) never shows because every building
+reaches row 22 or higher.
 
 ```psi example=night-city
 loop 8
@@ -1813,7 +1847,7 @@ pal(city, k/4)
 
 This reference and `psi check` are tooling only: nothing in OpenDMD calls a
 model. If it is wanted later, the natural place is the Formulas
-editor: a "Describe an effect…" box whose text, with this document as the
+editor: a "Describe a Formula…" box whose text, with this document as the
 system prompt, asks a model for a formula; the editor compiles the answer
 locally (errors and cost come from the same compiler), shows it in the
 preview, and could loop a few times on compile errors before showing

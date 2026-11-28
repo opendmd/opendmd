@@ -12,8 +12,9 @@ what you need for most formulas. Check with `psi check FILE`.
   `py` 0..31 are the same in pixels; `i` = `py*128 + px`. `cx`, `cy` are
   centred (`cx` −2..2, `cy` −0.5..0.5, square units), `r` = distance from
   the middle, `angle` its angle in turns. `w`, `h` = 128, 32.
-- `t`: the frame's time, seconds into the loop (which instants are drawn
-  is the display's: write motion of `t`, never per frame). `loop 8` (the
+- `t`: the frame's time, seconds into the loop (the display picks which
+  instants to draw, so write motion as a function of `t`, never as a frame
+  count). `loop 8` (the
   default) repeats every 8 s, and is the least time it plays. `phase` is
   where the frame is in the loop, 0 to 1 (`t/8` exactly): make motion
   repeat with it: `sin(phase)`, `frac(phase*2)`. `loop forever` never
@@ -70,11 +71,11 @@ fn ring(x, y) {
 ring(abs(x - 0.5)*2, abs(y - 0.5)*2)
 ```
 
-## Scenes: drawing once a frame
+## Drawing once a frame: `draw { }`
 
 `draw { … }` runs once a frame, before the pixels, in **pixel
-coordinates** (x 0..127, y 0..31 down). Paint in colours — the last
-painted wins and it shows over everything:
+coordinates** (x 0..127, y 0..31 down). Paint in colours; the last
+painted wins, and paint shows over everything:
 `cls(#col)`, `pset(x, y, #col)`, `line(x0, y0, x1, y1, #col)`,
 `rect(x0, y0, x1, y1, #col)`, `rectfill(…)`, `circ(x, y, r, #col)`,
 `circfill(…)`, `trifill(x0, y0, x1, y1, x2, y2, #col)`,
@@ -107,8 +108,8 @@ draw {
 A formula with `look` at its top may be drawn over every GIF. The picture
 under it: `ur ug ub` (0..1) and `ul` (brightness) at the pixel;
 `under(x, y)` the picture at another pixel, as a colour (**only in the
-colour line** or a colour function: not in a name, `gray(…)` or `draw`,
-where it is "unknown function"); a coverage below
+colour line** or a colour function: in a name, `gray(…)` or `draw` it is
+an error, "a colour, not a number"); a coverage below
 1, or a `layer add { … }` / `screen` / `multiply` blend, lets it show.
 `look screen 40` says how it goes on (blend, amount).
 
@@ -136,8 +137,8 @@ under(px + floor(sin(t*2)*2), py) * v
   all; `pal` and `cycle` read 3 of them).
 - `scene NAME when c { v = … }`: values whose steps run only while `c`
   (once a frame or a row, e.g. `city * (py < 20)`) is not 0; after it each
-  name reads 0 while it is off. The estimate counts two scenes at once:
-  an environment per scene, a transition two.
+  name reads 0 while it is off. The cost estimate counts the two costliest
+  scenes, as if two are on at once (as during a crossfade).
 - `palette S = tween(day, night, w)` mixes two palettes once a frame (`w`
   0..1, of `t` or sliders, not the pixel); tweens nest; `tween(a, b, w),
   tween(c, d, v)` fills the low and high 16 entries from palettes of ≤ 16
@@ -151,14 +152,15 @@ mix(#102040, #ff8040, y + sin(phase)*0.1)
 
 ## Cost: keep it light
 
-The panel has ~8 ms a frame (12 for a look over a GIF). `psi check` says
+Aim for ≤ 8 ms a frame (≤ 5 ms for `smooth`); the panel refuses a
+formula over 40 ms by its VM estimate, a look over 12. `psi check` says
 the cost (with the JIT where it takes the formula, the VM's beside it)
 and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
 and `/` cost most; a value of only `t`, the clock and sliders is worked out
-once a frame, of `y` once a row — free. Lines and dots cost by the line, not
+once a frame, of `y` once a row: nearly free. Lines and dots cost by the line, not
 the pixel; painted filled shapes by the pixels they cover. Prefer `draw`
 for scenes (objects, sprites, text) and per-pixel maths for fields
-(plasma, fire, sky). Two habits keep a shader light:
+(plasma, fire, sky). To keep a formula light:
 
 - Lift what doesn't need the pixel out of it: `s = sin(phase)` (once a
   frame) and `row = noise(y*4, t, 0)` (once a row), then use `s` and
