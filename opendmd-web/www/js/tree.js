@@ -138,7 +138,17 @@ export function listCat(c, own) {
     metas.set(c, me);
   }
   const m = metas.get(c);
-  return own ? lists.get(c).then(async (l) => (l && m?.card ? await m.card : l)) : lists.get(c);
+  if (!own) return lists.get(c);
+  // The card's own; its re-list having failed, asked again now (a smart
+  // playlist or Add by filter waiting on it must not wait for the Library).
+  return lists.get(c).then(async (l) => {
+    const r = l && m?.card ? await m.card : l;
+    if (r || !stale.has(c) || own === 'again') return r;
+    stale.delete(c);
+    lists.delete(c);
+    metas.delete(c);
+    return listCat(c, 'again');
+  });
 }
 // Kept listings whose re-list failed, listed again once their wait is up
 // (the Library calls it when it is shown).
@@ -149,8 +159,10 @@ export function forget(c) {
   for (const k of c ? [c] : [...lists.keys()]) { lists.delete(k); got.delete(k); metas.delete(k); }
   // (Changed by the app: its record goes. Everything: listed afresh, kept records shown meanwhile.)
   if (c) { checked.delete(`/gifs/${c}`); kept(`/gifs/${c}`, null); } else checked.clear();
-  // (A search showing lists it again: its count would leave the folder out.)
-  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); }
+  // (A search showing lists it again: its count would leave the folder out.
+  // A folder open, changed by the app: the folders read again now, so its
+  // rows of GIFs that have gone don't linger, asking for their stills.)
+  for (const t of trees) { t.dirty = true; if (t.q.trim()) t.gather(); else if (c && t.open.has(c)) t.reload(); }
 }
 on('gifs', forget);
 on('card', () => forget());
@@ -215,7 +227,8 @@ export class Tree {
       dirs = [...dirs].sort(byNice);
       const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: niceName(cat) };
       this.folders = [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)].map(f);
-      for (const c of this.open) this.fill(c);
+      // (Only folders that are there: one left empty and removed is not asked for.)
+      for (const c of this.open) if (dirs.includes(c)) this.fill(c);
       // (A search showing: a folder new since it gathered is listed too.)
       if (this.q.trim()) this.gather();
       this.update();
@@ -227,6 +240,8 @@ export class Tree {
     return this.folders;
   }
   real() { return this.folders.map((f) => f.cat); }
+  // load(), once for a burst of changes (a batch forgets folder after folder).
+  reload() { clearTimeout(this.rt); this.rt = setTimeout(() => this.load(), 50); }
   items(cat) { return got.get(cat); }
   // Ask for a folder's GIFs; the tree updates when they come.
   fill(cat) {

@@ -89,6 +89,8 @@ export async function relink(pairs, step, stopped) {
         await app.src.forget(p.from).catch(() => {});
       }
       done.push(p);
+      // (Its still is not asked for again under the old name, nor yet under the new one.)
+      import('./thumbs.js').then((th) => { th.forget(p.from, true); if (p.to) th.forget(p.to); }).catch(() => {});
       step?.(done.length);
     } catch (error) { failed = { ...p, error }; break; }
   }
@@ -106,7 +108,7 @@ export async function relink(pairs, step, stopped) {
   for (const p of done) { app.selection.delete(p.from); if (p.to) app.selection.delete(p.to); }
   const th = await import('./thumbs.js').catch(() => null), dirs = new Map();
   for (const p of done) {
-    th?.forget(p.from);
+    th?.forget(p.from, true);
     if (p.to) th?.forget(p.to);
     dirs.set(dir(p.from), p.from);
     if (p.to) dirs.set(dir(p.to), p.to);

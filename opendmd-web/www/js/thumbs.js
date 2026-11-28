@@ -192,8 +192,13 @@ async function put(rec) {
 }
 
 // A GIF changed or went (Add GIFs, Edit details, Delete): ask again.
-export async function forget(path) {
+// `left`: it is no longer at this path (moved or deleted): nothing queued
+// for it is asked for, nor is it until it is back (a row still on screen
+// a moment longer must not ask the card for a file that has gone).
+const left = new Set();
+export async function forget(path, gone) {
   mem.delete(path);
+  if (gone) { left.add(path); queue = queue.filter((q) => q.path !== path); } else left.delete(path);
   try { const d = await db(); d?.transaction('t', 'readwrite').objectStore('t').delete(path); } catch { /* none */ }
 }
 
@@ -229,6 +234,7 @@ const live = (cv) => cv.isConnected && !cv.parentNode.hidden;
 
 // A rendered row's canvas: drawn from memory, the store, or (queued) the device.
 export function attach(cv, path) {
+  if (left.has(path)) return;
   cv._p = path;
   delete cv.dataset.done;
   if (mem.has(path)) { stats.mem++; const bm = mem.get(path); mem.delete(path); mem.set(path, bm); paint(cv, bm); return; }
