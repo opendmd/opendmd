@@ -7732,19 +7732,20 @@ def now_identity_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
-    """Keep on the panel (config `formula_keep`): on the Formulas page and in
-    Settings › Playback; a Formula shown on the panel stays past the mock's
-    dwell (`now_playing.kept_s`), through a live edit; Now says so and Back
-    to the playlist ends it; a GIF sent to the panel is never kept; one
-    minute shows the time left."""
+    """A Formula shown on the panel stays until changed (opendmd_core::
+    hand_picked): past the mock's dwell (`now_playing.kept_s` 0), through a
+    live edit; Now says so and Back to the playlist ends it; a GIF sent to
+    the panel is never kept. The old Keep on the panel selects (Formulas,
+    Settings › Playback) read `formula_keep` "hold", which a PUT of the old
+    choices doesn't change."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     open_formulas(page)
     page.click("#psi-ex .psi-tile >> nth=0")
     opts = page.eval_on_selector_all("#psi-keep option", "els => els.map(e => [e.value, e.textContent])")
     check(opts == [["turn", "One turn"], ["1m", "1 minute"], ["5m", "5 minutes"], ["hold", "Until I change it"]]
-          and page.input_value("#psi-keep") == "turn" and page.inner_text("#psi-keep-row").startswith("Keep on the panel"),
-          f"keep: Keep on the panel in the Formula's details, one turn by default ({opts})")
+          and page.input_value("#psi-keep") == "hold" and page.inner_text("#psi-keep-row").startswith("Keep on the panel"),
+          f"keep: Keep on the panel in the Formula's details says Until I change it, as the panel does ({opts}, {page.input_value('#psi-keep')})")
     page.select_option("#psi-keep", "hold")
     deadline = time.time() + 5
     while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "hold":
@@ -7782,24 +7783,22 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     post_json(base + "/api/play", {"path": gif})
     st = get_json(base + "/api/status")["now_playing"]
     check(st["path"] == gif and "kept_s" not in st, "keep: a GIF sent to the panel plays one turn as before")
-    # One minute: the time left on Now.
+    # The old one-minute choice: taken, and the Formula is still kept until changed.
     put_json(base + "/api/config", {"formula_keep": "1m"})
     post_json(base + "/api/play", {"path": "@formula:starfield"})
     page.wait_for_selector("#now-kept:not([hidden])", timeout=5000)
-    page.wait_for_function("/^Kept on the panel: [01]:\\d\\d left$/.test(document.querySelector('#now-kept-text').textContent)", timeout=5000)
     t = page.inner_text("#now-kept-text")
-    check(get_json(base + "/api/status")["now_playing"].get("kept_s") == 60 and t in ("Kept on the panel: 1:00 left", "Kept on the panel: 0:59 left", "Kept on the panel: 0:58 left"),
-          f"keep: a minute shows the time left ('{t}')")
-    # Settings › Playback has the same setting (a fresh load: the minute was set by the API).
+    check(get_json(base + "/api/status")["now_playing"].get("kept_s") == 0 and t == "Kept on the panel until you change it"
+          and get_json(base + "/api/config")["formula_keep"] == "hold",
+          f"keep: formula_keep 1m changes nothing: kept until changed ('{t}')")
+    # Settings › Playback reads the same (a fresh load).
     page.goto("about:blank")
     page.goto(base + "/#settings/play")
     page.wait_for_selector("#st-keep", timeout=10000)
-    check(page.input_value("#st-keep") == "1m", f"keep: Settings › Playback shows it ({page.input_value('#st-keep')})")
+    check(page.input_value("#st-keep") == "hold", f"keep: Settings › Playback says Until I change it ({page.input_value('#st-keep')})")
     page.select_option("#st-keep", "turn")
-    deadline = time.time() + 5
-    while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "turn":
-        time.sleep(0.2)
-    check(get_json(base + "/api/config")["formula_keep"] == "turn", "keep: Settings › Playback saves it (back to one turn)")
+    time.sleep(1)
+    check(get_json(base + "/api/config")["formula_keep"] == "hold", "keep: choosing One turn in Settings › Playback changes nothing")
     try:
         put_json(base + "/api/config", {"formula_keep": "forever"})
         refused = False
@@ -8193,7 +8192,10 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     check(2 <= len(sent) <= 6 and all(p.get("live") is True for _, p in sent) and min(gaps, default=1) > 0.15
           and sent[-1][1].get("a") == "1" and st["ordinal"] == ordinal and st["path"] == SENT + "?a=1",
           f"formulas panel: 60 slider moves in {time.time() - t0:.1f} s -> {len(sent)} live edits, gaps {[round(g, 2) for g in gaps]}, the last a=1 on the panel (ordinal {st['ordinal']})")
-    # The playlist moves on (the mock's 4 s dwell): a change stops following, quietly.
+    # The playlist moves on (a Formula picked by hand is kept until
+    # something else plays: Skip): a change stops following, quietly.
+    check(st.get("kept_s") == 0, f"formulas panel: the shown Formula is kept until changed (kept_s {st.get('kept_s')!r})")
+    post_json(base + "/api/skip", {})
     deadline = time.time() + 10
     while time.time() < deadline and get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"):
         time.sleep(0.3)
