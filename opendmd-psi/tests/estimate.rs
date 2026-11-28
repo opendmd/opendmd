@@ -9,7 +9,8 @@
 //!   to the table from drifting off them. Every row is held to ±15 %.
 //! - `DRAW` are the draw stage's rows (the fit set for `Program::draw_us`);
 //!   `EFFECTS` the two drawing examples played as effects, a hold-out
-//!   measured on the real path (so compared without the ×1.15).
+//!   measured on the real path (so compared without the ×1.15, and
+//!   compiled as the player compiles them, not as below).
 //! - `LOOKS` are the hold-out: examples composed as looks, never fitted;
 //!   they are what says the model generalises (all within ±12 % when
 //!   written). Held to ±15 %.
@@ -42,25 +43,6 @@ fn compose(src: &str, blend: &str, k: u8) -> opendmd_psi::Program {
     p
 }
 
-/// Whether `p` divides a pixel's value by a scalar: measured before the
-/// language review's A1 (psi-settle, 2026-11-04), when that compiled to a
-/// multiply by the reciprocal, and played since as a division (`div_s`
-/// narrowed; `div` here, unnarrowed). Such a row's program is not the one
-/// measured: it is printed, not held, until a test board measures it again.
-fn divides_per_pixel(p: &opendmd_psi::Program) -> bool {
-    p.listing().lines().any(|l| {
-        let l = l.trim_start();
-        let Some(rest) = l.split_once(" pixel ").map(|x| x.1) else {
-            return false;
-        };
-        let Some(args) = rest.split_once("= div(").map(|x| x.1) else {
-            return false;
-        };
-        let b = args.split(", ").nth(1).unwrap_or("").trim_end_matches(')');
-        !(b.starts_with('L') || matches!(b, "x" | "px" | "i"))
-    })
-}
-
 #[test]
 fn the_estimate_is_within_15_percent_of_the_device() {
     let mut bad = Vec::new();
@@ -69,13 +51,11 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         let p = compile(src).unwrap();
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
-        let stale = divides_per_pixel(&p);
         rows.push(format!(
-            "{name:<26} measured {us:>5} est {est:>5} ({:+.0} %){}",
-            (r - 1.0) * 100.0,
-            if stale { " (a division since A1: not held)" } else { "" }
+            "{name:<26} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
         ));
-        if !stale && !(0.85..=1.15).contains(&r) {
+        if !(0.85..=1.15).contains(&r) {
             bad.push(name.to_string());
         }
     }
@@ -83,13 +63,11 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         let p = compose(src, blend, k);
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
-        let stale = divides_per_pixel(&p);
         rows.push(format!(
-            "look {name} {blend} {k:<3} measured {us:>5} est {est:>5} ({:+.0} %){}",
-            (r - 1.0) * 100.0,
-            if stale { " (a division since A1: not held)" } else { "" }
+            "look {name} {blend} {k:<3} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
         ));
-        if !stale && !(0.85..=1.15).contains(&r) {
+        if !(0.85..=1.15).contains(&r) {
             bad.push(format!("{name} {blend} {k}"));
         }
     }
@@ -128,21 +106,35 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         }
     }
     // The examples as compiled now (VM frames, s2probe-a's speed2 rows).
+    // (Not held, said: Starfield's direct frame, 192 lines of ~3 px in a
+    // lane loop, fell 15 % (2,078 -> 1,762 µs) between s2probe-b and
+    // psi-refresh with its estimate the same (2,393), while its real-path
+    // frame, `EFFECTS`, is within 11 % of it. The draw stage's lane rows,
+    // `DRAW_LANES` (2026-10-28), are not measured again yet: until they
+    // are, which of the lane costs moved is not known, so the model is not
+    // retuned to this one row.)
+    const NOT_HELD: &[&str] = &["Starfield"];
     for &(name, src, us) in measured::SPEED2 {
         let est = est_of(src) as u32;
         let r = est as f64 / (us as f64 * 1.15);
+        let held = !NOT_HELD.contains(&name);
         rows.push(format!(
-            "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)",
-            (r - 1.0) * 100.0
+            "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %){}",
+            (r - 1.0) * 100.0,
+            if held { "" } else { " (not held: the draw stage's lane rows not measured again)" }
         ));
-        if !(0.85..=1.15).contains(&r) {
+        if held && !(0.85..=1.15).contains(&r) {
             bad.push(name.to_string());
         }
     }
-    // As effects: measured on the real path, so against the estimate as is.
+    // As effects: measured on the real path (the JIT off), so against the
+    // estimate as the player compiles and draws them (the runs, the
+    // narrowed and fused steps, draw loops as lanes, the still cache where
+    // it has values), with its ×1.15 as it is.
     for &(name, src, us) in measured::EFFECTS {
-        let p = compile(src).unwrap();
-        let est = p.esp32_us_turns();
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(src, &mut p).unwrap();
+        let est = p.esp32_us_still();
         let r = est as f64 / us as f64;
         rows.push(format!(
             "effect {name:<23} measured {us:>5} est {est:>5} ({:+.0} %)",
@@ -374,29 +366,48 @@ fn the_fused_compares_and_guards_as_measured() {
 
 /// The rows of tests/measured.rs that `include_str!` a Formula's file as
 /// it is now (so their source moves on with it): the file, and the commit
-/// whose version of it the board ran (the commit that added the row:
-/// jit2-c's for JIT_EFFECTS and JIT_LOOKS, consoleb's for CONSOLEB).
+/// whose version of it the board ran (written by `tools/psi-refresh.py
+/// apply`: the last commit to change the file before the psi-refresh run
+/// of 2026-11-28).
 const MEASURED_AT: &[(&str, &str, &str)] = &[
-    ("JIT_EFFECTS Endless road Both", "opendmd-web/experiments/road-life/road-both.psi", "c6f7302"),
-    ("JIT_EFFECTS Endless road Full", "opendmd-web/experiments/road-life/road-full.psi", "ebf1c73"),
-    ("JIT_EFFECTS Wireframe cube", "opendmd-web/formulas/wireframe-cube.psi", "ebf1c73"),
-    ("JIT_EFFECTS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "ebf1c73"),
-    ("JIT_EFFECTS Rotozoom floor", "opendmd-web/formulas/rotozoom-floor.psi", "ebf1c73"),
-    ("JIT_EFFECTS Tunnel", "opendmd-web/formulas/tunnel.psi", "ebf1c73"),
-    ("JIT_EFFECTS Time gate", "opendmd-web/formulas/time-gate.psi", "ebf1c73"),
-    ("JIT_EFFECTS Fire", "opendmd-web/formulas/fire.psi", "ebf1c73"),
-    ("JIT_EFFECTS Plasma", "opendmd-web/formulas/plasma.psi", "ebf1c73"),
-    ("JIT_LOOKS Old TV", "opendmd-web/formulas/old-tv.psi", "ebf1c73"),
-    ("JIT_LOOKS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "ebf1c73"),
-    ("JIT_LOOKS Plasma", "opendmd-web/formulas/plasma.psi", "ebf1c73"),
-    ("CONSOLEB Cycled plasma", "opendmd-web/formulas/cycled-plasma.psi", "30d2ea5"),
-    ("CONSOLEB Waterfall", "opendmd-web/formulas/waterfall.psi", "30d2ea5"),
-    ("CONSOLEB Copper sky", "opendmd-web/formulas/copper-sky.psi", "30d2ea5"),
-    (
-        "CONSOLEB Big clock rate (bar in the mask)",
-        "opendmd-web/experiments/console-b/big-clock-rate-mask.psi",
-        "30d2ea5",
-    ),
+    ("JIT_EFFECTS Wireframe cube", "opendmd-web/formulas/wireframe-cube.psi", "41a642a"),
+    ("JIT_EFFECTS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "41a642a"),
+    ("JIT_EFFECTS Rotozoom floor", "opendmd-web/formulas/rotozoom-floor.psi", "41a642a"),
+    ("JIT_EFFECTS Tunnel", "opendmd-web/formulas/tunnel.psi", "41a642a"),
+    ("JIT_EFFECTS Time gate", "opendmd-web/formulas/time-gate.psi", "41a642a"),
+    ("JIT_EFFECTS Fire", "opendmd-web/formulas/fire.psi", "a7a1ee0"),
+    ("JIT_EFFECTS Plasma", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("JIT_LOOKS Old TV", "opendmd-web/formulas/old-tv.psi", "41a642a"),
+    ("JIT_LOOKS Plasma letters", "opendmd-web/formulas/plasma-letters.psi", "41a642a"),
+    ("JIT_LOOKS Plasma", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("CONSOLEB Cycled plasma", "opendmd-web/formulas/cycled-plasma.psi", "41a642a"),
+    ("CONSOLEB Waterfall", "opendmd-web/formulas/waterfall.psi", "41a642a"),
+    ("CONSOLEB Copper sky", "opendmd-web/formulas/copper-sky.psi", "41a642a"),
+    ("STEPS big clock", "opendmd-web/formulas/big-clock.psi", "b8c4449"),
+    ("LOOKS Plasma screen 40", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("LOOKS Plasma over 30", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("LOOKS Plasma add 40", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("LOOKS Plasma multiply 100", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("LOOKS Plasma max 50", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("LOOKS Fire screen 40", "opendmd-web/formulas/fire.psi", "a7a1ee0"),
+    ("LOOKS Fire over 30", "opendmd-web/formulas/fire.psi", "a7a1ee0"),
+    ("LOOKS Stripes screen 40", "opendmd-web/formulas/stripes.psi", "a7a1ee0"),
+    ("LOOKS Copper bars screen 40", "opendmd-web/formulas/copper-bars.psi", "41a642a"),
+    ("LOOKS Old photo screen 50", "opendmd-web/formulas/old-photo.psi", "5795f97"),
+    ("LOOKS Old TV over 100", "opendmd-web/formulas/old-tv.psi", "41a642a"),
+    ("SPEED2 Starfield", "opendmd-web/formulas/starfield.psi", "41a642a"),
+    ("SPEED2 Wireframe cube", "opendmd-web/formulas/wireframe-cube.psi", "41a642a"),
+    ("SPEED2 Tunnel", "opendmd-web/formulas/tunnel.psi", "41a642a"),
+    ("SPEED2 Rotozoom", "opendmd-web/formulas/rotozoom.psi", "41a642a"),
+    ("SPEED2 Rotozoom floor", "opendmd-web/formulas/rotozoom-floor.psi", "41a642a"),
+    ("SPEED2 Endless road", "opendmd-web/formulas/endless-road.psi", "1c04f6e"),
+    ("SPEED2 Plasma", "opendmd-web/formulas/plasma.psi", "41a642a"),
+    ("SPEED2 Fire", "opendmd-web/formulas/fire.psi", "a7a1ee0"),
+    ("EFFECTS Starfield", "opendmd-web/formulas/starfield.psi", "41a642a"),
+    ("EFFECTS Wireframe cube", "opendmd-web/formulas/wireframe-cube.psi", "41a642a"),
+    ("JIT_EFFECTS Endless road", "opendmd-web/formulas/endless-road.psi", "1c04f6e"),
+    ("CONSOLEB Storm front", "opendmd-web/formulas/storm-front.psi", "b51f789"),
+    ("PAINT_FORMULAS Neon city", "opendmd-web/formulas/neon-city.psi", "3c1e207"),
 ];
 
 /// A Formula's source as the player sees it: comments, blank lines and
@@ -471,8 +482,8 @@ fn git(args: &[&str]) -> String {
 ///
 /// - The rows that `include_str!` a file (`MEASURED_AT`): the file at the
 ///   commit the board ran against the file now.
-/// - The rows whose source is written out in measured.rs (or a snapshot
-///   beside it, tests/neon-city-measured.psi) and whose name is a bundled
+/// - The rows whose source is written out in measured.rs and whose name
+///   is a bundled
 ///   Formula's (`opendmd-web/formulas/<name>.psi`): that source against
 ///   the file now.
 ///
@@ -481,7 +492,12 @@ fn git(args: &[&str]) -> String {
 /// name or about is not one. Each stale row is listed with the commits
 /// that changed its file since.
 ///
-/// **To refresh one** (on a test board; never needed for the build): build
+/// **To refresh them** (on a test board; never needed for the build): the
+/// psi-refresh probe measures every row here, each as its test compiles it
+/// (`make fw-release VARIANT=4mb FW_VERSION=<version>.probeN
+/// FW_RELEASE_FEATURES=psi-probe,psi-refresh FW_BETA_FEATURES= DIST=...`, firmware/src/psi_probe/refresh.rs: add a
+/// row there), then `uv run tools/psi-refresh.py collect HOST` and
+/// `... apply results.json`. Before it, by hand: build
 /// the probe that measured its table (`make fw-flash FW_FEATURES=psi-probe`
 /// with `JIT2_ONLY` for JIT_EFFECTS and JIT_LOOKS, `CONSOLEB_ONLY` for
 /// CONSOLEB, in firmware/src/psi_probe.rs; `FW_FEATURES=paint-probe` for

@@ -1030,7 +1030,17 @@ const DONE: &str = "psi-probe: done";
 fn open_report(root: &str) -> bool {
     let path = format!("{root}/{REPORT_NAME}");
     if let Ok(old) = std::fs::read_to_string(&path) {
-        if !old.contains(DONE) {
+        // (A report another firmware left unfinished is not this build's
+        // failure: kept beside it, `-prev`, and this build's probe runs.)
+        let ours = format!("# OpenDMD {} psi-probe report", crate::state::firmware_version());
+        // (If it cannot be kept, nothing runs: the report is not lost.)
+        if !old.contains(DONE) && !old.starts_with(&ours) {
+            if let Err(e) = std::fs::write(format!("{root}/filelist-psi-probe-prev.txt"), &old) {
+                log::error!("psi-probe: /{REPORT_NAME} is another firmware's unfinished report, and keeping it as /filelist-psi-probe-prev.txt failed ({e}); not running");
+                return false;
+            }
+            log::warn!("psi-probe: /{REPORT_NAME} is another firmware's unfinished report: kept as /filelist-psi-probe-prev.txt");
+        } else if !old.contains(DONE) {
             log::warn!(
                 "psi-probe: /{REPORT_NAME} has no `{DONE}` line: last boot's probe did not finish; not running it again (delete the file to)"
             );
@@ -2351,6 +2361,13 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    // (psi-refresh: the stale board rows of opendmd-psi/tests/measured.rs
+    // measured again, and nothing else: refresh.rs.)
+    if cfg!(all(feature = "jit", feature = "psi-refresh")) {
+        #[cfg(all(feature = "jit", feature = "psi-refresh"))]
+        refresh::probe(start, stack0);
+        return;
+    }
     if BEAM_ONLY {
         psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
         let mut out = vec![0u8; psi::W * psi::H * 3];
@@ -2728,8 +2745,9 @@ pub(crate) mod jit2 {
     /// 12 frames untimed: the still cache, the kernel made, checked and
     /// trialed), the JIT on and then off: frame p50/p90/max, the pixels
     /// marked for the blit.
-    pub(crate) fn effect(name: &str, src: &str, opts: &str, canvas: &mut Canvas) {
+    pub(crate) fn effect(name: &str, src: &str, opts: &str, canvas: &mut Canvas) -> Option<(u32, u32, bool)> {
         let mut row = Vec::new();
+        let mut kept = false;
         for jit in [true, false] {
             fx_psi::set_jit(jit);
             fx_psi::set_still_gate(None);
@@ -2754,6 +2772,7 @@ pub(crate) mod jit2 {
                 canvas.dirty_mut().clear();
             });
             drop(fx);
+            kept |= jit && on;
             let what = if !jit { "vm".to_string() } else if on { format!("kernel {bytes} B") } else { format!("vm: {why}") };
             say!(info,
                 "psi-probe: jit2: example {name} as an effect ({what}): p50 {e50} p90 {e90} max {emax} us a frame, {} px marked a frame, still {held} B, heap {h0} -> {h1} B -> {} B after",
@@ -2772,6 +2791,10 @@ pub(crate) mod jit2 {
         }
         fx_psi::set_jit(true);
         fx_psi::set_still_gate(Some(crate::still_gate));
+        match row[..] {
+            [j, v] => Some((j, v, kept)),
+            _ => None,
+        }
     }
 
     /// Where a kernel's frame goes: the example drawn directly through its
@@ -2821,17 +2844,18 @@ pub(crate) mod jit2 {
     /// GIF frame changes them; its own frames every 40 ms when it moves),
     /// the JIT on and then off: apply p50/p90/max (the first 12 untimed:
     /// the kernel made, checked and trialed), pixels marked.
-    fn look(name: &str, path: &str, canvas: &mut Canvas) {
+    pub(crate) fn look(name: &str, path: &str, canvas: &mut Canvas) -> Option<(u32, u32, bool)> {
         let mut row = Vec::new();
+        let mut kept = false;
         for jit in [true, false] {
             fx_psi::set_jit(jit);
             let Ok(mut look) = fx_psi::FormulaLook::from_path(path) else {
                 say!(error, "psi-probe: jit2: look {name}: did not open");
-                return;
+                return None;
             };
             if !look.take() {
                 say!(error, "psi-probe: jit2: look {name}: no room for its buffers ({} B free)", heap());
-                return;
+                return None;
             }
             let mut u = vec![0u8; psi::W * psi::H * 3];
             psi::golden::picture(&mut u);
@@ -2870,6 +2894,7 @@ pub(crate) mod jit2 {
                 marked += u64::from(m);
             }
             let (p50, p90, max) = pct(&mut us);
+            kept |= jit && on;
             let what = if !jit { "vm".to_string() } else if on { format!("kernel {bytes} B") } else { format!("vm: {why}") };
             say!(info,
                 "psi-probe: jit2: look {name} over a changing picture ({what}): p50 {p50} p90 {p90} max {max} us a frame, {} px marked a frame, est vm {} jit {}",
@@ -2881,6 +2906,10 @@ pub(crate) mod jit2 {
             say!(info, "psi-probe: jit2: look {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
         }
         fx_psi::set_jit(true);
+        match row[..] {
+            [j, v] => Some((j, v, kept)),
+            _ => None,
+        }
     }
 
     pub fn probe(root: &str, start: Instant, stack0: u32) {
@@ -3115,3 +3144,7 @@ pub(crate) mod beam {
         }
     }
 }
+
+/// The stale board rows measured again (`--features psi-refresh`).
+#[cfg(all(feature = "jit", feature = "psi-refresh"))]
+mod refresh;

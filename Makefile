@@ -686,7 +686,8 @@ FW_SRAM1_IRAM ?= 0
 FW_L2_COPY ?= 0
 # heapmap builds only (src/heapmap.rs): FreeRTOS's trace facility, for the
 # task table (uxTaskGetSystemState).
-# psi-probe builds only: the main task's stack 2 KB over the release's 16 KB
+# psi-probe builds only (psi-probe, psi-refresh, which implies it in Cargo,
+# and paint-probe): the main task's stack 2 KB over the release's 16 KB
 # (sdkconfig.defaults). The probe's checks run on the main task on top of
 # the frame loop's own depth, and left 268 B of the 16 KB; a
 # release build never runs them. (From the heap: the probe's heap figures
@@ -725,7 +726,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
 	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
-	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
+	$(if $(filter psi-probe psi-refresh paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
 	$(if $(FW_CONNECT),cat $(CURDIR)/$(FW)/sdkconfig.connect; echo 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)'; echo 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)';)$(if $(FW_EXTRA_SDKCONFIG),printf '%s\n' $(FW_EXTRA_SDKCONFIG);) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
@@ -913,7 +914,7 @@ FW_BETA_GUARD = $(if $(filter-out connect,$(subst $(FW_COMMA), ,$(FW_CHANNEL_FEA
 # (FW_RELEASE_FEATURES with any of them wants a DIST of its own; the
 # emu-image-* targets give one). tools/release.sh clears FW_RELEASE_FEATURES,
 # and tools/release-test-features-check.sh checks the image for their text.
-FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-crash-test emu-oom-test emu-wifi-soak wifi-outage-test connect-test connect-formula-add dev-credentials bench
+FW_TEST_ONLY_FEATURES := nocard-test emu-ballast emu-census emu-crash-test emu-oom-test emu-wifi-soak wifi-outage-test connect-test connect-formula-add dev-credentials bench probe probe-http psi-probe psi-refresh paint-probe
 FW_TEST_ONLY_GUARD = $(if $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))),$(if $(FW_DIST_OWN),true,{ echo "FW_RELEASE_FEATURES=$(FW_RELEASE_FEATURES): $(filter $(FW_TEST_ONLY_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES))) is test-only, never into dist/ ($(FW_DIST_OWN_HINT))"; exit 2; }),true)
 # (fw-release-variant's own, so bench builds and clippy never take it.)
 fw-release-variant: FW_CHANNEL_FEATURES = $(if $(FW_BETA),$(FW_BETA_FEATURES))
