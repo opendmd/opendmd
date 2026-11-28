@@ -1003,17 +1003,24 @@ def settings_tab_checks(page: Page) -> None:
     address, only the open one in the page, a click changes the address."""
     goto_view(page, "settings")
     tabs = page.eval_on_selector_all("#st-tabs .tab", "els => els.map(e => [e.dataset.tab, e.textContent, e.classList.contains('on')])")
-    check(tabs == [["play", "Playback", True], ["look", "Panel", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["device", "Device", False]],
-          f"settings: five tabs, bare #settings opens Playback ({tabs})")
-    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("replay", "#fo-host"), ("device", "#st-hostname"), ("play", "#st-set")):
+    want = [["play", "Playback", True], ["look", "Panel", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["wifi", "WiFi", False],
+            ["remote", "Remote control", False], ["updates", "Updates", False], ["advanced", "Advanced", False], ["about", "About", False]]
+    # (Remote control only in a build with it.)
+    conn = "connect" in (page.evaluate("import('./js/state.js').then(m => m.app.status.features || [])") or [])
+    check(tabs == [x for x in want if conn or x[0] != "remote"], f"settings: the tabs, Device's cards split over WiFi … About, bare #settings opens Playback ({tabs})")
+    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("replay", "#fo-host"), ("wifi", "#st-hostname"), ("updates", "#fw-check"),
+                   ("advanced", "#st-facts"), ("about", "#st-about"), ("play", "#st-set")):
         page.click(f"#st-tabs [data-tab={t}]")
         page.wait_for_selector(f"#st-tab-{t}", timeout=20000)
         page.wait_for_selector(sel, timeout=20000)
         others = page.locator(".stab").count()
         check(page.evaluate("location.hash") == f"#settings/{t}" and others == 1,
               f"settings: the {t} tab at #settings/{t}, alone in the page ({others} tab panel(s))")
+    page.evaluate("location.hash = '#settings/device'")
+    page.wait_for_selector("#st-tab-wifi", timeout=20000)
+    check(page.evaluate("location.hash") == "#settings/wifi", "settings: #settings/device, the old tab's address, leads to WiFi")
     check(page.locator("#st-adv").count() == 0 and page.locator("#st-plats .chip").count() == 0,
-          "settings: no Advanced, no platform chip wall")
+          "settings: no Advanced card in Playback, no platform chip wall")
 
 
 def goto_view(page: Page, view: str) -> None:
@@ -1695,16 +1702,19 @@ def wait_tags(overlay: Path, ok, timeout_s: float = 15) -> dict[str, str]:
 
 
 def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
-    """The user's tags and stars (js/tags.js, /sets/.tags), in a fresh
-    browser: Details' stars (a tap on the one set clears it) and a tag
-    typed in, each a line of /sets/.tags; the tag's chip searches
-    `tag:"smoke tag"` (1 GIF); Now's line has them; the ★ 4+ chip;
-    words it cannot read say why; two GIFs selected, More ▾ Tag… adds one
-    to both (their rows show it), the toast's Undo takes it off again,
-    Rate… gives both two stars; tags kept for GIFs no longer on the card
-    are noticed after a full search: Move their tags puts them on the GIF
-    of the same name elsewhere, Forget them drops the rest; on a phone the
-    stars are 36 px targets."""
+    """The user's tags (js/tags.js, /sets/.tags), in a fresh browser: no
+    stars anywhere (tags only); Details' ♡ Favourite makes the built-in tag
+    `favourite` (and, so it still plays more often, w=3 in the playlist
+    playing), a tap again takes both off; a tag typed in, each a line of
+    /sets/.tags; the tag's chip searches `tag:"smoke tag"` (1 GIF); the row
+    shows ♥ and the tag; Now's line has the tag (Favourite is its heart);
+    the ♥ Favourites chip searches tag:favourite; words it cannot read say
+    why; two GIFs selected, More ▾ Tag… (Favourite offered) adds one to
+    both (their rows show it), the toast's Undo takes it off again, ♥
+    Favourite makes both favourites; tags kept for GIFs no longer on the
+    card are noticed after a full search: Move their tags puts them on the
+    GIF of the same name elsewhere, Forget them drops the rest; on a phone
+    the heart is a 36 px target."""
     sets = overlay / "sets"
     before = tag_lines(overlay)
     orig = (CARD / "sets" / ".tags").read_text() if (CARD / "sets" / ".tags").exists() else None
@@ -1712,39 +1722,56 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#library")
     lib_row(page, g[0])
-    page.wait_for_selector("#lib-d-stars .star", timeout=60000)
-    page.click("#lib-d-stars [data-n='4']")
-    t = wait_tags(overlay, lambda t: t.get(g[0]) == "r=4")
-    check(t.get(g[0]) == "r=4" and page.get_attribute("#lib-d-stars [data-n='4']", "aria-checked") == "true",
-          f"tags: four stars in Details -> /sets/.tags has '{g[0]}\\tr=4' ({t.get(g[0])!r})")
-    page.click("#lib-d-stars [data-n='4']")
+    page.wait_for_selector("#lib-d-fav", timeout=60000)
+    check(page.locator("#lib-d-stars, .star, #lib-star-chip").count() == 0 and page.inner_text("#lib-d-fav") == "♡ Favourite",
+          "tags: no stars in Details or the Library, a ♡ Favourite instead")
+    st = get_json(base + "/api/status")
+    playing = setvalue_of(st["manifest"])
+    page.click("#lib-d-fav")
+    t = wait_tags(overlay, lambda t: t.get(g[0]) == "t=favourite")
+    r = wait_overrides(base, playing, 1)
+    check(t.get(g[0]) == "t=favourite" and page.get_attribute("#lib-d-fav", "aria-pressed") == "true"
+          and {"path": g[0], "w": 3} in r["overrides"],
+          f"tags: ♡ Favourite -> /sets/.tags has '{g[0]}\\tt=favourite', w=3 in the playlist playing ({t.get(g[0])!r})")
+    page.click("#lib-d-fav")
     t = wait_tags(overlay, lambda t: g[0] not in t)
-    check(g[0] not in t, "tags: a tap on the stars set clears them (the line goes)")
-    page.click("#lib-d-stars [data-n='4']")
+    deadline = time.time() + 10
+    while time.time() < deadline and any(o["path"] == g[0] for o in get_json(base + "/api/overrides?set=" + urllib.parse.quote(playing))["overrides"]):
+        time.sleep(0.1)
+    check(g[0] not in t and not any(o["path"] == g[0] for o in get_json(base + "/api/overrides?set=" + urllib.parse.quote(playing))["overrides"]),
+          "tags: ♥ again takes the tag and the weight off (the line goes)")
+    page.click("#lib-d-fav")
     page.fill("#lib-d-tag", "Smoke  Tag")
     page.press("#lib-d-tag", "Enter")
-    t = wait_tags(overlay, lambda t: t.get(g[0]) == "r=4\tt=smoke tag")
-    check(t.get(g[0]) == "r=4\tt=smoke tag" and page.locator("#lib-d-utags [data-tag='smoke tag']").count() == 1,
+    t = wait_tags(overlay, lambda t: t.get(g[0]) == "t=favourite,smoke tag")
+    check(t.get(g[0]) == "t=favourite,smoke tag" and page.locator("#lib-d-utags [data-tag='smoke tag']").count() == 1,
           f"tags: a tag typed in, kept lowercased and tidied ({t.get(g[0])!r})")
     page.click("#lib-d-utags [data-tag='smoke tag'] button.txt")
     wait_counted(page)
     check(page.input_value("#lib-search") == 'tag:"smoke tag"' and lib_count(page)[0] == 1,
           f"tags: its chip searches for it ({page.input_value('#lib-search')!r}, {page.inner_text('#lib-count')})")
-    check(page.locator(f"#lib-list .vrow[data-path={json.dumps(g[0])}] .ut").inner_text().replace("\n", " ") == "★4 smoke tag",
-          f"tags: the row shows its stars and tag ({page.locator('#lib-list .vrow .ut').first.inner_text()!r})")
+    ut = page.locator(f"#lib-list .vrow[data-path={json.dumps(g[0])}] .ut").inner_text().replace("\n", " ")
+    check("♥" in ut and "smoke tag" in ut and "favourite" not in ut and "★" not in ut,
+          f"tags: the row shows ♥ and its tag ({ut!r})")
+    # (The heart's weight reindexes the playlist playing, which can move the mock on: played once that is done.)
+    deadline = time.time() + 15
+    while time.time() < deadline and get_json(base + "/api/status").get("index_state") == "building":
+        time.sleep(0.1)
+    time.sleep(0.5)
     page.evaluate("p => import('./js/state.js').then(m => m.app.play(p))", g[0])
     goto_view(page, "now")
-    page.wait_for_function("(t => t.includes('smoke tag') && t.endsWith('★4'))(document.querySelector('#now-tags').textContent)", timeout=20000)
-    check(True, f"now: the line has the tags and stars ({page.inner_text('#now-tags')!r})")
+    page.wait_for_function("(t => t.includes('smoke tag') && !t.includes('favourite') && !t.includes('★'))(document.querySelector('#now-tags').textContent)", timeout=20000)
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '♥'", timeout=20000)
+    check(True, f"now: the line has the tag, the heart is on ({page.inner_text('#now-tags')!r})")
     goto_view(page, "library")
     page.fill("#lib-search", "")
-    page.wait_for_selector("#lib-star-chip:not([hidden])", timeout=10000)
-    page.click("#lib-star-chip")
+    page.wait_for_selector("#lib-fav-chip:not([hidden])", timeout=10000)
+    page.click("#lib-fav-chip")
     wait_counted(page)
-    rated = sum(1 for p, f in tag_lines(overlay).items()
-                if re.search(r"(^|\t)r=[45]", f) and ((CARD / p.lstrip("/")).exists() or (overlay / p.lstrip("/")).exists()))
-    check(page.input_value("#lib-search") == "rating>=4" and lib_count(page)[0] == rated,
-          f"tags: the ★ 4+ chip searches rating>=4 ({page.inner_text('#lib-count')}, want {rated})")
+    favs = sum(1 for p, f in tag_lines(overlay).items()
+               if re.search(r"(^|\t)t=([^\t]*,)?favourite(,|$)", f) and ((CARD / p.lstrip("/")).exists() or (overlay / p.lstrip("/")).exists()))
+    check(page.input_value("#lib-search") == "tag:favourite" and lib_count(page)[0] == favs,
+          f"tags: the ♥ Favourites chip searches tag:favourite ({page.inner_text('#lib-count')}, want {favs})")
     page.fill("#lib-search", "rating>=9")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes('1 to 5')", timeout=10000)
     check(True, f"tags: words it cannot read say why ({page.inner_text('#lib-count')!r})")
@@ -1755,11 +1782,12 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.click("#lib-sel-more")
     page.click("#lib-bulk-tag")
     page.wait_for_selector("#bulk-tag", timeout=20000)
-    check(page.inner_text("#bulk-tags").strip() == "– smoke tag", f"tags: Tag… shows a tag on some of them as such ({page.inner_text('#bulk-tags')!r})")
+    chips = page.eval_on_selector_all("#bulk-tags .chip", "els => els.map(e => [e.dataset.tag, e.getAttribute('aria-pressed')])")
+    check(chips == [["favourite", "mixed"], ["smoke tag", "mixed"]], f"tags: Tag… offers Favourite, shows a tag on some of them as such ({chips})")
     page.fill("#bulk-tag-new", "pair")
     page.click("#bulk-tag-ok")
     t = wait_tags(overlay, lambda t: all("pair" in t.get(p, "") for p in g))
-    check(t.get(g[0]) == "r=4\tt=pair,smoke tag" and t.get(g[1]) == "t=pair", f"tags: Tag… adds it to both, in one write ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    check(t.get(g[0]) == "t=favourite,pair,smoke tag" and t.get(g[1]) == "t=pair", f"tags: Tag… adds it to both, in one write ({t.get(g[0])!r}, {t.get(g[1])!r})")
     page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith('Tagged 2 GIFs'))", timeout=10000)
     check(page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar"), "tags: Tag… done clears the selection, Select stays on")
     page.fill("#lib-search", "tag:pair")
@@ -1768,18 +1796,17 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     check(lib_count(page)[0] == 2 and len(rows) == 2 and all("pair" in r for r in rows), f"tags: both rows show it ({rows})")
     page.click("#toasts .toast:has-text('Tagged 2 GIFs') button")
     t = wait_tags(overlay, lambda t: all("pair" not in t.get(p, "") for p in g))
-    check(t.get(g[0]) == "r=4\tt=smoke tag" and g[1] not in t, f"tags: the toast's Undo puts them back ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    check(t.get(g[0]) == "t=favourite,smoke tag" and g[1] not in t, f"tags: the toast's Undo puts them back ({t.get(g[0])!r}, {t.get(g[1])!r})")
     # (Picked again: Tag… cleared them.)
     page.click("#lib-sel-done")
     page.evaluate("ps => import('./js/state.js').then(m => ps.forEach((p) => m.app.selection.add(p)))", g)
     page.click("#lib-select")
     page.click("#lib-sel-more")
-    page.click("#lib-bulk-rate")
-    page.click("#bulk-rate [data-n='2']")
-    t = wait_tags(overlay, lambda t: all(t.get(p, "").startswith("r=2") for p in g))
-    check(t.get(g[0]) == "r=2\tt=smoke tag" and t.get(g[1]) == "r=2", f"tags: Rate… gives both two stars ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    page.click("#lib-bulk-fav")
+    t = wait_tags(overlay, lambda t: all("favourite" in t.get(p, "") for p in g))
+    check(t.get(g[0]) == "t=favourite,smoke tag" and t.get(g[1]) == "t=favourite", f"tags: ♥ Favourite makes both favourites ({t.get(g[0])!r}, {t.get(g[1])!r})")
     wait_until(lambda: page.inner_text("#lib-selbar b") == "0", 5)
-    check(page.inner_text("#lib-selbar b") == "0", "tags: Rate… done clears the selection")
+    check(page.inner_text("#lib-selbar b") == "0", "tags: ♥ Favourite done clears the selection")
     page.click("#lib-sel-done")
     no_leaks(page, "library tags")
     # Tags of GIFs not on the card (a card edited on a PC).
@@ -1793,7 +1820,7 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     check(msg.startswith("2 tagged GIFs are no longer on the card (1 found in another folder)."), f"tags: tags of GIFs gone are noticed ({msg!r})")
     page.click("#lib-gone-move")
     t = wait_tags(overlay, lambda t: stray not in t)
-    check(t.get(g[1]) == "r=5\tt=moved" and gone in t, f"tags: Move their tags onto the GIF of that name ({t.get(g[1])!r})")
+    check(t.get(g[1]) == "r=5\tt=favourite,moved" and gone in t, f"tags: Move their tags onto the GIF of that name, with its own ({t.get(g[1])!r})")
     page.fill("#lib-search", "rating>=2")
     page.wait_for_selector("#lib-gone:not([hidden])", timeout=60000)
     page.click("#lib-gone-forget")
@@ -1803,14 +1830,23 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     phone = new_page(browser, "phone", errors)
     phone.goto(base + "/#library")
     lib_row(phone, g[0])
-    phone.wait_for_selector("#lib-d-stars .star", timeout=60000)
-    boxes = phone.eval_on_selector_all("#lib-d-stars .star", "els => els.map((e) => { const r = e.getBoundingClientRect(); return [r.width, r.height]; })")
-    check(len(boxes) == 5 and all(w >= 36 and hh >= 36 for w, hh in boxes), f"phone: the stars are 36 px targets ({boxes})")
+    phone.wait_for_selector("#lib-d-fav", timeout=60000)
+    box = phone.eval_on_selector("#lib-d-fav", "e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }")
+    check(box[0] >= 36 and box[1] >= 36, f"phone: the heart is a 36 px target ({box})")
     phone.context.close()
     if orig is None:
         delete_path(base, "/sets/.tags")
     else:
         put_text(base + "/api/files/sets/.tags", orig)
+    # (The weights the favourites wrote into the playlist playing go too.)
+    ov = get_json(base + "/api/overrides?set=" + urllib.parse.quote(playing))["overrides"]
+    left = [o for o in ov if o["path"] not in g]
+    if len(left) != len(ov):
+        meta = playlist_meta_path(playing)
+        if left:
+            put_text(base + "/api/files" + meta, "".join(render_meta_line(o["path"], o) + "\n" for o in left))
+        else:
+            delete_path(base, meta)
 
 
 def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
@@ -3124,13 +3160,13 @@ def rename_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.wait_for_function("document.querySelector('#set-title').textContent === 'rn-d'", timeout=5000)
     page.wait_for_timeout(500)  # (the editor's overrides read again)
     open_row_menu(page, "#set-entries", 1, via="more")
-    page.click("#ov-fav")
-    want = render_meta_line(g[0], {"w": 3}) + "\n" + render_meta_line(g[1], {"w": 3}) + "\n"
+    page.click("#ov-less")
+    want = render_meta_line(g[0], {"w": 3}) + "\n" + render_meta_line(g[1], {"w": 0.5}) + "\n"
     deadline = time.time() + 10
     while time.time() < deadline and not ((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want):
         page.wait_for_timeout(100)
     check((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want and not (sets / "rn-b.meta").exists(),
-          "rename: the open playlist's editor follows; a favourite then goes in the new name's file")
+          "rename: the open playlist's editor follows; an override then goes in the new name's file")
     # Now: what plays next, once the display has picked it.
     goto_view(page, "now")
     page.wait_for_function("document.querySelector('#now-next').textContent.startsWith(' · Next: ')", timeout=20000)
@@ -3379,35 +3415,38 @@ def settle(base: str, n: int) -> None:
     time.sleep(0.5)
 
 
-def now_fav_checks(page: Page, base: str) -> None:
-    """Now's ★ (the mock paused): the GIF on screen a favourite in the
-    playlist playing, as the Library's Favourite in… does, and off again.
+def now_fav_checks(page: Page, base: str, overlay: Path) -> None:
+    """Now's ♥ (the mock paused): the GIF on screen a favourite (the tag
+    `favourite`, and w=3 in the playlist playing, as Details' heart does),
+    and off again.
     Automatic preparing is off meanwhile: a long pause would let the mock's
     builder run and change what the cache checks later expect."""
     put_json(base + "/api/config", {"auto_prepare": "off"})
     page.wait_for_selector("#now-fav:not([hidden])", timeout=10000)
     path = page.text_content("#now-path")
     tip = page.get_attribute("#now-fav", "title")
-    check(page.inner_text("#now-fav") == "☆" and tip == "Favourite in “All files”" and page.get_attribute("#now-fav", "aria-pressed") == "false",
-          f"now fav: ☆ for {path.rsplit('/', 1)[-1]} ({tip!r})")
+    check(page.inner_text("#now-fav") == "♡" and tip == "Make it a favourite" and page.get_attribute("#now-fav", "aria-pressed") == "false",
+          f"now fav: ♡ for {path.rsplit('/', 1)[-1]} ({tip!r})")
     page.click("#now-fav")
-    # ★ and aria-pressed in one look, as the click left them: the save
+    # ♥ and aria-pressed in one look, as the click left them: the save
     # reindexes the playlist, and the panel moving on to the next GIF then
-    # (right) puts ☆ back before the overrides are read below.
-    page.wait_for_function("(b => b.textContent === '★' && b.getAttribute('aria-pressed') === 'true')(document.querySelector('#now-fav'))")
+    # (right) puts ♡ back before the overrides are read below.
+    page.wait_for_function("(b => b.textContent === '♥' && b.getAttribute('aria-pressed') === 'true')(document.querySelector('#now-fav'))")
     r = wait_overrides(base, "", 1)
-    check(r["overrides"] == [{"path": path, "w": 3}], f"now fav: ★ (pressed) -> GET /api/overrides?set= {r['overrides']}")
+    check(r["overrides"] == [{"path": path, "w": 3}], f"now fav: ♥ (pressed) -> GET /api/overrides?set= {r['overrides']}")
+    tg = wait_tags(overlay, lambda t: "favourite" in t.get(path, ""))
+    check("favourite" in tg.get(path, ""), f"now fav: ♥ is the tag favourite too ({tg.get(path)!r})")
     # The save reindexes the playlist, which can move the mock on: back to the GIF.
     settle(base, 1)
     if get_json(base + "/api/status")["now_playing"]["path"] != path:
         post_json(base + "/api/play", {"path": path})
-    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '♥'", timeout=10000)
     page.click("#now-fav")
-    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '♡'")
     deadline = time.time() + 10
     while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
         time.sleep(0.1)
-    check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
+    check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ♡ again -> no overrides left")
     # Clicked while the list is still being read (slowed here): the others survive.
     # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
     # An earlier build's `never` line (a GIF once hidden) is no override at all.
@@ -3423,7 +3462,7 @@ def now_fav_checks(page: Page, base: str) -> None:
     page.evaluate("location.hash = '#now'")
     page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)}", timeout=2000)
     page.click("#now-fav")
-    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '♥'")
     r = wait_overrides(base, "", 3)
     got = sorted(r["overrides"], key=lambda o: o["path"])
     check(got == sorted(seeded + [{"path": path, "w": 3}], key=lambda o: o["path"]), f"now fav: a click during the read keeps the others ({got})")
@@ -3431,9 +3470,9 @@ def now_fav_checks(page: Page, base: str) -> None:
     settle(base, 3)
     if get_json(base + "/api/status")["now_playing"]["path"] != path:
         post_json(base + "/api/play", {"path": path})
-    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '♥'", timeout=10000)
     page.click("#now-fav")
-    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '♡'")
     deadline = time.time() + 10  # its save landed (two left), then the file goes
     while time.time() < deadline and len(get_json(base + "/api/overrides?set=")["overrides"]) != 2:
         time.sleep(0.1)
@@ -3444,6 +3483,19 @@ def now_fav_checks(page: Page, base: str) -> None:
     while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
         time.sleep(0.1)
     put_json(base + "/api/config", {"auto_prepare": "idle"})
+
+
+def setvalue_of(manifest: str) -> str:
+    """The `set` value of the playlist at status `manifest` (js/state.js setValue)."""
+    p = manifest.replace("/sdcard", "")
+    n = p.rsplit("/", 1)[1]
+    return n[:-4] if p.startswith("/sets/") else "" if n == "filelist.txt" else n
+
+
+def playlist_meta_path(set_value: str) -> str:
+    """The overrides file of the playlist `set_value` (js/overrides.js fileFor)."""
+    p = "/filelist.txt" if not set_value else "/" + set_value if set_value.startswith("filelist.") else f"/sets/{set_value}.txt"
+    return (p[:-4] if p.endswith(".txt") else p) + ".meta"
 
 
 def wait_overrides(base: str, set_value: str, n: int, timeout_s: float = 10) -> dict:
@@ -5265,7 +5317,7 @@ def mock_pass(browser) -> None:
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Resume')")
         check(get_json(base + "/api/status")["paused"], "now: pause reached the device")
-        now_fav_checks(page, base)
+        now_fav_checks(page, base, overlay)
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
         recent_checks(page, base)
@@ -5297,6 +5349,14 @@ def mock_pass(browser) -> None:
         send_from_library(page, base, "library")
         check(page.locator("#lib-list .vrow:not([hidden]) input[type=checkbox]").count() == 0 and page.is_hidden("#lib-selbar"),
               "library: no checkboxes until Select")
+        # The favourite of the overrides below, before Select (a row tap then
+        # picks instead of opening Details): its heart, the tag and w=3 in
+        # the playlist playing.
+        fav_path = row_path(page, "#lib-list", 3)
+        page.click(f"#lib-list .vrow[data-path={json.dumps(fav_path)}]")
+        page.wait_for_selector(f"#lib-d-fav[data-path={json.dumps(fav_path)}]", timeout=60000)
+        page.click("#lib-d-fav")
+        page.wait_for_selector("#lib-d-fav[aria-pressed=true]", timeout=10000)
         page.click("#lib-select")
         page.wait_for_selector("#lib-selbar:not([hidden])")
         check(page.is_disabled("#lib-to-set") and page.locator("#lib-list .vrow:not([hidden]) input[type=checkbox]").count() > 0,
@@ -5314,8 +5374,8 @@ def mock_pass(browser) -> None:
         long_path = row_path(page, "#lib-list", 5)
         loop_path = row_path(page, "#lib-list", 6)
         open_row_menu(page, "#lib-list", 3, via="more")
-        page.click("#ov-fav")
-        page.wait_for_selector("#ov-menu", state="detached")
+        check(page.locator("#ov-menu #ov-fav").count() == 0, "row menu: no Favourite of its own (the heart is the tag)")
+        page.keyboard.press("Escape")
         open_row_menu(page, "#lib-list", 4, via="right-click")
         check(page.locator("#ov-menu #ov-hide").count() == 0, "row menu: no Hide")
         page.click("#ov-less")
@@ -5361,7 +5421,8 @@ def mock_pass(browser) -> None:
         check("sheet" in (phone.get_attribute("#ov-menu", "class") or ""), "phone: override menu renders as a bottom sheet")
         shot(phone, "override-menu", "phone")
         phone.context.close()
-        # Reset them all: the file goes back to gone (an empty map deletes it).
+        # Reset them all: the file goes back to gone (an empty map deletes it); the favourite's tag too.
+        page.evaluate("p => import('./js/tags.js').then((m) => m.setFav([p], false))", fav_path)
         for idx in (3, 4, 5, 6):
             open_row_menu(page, "#lib-list", idx, via="more")
             page.click("#ov-reset")
@@ -5499,15 +5560,15 @@ def mock_pass(browser) -> None:
         ov_row_path = row_path(page, "#set-entries", 0)
         check(ov_row_path == ov_set_lines[0], f"playlists: editor opened overridetest ({ov_row_path})")
         open_row_menu(page, "#set-entries", 0, via="more")
-        page.click("#ov-fav")
+        page.click("#ov-less")
         page.wait_for_selector("#ov-menu", state="detached")
         r = wait_overrides(base, "overridetest", 1)
-        check(r["overrides"] == [{"path": ov_row_path, "w": 3}], f"playlists: GET /api/overrides?set=overridetest agrees ({r['overrides']})")
+        check(r["overrides"] == [{"path": ov_row_path, "w": 0.5}], f"playlists: GET /api/overrides?set=overridetest agrees ({r['overrides']})")
         ov_meta_file = overlay / "sets" / "overridetest.meta"
-        want_ov_meta = render_meta_line(ov_row_path, {"w": 3}) + "\n"
+        want_ov_meta = render_meta_line(ov_row_path, {"w": 0.5}) + "\n"
         got_ov_meta = ov_meta_file.read_text() if ov_meta_file.exists() else ""
         check(got_ov_meta == want_ov_meta, f"playlists: sets/overridetest.meta byte-for-byte ({got_ov_meta!r})")
-        check(page.locator("#set-entries .vrow:not([hidden]) >> nth=0 >> i.fav").count() == 1, "playlists: favourite glyph in editor")
+        check(page.locator("#set-entries .vrow:not([hidden]) >> nth=0 >> i.less").count() == 1, "playlists: play-less glyph in editor")
         reorder_checks(page, ov_set_lines)
         no_leaks(page, "playlists (overrides)")
         # Cache: the three selected GIFs as a playlist, their copies forgotten.
@@ -9549,8 +9610,8 @@ def fit_checks(page: Page, base: str, overlay: Path) -> None:
     shot(page, "add-fit", "laptop")
     page.click("#fit-next")
     page.wait_for_selector("#dl .dl-item", timeout=30000)
-    check(page.locator("#fit").count() == 0 and page.inner_text("#dl .dl-item .cap.mono") == "fit-fixture.gif",
-          f"fit: Fit and next -> Add GIFs' details for {page.inner_text('#dl .dl-item .cap.mono')}")
+    check(page.locator("#fit").count() == 0 and page.text_content("#dl .dl-item .cap.mono") == "fit-fixture.gif",
+          f"fit: Fit and next -> Add GIFs' details for {page.text_content('#dl .dl-item .cap.mono')}")
     shot(page, "add-details", "laptop")
     got = dl_add(page, "Fit Test", "SNES", overlay)
     path = "/gifs/Consoles/" + got.name
@@ -9596,7 +9657,7 @@ def fit_checks(page: Page, base: str, overlay: Path) -> None:
     fit_ready(page)
     page.click("#fit-cancel")
     page.wait_for_selector("#dl .dl-item", timeout=30000)
-    check(page.locator("#dl .dl-item").count() == 1 and page.inner_text("#dl .dl-item .cap.mono") == "fit-long.gif",
+    check(page.locator("#dl .dl-item").count() == 1 and page.text_content("#dl .dl-item .cap.mono") == "fit-long.gif",
           "fit: Cancel leaves the picture out, the other GIF stays")
     page.click("#dl-cancel")
     add_files(page, [fixture, fx])
@@ -9815,8 +9876,9 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     for sel in ("#lib-play", "#lib-d-add", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
     page.click("#lib-d-more")
-    for sel in ("#lib-d-fav", "#lib-d-edit", "#lib-d-dl", "#lib-d-del"):
+    for sel in ("#lib-d-edit", "#lib-d-dl", "#lib-d-del"):
         check(page.is_visible(sel), f"details: {sel} in the … menu")
+    check(page.locator("#lib-d-menu #lib-d-fav").count() == 0, "details: Favourite is the heart, not in the … menu")
     check(page.locator("#lib-d-hide").count() == 0, "details: no Hide in… in the … menu")
     check("danger" in (page.get_attribute("#lib-d-del", "class") or ""), "details: Delete… is destructive in the menu")
     # Download GIF: the GIF itself (to change it in the website's Studio).
@@ -9881,13 +9943,13 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     check(card in plist_file.read_text().split("\n"), "add dialog: offered and appended to the playlist in play")
     # Mark it: a favourite in cachetest, Smooth motion's list.
     lib_row(page, card)
-    details_do(page, "#lib-d-fav")
-    page.click("#lib-in-menu [data-path='/sets/cachetest.txt']")
+    page.wait_for_selector(f"#lib-d-fav[data-path={json.dumps(card)}]", timeout=60000)
+    page.click("#lib-d-fav")
     meta = overlay / "sets" / "cachetest.meta"
     deadline = time.time() + 10
     while time.time() < deadline and not (meta.exists() and card in meta.read_text()):
         page.wait_for_timeout(100)
-    check(meta.exists() and meta.read_text().startswith(card + "\t"), "details: ★ Favourite written for cachetest")
+    check(meta.exists() and meta.read_text().startswith(card + "\t"), "details: ♥ Favourite written for cachetest, the playlist playing")
     smooth = overlay / "sets" / ".smooth"
     smooth_before = smooth.read_text() if smooth.exists() else None
     smooth.parent.mkdir(parents=True, exist_ok=True)

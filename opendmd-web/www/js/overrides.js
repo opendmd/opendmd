@@ -1,5 +1,7 @@
-// Per-GIF overrides per playlist (favourite, play less, play longer,
-// loop N times): the row glyphs and the menu. On the card, a `.meta` file
+// Per-GIF overrides per playlist (play more or less often, play longer,
+// loop N times): the row glyphs and the menu. A favourite is a tag
+// (js/tags.js, the heart), which writes its weight here as well; the
+// menu has no Favourite of its own. On the card, a `.meta` file
 // beside the playlist (wasm parseOverrides/renderOverrides; GET
 // /api/overrides?set=); the page never says so.
 
@@ -8,7 +10,7 @@ import { h, toast, label, base, isFormula, formulaName } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
-// Favourite on/off (Library, the menu, Now's ★).
+// Favourite's weight on/off (js/tags.js setFav; Now's heart).
 export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV });
 
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
@@ -80,10 +82,11 @@ export class Overrides {
   }
 }
 
-export function glyphs(o) {
+// `tagged`: a favourite by its tag, whose ♥ the tags' glyphs show already.
+export function glyphs(o, tagged) {
   if (!o) return null;
   const g = [];
-  if (o.w > 1) g.push(['★', 'Favourite: plays more often', 'fav']);
+  if (o.w > 1) { if (!tagged) g.push(['♥', 'Favourite: plays more often', 'fav']); }
   else if (o.w != null && o.w < 1) g.push(['▽', 'Plays less often', 'less']);
   if (o.dwell) g.push([`◔${o.dwell}s`, `Plays for ${o.dwell} seconds`, 'long']);
   else if (o.dwell_x) g.push([`◔${o.dwell_x}×`, `Plays ${o.dwell_x}× as long`, 'long']);
@@ -129,8 +132,7 @@ export function menu(ov, path, x, y, extra) {
     h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
       h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')));
   open = h('div.menu', { id: 'ov-menu', role: 'menu' }, head,
-    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put(fav(o))),
-    item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS })),
+    ov.path && [item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS })),
     item('ov-longer', o.dwell || o.dwell_x || o.loops, '◔ Play longer or loop…', longer),
     item('ov-reset', false, 'Reset', () => put({ w: null, dwell: null, dwell_x: null, loops: null }))],
     extra?.map(([id, t, act, off]) => Object.assign(item(id, false, t, () => { closeMenu(); act(); }), { disabled: !!off })));
@@ -166,7 +168,7 @@ export function actions(btn, id, items, head) {
 
 export function moreButton(ov, path, extra) {
   return h('button.sm.more', {
-    title: 'Favourite, play less, play longer…', 'aria-label': `options for ${isFormula(path) ? formulaName(path) : base(path)}`,
+    title: 'Play less often, longer or loop…', 'aria-label': `options for ${isFormula(path) ? formulaName(path) : base(path)}`,
     onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4, extra); },
   }, '…');
 }

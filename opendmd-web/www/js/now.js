@@ -16,7 +16,7 @@ import { app, playlistLabel, platName } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
-import { Overrides, moreButton, fav, actions } from './overrides.js';
+import { Overrides, moreButton, actions } from './overrides.js';
 import { h, clear, on, emit, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
@@ -38,27 +38,39 @@ const LOST_MS = 3000;
 // for a title card.
 let tagsAsked = false;
 const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
-// Then the user's own: its tags and stars (js/tags.js, once read).
+// Then the user's own: its tags (js/tags.js, once read; Favourite is the heart).
 function tags(p, e) {
   if (drawn(p)) return isFormula(p) ? 'Formula' : '';
   const by = e.flags.find((f) => !isFlag(f)), seen = new Set(), u = app.tags?.get(p);
   return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by, ...(u?.t || [])]
-    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).concat(u?.r ? ['★' + u.r] : []).join(' · ');
+    .filter((t) => t && t !== 'favourite' && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).join(' · ');
 }
 
-// ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
+// ♥: the GIF on screen a favourite (the built-in tag, js/tags.js setFav,
+// which also has it play more often in the playlist playing; one with
+// only that weight, from before, shows as one too). Not a title card or a
+// Formula. Drawn at once, saved after.
 function favButton() {
-  const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav) });
+  const ov = new Overrides(), b = h('button.more.heart', { id: 'now-fav', hidden: true, onclick: async () => {
+    const p = b.p, on = !b.on;
+    b.draw(on);
+    try { await (await import('./tags.js')).setFav([p], on, ov); } catch (e) { toast(unreachable(e) ? 'Panel not reachable' : 'Couldn’t save the favourite: ' + e.message, 'bad'); }
+    b.set(b.p, ov.path);
+  } });
   b.ov = ov;
+  b.draw = (on) => {
+    b.on = on;
+    b.textContent = on ? '♥' : '♡';
+    b.title = b.ariaLabel = on ? 'A favourite: plays more often' : 'Make it a favourite';
+    b.ariaPressed = on;
+  };
   b.set = (p, list) => {
     b.hidden = !(b.p = p) || drawn(p) || !list;
     if (list && list != ov.path) ov.load(list);
-    const on = ov.get(p)?.w > 1;
-    b.textContent = on ? '★' : '☆';
-    b.title = b.ariaLabel = `Favourite in “${ov.name}”`;
-    b.ariaPressed = on;
+    b.draw(!!app.tags?.get(p)?.t?.includes('favourite') || ov.get(p)?.w > 1);
   };
   ov.onChange = () => b.set(b.p, ov.path);
+  on('tags', () => b.set(b.p, ov.path));
   return b;
 }
 

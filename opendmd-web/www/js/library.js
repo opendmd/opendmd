@@ -3,12 +3,12 @@
 // fitted to the panel first where they need it: js/fit.js) and Find art
 // online (the website's Studio, opendmd.dev/studio/#import: finding art on
 // the web is the website's). See "The Library's layout" in CLAUDE.md. The user's tags
-// and stars (js/tags.js) show on the rows and in Details, and Select's
-// More ▾ tags, rates, moves, renames or deletes many GIFs at once
-// (js/tags.js, js/refs.js).
+// (js/tags.js; the built-in one, Favourite, a heart) show on the rows and
+// in Details, and Select's More ▾ favourites, tags, moves, renames or
+// deletes many GIFs at once (js/tags.js, js/refs.js).
 
 import { app, platName } from './state.js';
-import { Overrides, glyphs, menu, moreButton, actions, fav, popup, closeMenu } from './overrides.js';
+import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
@@ -72,7 +72,7 @@ export async function mount(el) {
   // The user's tags (js/tags.js), once the card has any or Details asks.
   let tg = null;
   const tagsMod = () => import('./tags.js').then(async (m) => { await m.tags(); tg = m; return m; });
-  on('tags', () => { tree.refresh(); stars(); });
+  on('tags', () => { tree.refresh(); favs(); });
 
   const ov = new Overrides();
   ov.onChange = () => tree.refresh();
@@ -88,7 +88,8 @@ export async function mount(el) {
     onTick: () => sync(),
     onError: (m) => toast(m, 'bad'),
     extra(it) {
-      return [glyphs(ov.get(it.path)), tg && tg.bits(app.tags.get(it.path)), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
+      const u = tg && app.tags.get(it.path);
+      return [glyphs(ov.get(it.path), tg?.isFav(u)), tg && tg.bits(u), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
     },
     onUpdate: counted,
   });
@@ -128,21 +129,22 @@ export async function mount(el) {
   addEventListener('scroll', onScroll, { capture: true, passive: true });
 
   // On a phone the chips scroll sideways: fade an edge while more is off that side.
-  // ★ 4+: one chip beside the platforms once something is rated.
-  const starChip = h('button.chip', { id: 'lib-star-chip', hidden: true, onclick: () => {
-    const q = search.value.trim(), on = /(^|\s)rating>=4(\s|$)/.test(q);
-    search.value = on ? q.replace(/(^|\s)rating>=4(?=\s|$)/, '').trim() : (q + ' rating>=4').trim();
+  // ♥ Favourites: one chip beside the platforms once something is a favourite.
+  const FQ = /(^|\s)tag:favourite(?=\s|$)/;
+  const favChip = h('button.chip', { id: 'lib-fav-chip', hidden: true, onclick: () => {
+    const q = search.value.trim();
+    search.value = FQ.test(q) ? q.replace(FQ, '').trim() : (q + ' tag:favourite').trim();
     apply();
-  } }, '★ 4+');
-  const stars = () => {
-    starChip.hidden = !app.tags?.book.rated;
-    starChip.classList.toggle('on', /(^|\s)rating>=4(\s|$)/.test(search.value));
+  } }, '♥ Favourites');
+  const favs = () => {
+    favChip.hidden = !app.tags?.names().some(([t]) => t === 'favourite');
+    favChip.classList.toggle('on', FQ.test(search.value));
   };
   const goneMsg = h('span.grow');
   const goneBox = h('div.lib-web', { id: 'lib-gone', hidden: true }, goneMsg,
     h('button.txt', { id: 'lib-gone-move', onclick: () => strays(true) }, 'Move their tags'),
     h('button.txt', { id: 'lib-gone-forget', onclick: () => strays(false) }, 'Forget them'));
-  const r2 = h('div.lib-r2', { id: 'lib-r2' }, starChip, chips);
+  const r2 = h('div.lib-r2', { id: 'lib-r2' }, favChip, chips);
   const edge = () => {
     r2.classList.toggle('more', r2.scrollLeft + r2.clientWidth < r2.scrollWidth - 2);
     r2.classList.toggle('less', r2.scrollLeft > 2);
@@ -174,8 +176,9 @@ export async function mount(el) {
     const e = it.e, gif = it.path[0] != '@';
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
+    moreBtn.hidden ||= !app.device; // (its items are the card's)
     tagBox.hidden = !gif;
-    if (gif) (tg ? Promise.resolve(tg) : tagsMod()).then((m) => { if (current === it) m.detail(tagBox, it.path, (t) => { search.value = 'tag:' + (/[\s,:]/.test(t) ? `"${t}"` : t); apply(); }); }).catch(() => {});
+    if (gif) (tg ? Promise.resolve(tg) : tagsMod()).then((m) => { if (current === it) m.detail(tagBox, it.path, (t) => { search.value = 'tag:' + (/[\s,:]/.test(t) ? `"${t}"` : t); apply(); }, ov); }).catch(() => {});
     const a = authorOf(e), sp = (id, t) => t && h('span', { id }, t);
     clear(meta, [sp('lib-d-platform', platName(e.platform)), sp('lib-d-category', e.category && niceName(e.category)),
       a && ['by ', sp('lib-d-author', a)], ...e.flags.filter(isFlag).map(flagName)].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
@@ -196,22 +199,11 @@ export async function mount(el) {
   }
 
   function detailMenu(btn) {
-    const o = ov.get(current.path) || {};
     actions(btn, 'lib-d-menu', [
-      ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, fav, (x) => x.w > 1)],
       app.device && ['lib-d-edit', 'Edit details…', edit],
       // (To change the GIF itself: download it and open it in the website's Studio.)
       app.device && ['lib-d-dl', 'Download GIF', () => h('a', { href: enc(current.path), download: base(current.path) }).click()],
       app.device && ['lib-d-del', 'Delete…', remove, '.danger']], label(current.e));
-  }
-  async function inList(btn, patch, is) {
-    const it = current, lists = await app.playlists().catch(() => []);
-    if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
-    const o = ov.get(it.path) || {};
-    actions(btn, 'lib-in-menu', lists.map((p) => [{ 'data-path': p.path }, [h('span.ck', p.path === ov.path && is(o) ? '✓' : ''), p.label], async () => {
-      if (p.path !== ov.path) { await ov.load(p.path); store.set('lib.ov', p.path); }
-      ov.set(it.path, (x) => ({ ...x, ...patch(x) }));
-    }]), 'In which playlist?');
   }
 
   function toggle(path, onOff) {
@@ -257,7 +249,7 @@ export async function mount(el) {
     const text = search.value.trim();
     count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
     count.classList.toggle('bad', !!st.err);
-    stars();
+    favs();
     unseen();
     // Every folder listed (a search): tags kept for GIFs no longer here.
     if (!st.busy && st.text && !st.bad && tg && lostKey !== (lostKey = `${st.pool}|${app.tags.size}`)) {
@@ -268,7 +260,7 @@ export async function mount(el) {
       goneBox.hidden = !lost.length;
       goneBox.querySelector('#lib-gone-move').hidden = !moved;
     }
-    grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply, (v) => platName(v) || 'Other') < 2);
+    grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply, (v) => platName(v) || 'Other') < 2 && favChip.hidden);
     grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
     webMsg.replaceChildren('Nothing here matches “', webQ, '”. ');
@@ -288,9 +280,9 @@ export async function mount(el) {
     apply();
   }
 
-  // Select's More ▾: Tag…, Rate… (js/tags.js); Move to folder…, Rename…,
-  // Delete… (js/refs.js). Each clears the selection once done (a tag or
-  // rating's Undo, later, leaves a new one alone).
+  // Select's More ▾: ♥ Favourite, Tag… (js/tags.js); Move to folder…,
+  // Rename…, Delete… (js/refs.js). Each clears the selection once done (a
+  // tag or favourite's Undo, later, leaves a new one alone).
   function bulkMenu(btn) {
     const paths = [...app.selection].filter((p) => p.startsWith('/gifs/'));
     let once = false;
@@ -298,8 +290,8 @@ export async function mount(el) {
     const none = ['lib-none', 'Select none', () => { app.selection.clear(); sync(); }];
     if (!paths.length) { actions(btn, 'lib-bulk', [none], 'Nothing selected'); return; }
     actions(btn, 'lib-bulk', [none,
+      ['lib-bulk-fav', '♥ Favourite', () => tagsMod().then((m) => m.bulkFav(paths, done))],
       ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
-      ['lib-bulk-rate', 'Rate…', () => tagsMod().then((m) => m.bulkRate(btn, paths, done))],
       app.device && ['lib-bulk-move', 'Move to folder…', () => bulk('bulkMove', paths)],
       app.device && ['lib-bulk-rename', 'Rename…', () => bulk('bulkRename', paths)],
       app.device && ['lib-bulk-del', 'Delete…', () => bulk('bulkDelete', paths), '.danger']], `${paths.length.toLocaleString()} GIFs`);
