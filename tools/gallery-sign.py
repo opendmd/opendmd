@@ -477,7 +477,9 @@ def cmd_selftest(_a) -> None:
             die("signatures verified under another key")
         print("another key     -> refused (a throwaway key's set never passes the committed key)")
         v = json.loads(sigs.read_text())
-        v["formulas"]["fire"][0]["sig"] = v["formulas"]["fire"][0]["sig"][:-2] + "00"
+        sig = bytearray.fromhex(v["formulas"]["fire"][0]["sig"])
+        sig[-1] ^= 1  # (one bit, always a change)
+        v["formulas"]["fire"][0]["sig"] = sig.hex()
         if not check_dir(published(d), v, pubs, floor)[1]:
             die("a tampered signature verified")
         print("tampered sig    -> refused")

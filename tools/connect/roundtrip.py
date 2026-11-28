@@ -22,15 +22,19 @@ case; `ROUNDTRIP PASS` at the end.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import os
 import sys
+from pathlib import Path
 
 import aiohttp
 import nacl.signing
 from aiohttp import web
 
 import odc
+
+REPO = Path(__file__).resolve().parents[2]
 from mock_panel import Panel
 from mock_server import Server
 
@@ -304,72 +308,78 @@ async def main():
         r3 = await a.command("formulas", {"after": nxt})
         ok(r1.get("ok") and r2.get("err") == "rate" and r3 and r3.get("ok"), "formulas' rate: a second listing within 5 s is rate; the first's next page is free")
         panel.formulas_every = 0
-        # --- Formulas added by remote (5.7) ------------------------------------------
+        # --- Formulas added by remote (5.7): the gallery's own signed Formulas --------
         import hashlib
+        gal = Path(os.environ.get("GALLERY_OUT", REPO / "target" / "gallery-out"))
+        sigs = json.loads((REPO / "opendmd-web" / "formulas" / "signatures.json").read_text())["formulas"]
+        if not (gal / "plasma.psb").exists():
+            sys.exit(f"no {gal}/plasma.psb: make gallery-out first (the published Formulas' bytes)")
 
-        async def add(src: bytes, psb: bytes, stem="rift-patrol", name="Rift patrol", id_=11, parts=True):
-            args = {"id": id_, "stem": stem, "name": name, "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(),
-                    "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+        def published(stem):
+            e = sigs[stem][0]
+            return (gal / f"{stem}.psi").read_bytes(), (gal / f"{stem}.psb").read_bytes(), e
+
+        def fargs(st, src, psb, e, id_, **over):
+            x = {"id": id_, "stem": st, "kid": e["kid"], "abi": e["abi"], "rev": e["rev"], "sig": odc.b64url(bytes.fromhex(e["sig"])),
+                 "src_size": len(src), "src_sha256": hashlib.sha256(src).hexdigest(), "psb_size": len(psb), "psb_sha256": hashlib.sha256(psb).hexdigest()}
+            x.update(over)
+            return x
+
+        async def add(args, stream, parts=True, tamper=None):
             await asyncio.sleep(0.26)
             r = await a.command("formula-add", args)
             if not parts or not r or not r.get("ok") or (r.get("r") or {}).get("done"):
                 return r
-            stream, off = src + psb, (r["r"] or {}).get("next", 0)
+            off = (r["r"] or {}).get("next", 0)
             while off < len(stream):
-                d = stream[off: off + odc.ADD_MAX_PART]
+                d = bytearray(stream[off: off + odc.ADD_MAX_PART])
+                if tamper is not None and off <= tamper < off + len(d):
+                    d[tamper - off] ^= 1
                 await asyncio.sleep(0.26)  # (the key's 4 commands a second)
-                r = await a.command("formula-part", {"id": id_, "off": off, "data": odc.b64url(d)})
+                r = await a.command("formula-part", {"id": args["id"], "off": off, "data": odc.b64url(bytes(d))})
                 if not r or not r.get("ok"):
                     return r
                 off += len(d)
             return r
 
         panel.card_formulas = []
-        src = b'name "Rift patrol"\n' + b"-- " + b"x" * 1200 + b"\ngray(x)\n"
-        psb = b"PSB" + bytes([panel.abi]) + b"\x00\x0bRift patrol" + b"\x01" * 300
-        # A panel takes no add until it checks the gallery's signature:
-        # well-formed adds and parts are not-allowed, nothing lands.
-        ok(not odc.ADDS_TAKEN, "adds are not admitted (odc.ADDS_TAKEN false: no gallery signature, no witness)")
-        r = await add(src, psb, id_=10)
-        await asyncio.sleep(0.3)
-        rp = await a.command("formula-part", {"id": 10, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
-        ok(r and r.get("err") == "not-allowed" and rp and rp.get("err") == "not-allowed" and not panel.files and panel.add is None,
-           f"red: an unsigned formula-add and a formula-part: not-allowed, nothing landed ({r}, {rp})")
-        await asyncio.sleep(0.3)
-        r = await a.command("formula-add", {"id": 16, "stem": "../x", "name": "x", "src_size": 1, "src_sha256": "00" * 32, "psb_size": 6, "psb_sha256": "00" * 32})
-        ok(r and r.get("err") == "bad-arg", "red: a malformed formula-add is still bad-arg first")
-        # The mock's own add flow, for the signed adds to come (no panel
-        # takes these as they are: odc.ADDS_TAKEN is set here only).
-        odc.ADDS_TAKEN = True
-        r = await add(src, psb)
-        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and panel.files["rift-patrol"] == (src, psb),
-           f"(mock flow) formula-add: {len(src) + len(psb)} B in parts of {odc.ADD_MAX_PART}, landed as rift-patrol ({r})")
+        src, psb, e = published("plasma")
+        r = await add(fargs("plasma", src, psb, e, 11), src + psb)
+        ok(r and r.get("r") == {"done": True, "stem": "plasma"} and panel.files["plasma"] == (src, psb),
+           f"formula-add: plasma as the gallery publishes it (its signature from signatures.json): landed ({r})")
         await asyncio.sleep(0.3)
         fr = ((await a.command("formulas")) or {}).get("r") or {}
-        ok(fr.get("abi") == panel.abi and "psb" not in fr and ["rift-patrol", "Rift patrol"] in (fr.get("card") or []), "formulas: abi said (no psb flag), the added one listed")
-        r = await add(src, psb, id_=12)
-        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol"} and list(panel.files) == ["rift-patrol"], "formula-add of the same source again: done, the same stem, nothing written")
-        src2 = src.replace(b"gray(x)", b"gray(y)")
-        r = await add(src2, psb, id_=13)
-        ok(r and r.get("r") == {"done": True, "stem": "rift-patrol-2"} and panel.files["rift-patrol"][0] == src, "formula-add of another source under a taken stem: the next free stem, the first untouched")
-        bad = b"PSB" + bytes([panel.abi + 1]) + psb[4:]
-        r = await add(src.replace(b"gray(x)", b"gray(z)"), bad, id_=14)
-        ok(r and r.get("err") == "bad-arg" and len(panel.files) == 2, "red: a compiled file the panel cannot take: bad-arg, nothing landed")
-        r = await add(src.replace(b"gray(x)", b"gray(w)"), psb, id_=15, parts=False)
+        ok(fr.get("abi") == panel.abi and fr.get("gk") == [0] and ["plasma", "Plasma"] in (fr.get("card") or []), f"formulas: abi and the gallery key ids said, the added one listed ({fr.get('abi')}, {fr.get('gk')})")
+        r = await add(fargs("plasma", src, psb, e, 12), src + psb)
+        ok(r and r.get("r") == {"done": True, "stem": "plasma"} and list(panel.files) == ["plasma"], "the same Formula again: done, nothing written")
+        fsrc, fpsb, fe = published("fire")
+        panel.files["fire"] = (b"name \"My fire\"\ngray(x)\n", b"PSB\x03\x00\x00")
+        r = await add(fargs("fire", fsrc, fpsb, fe, 13), fsrc + fpsb)
+        ok(r and r.get("r") == {"done": True, "stem": "fire-2"} and panel.files["fire"][0].startswith(b'name "My fire"'), "a taken stem with another source: lands as fire-2, the user's untouched")
+        rsrc, rpsb, re_ = published("rift-patrol")
+        r = await add(fargs("rift-patrol", rsrc, rpsb, re_, 14), rsrc + rpsb, tamper=len(rsrc) + 100)
+        ok(r and r.get("err") == "bad-arg" and "rift-patrol" not in panel.files and panel.add is None, f"red: a tampered part: bad-arg at the end, nothing landed ({r})")
+        for what, over in [("unsigned (zeros)", {"sig": odc.b64url(bytes(64))}), ("wrong ABI", {"abi": e["abi"] + 1}),
+                           ("rev under the floor", {"rev": 0}), ("unknown key id", {"kid": 9}), ("plasma's signature for rift-patrol", {"stem": "rift-patrol", "src_size": len(rsrc), "src_sha256": hashlib.sha256(rsrc).hexdigest()}),
+                           ("plasma's signature with another source", {"src_sha256": hashlib.sha256(src + b" ").hexdigest()}),
+                           ("plasma's signature offered for a landing stem", {"stem": "plasma-2"})]:
+            r = await add(fargs("plasma", src, psb, e, 20, **over), src + psb, parts=False)
+            ok(r and r.get("err") == "not-allowed", f"red: {what}: not-allowed ({r})")
+        r = await a.command("formula-part", {"id": 20, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
+        ok(r and r.get("err") == "not-allowed", "red: a part with no add held: not-allowed")
+        for bad_args in ({"stem": "../x"}, {"stem": "Rift"}, {"kid": 256}, {"sig": odc.b64url(bytes(63))}, {"rev": -1}):
+            r = await add(fargs("plasma", src, psb, e, 16, **bad_args), b"", parts=False)
+            ok(r and r.get("err") == "bad-arg", f"red: formula-add {bad_args}: bad-arg")
+        r = await add(fargs("rift-patrol", rsrc, rpsb, re_, 17), rsrc + rpsb, parts=False)
+        r1 = await a.command("formula-part", {"id": 17, "off": 0, "data": odc.b64url(rsrc[:odc.ADD_MAX_PART])})
         await asyncio.sleep(0.3)
-        r1 = await a.command("formula-part", {"id": 15, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
-        await asyncio.sleep(0.3)
-        r2 = await a.command("formula-part", {"id": 15, "off": 0, "data": odc.b64url(src[:odc.ADD_MAX_PART])})
-        ok(r1.get("ok") and r2.get("err") == "bad-arg", f"red: a part again (a replay past the counter): not at next, bad-arg ({r}, {r1}, {r2})")
-        for bad_args in ({"id": 16, "stem": "../x"}, {"id": 16, "stem": "Rift"}):
-            await asyncio.sleep(0.3)
-            r = await a.command("formula-add", {**{"name": "x", "src_size": 1, "src_sha256": "00" * 32, "psb_size": 6, "psb_sha256": "00" * 32}, **bad_args})
-            ok(r and r.get("err") == "bad-arg", f"red: formula-add {bad_args['stem']!r}: bad-arg")
-        panel.add_day = [(time.monotonic(), 0)] * odc.ADD_QUOTA_ADDS
-        r = await add(b"other", psb, stem="other", id_=17, parts=False)
-        ok(r and r.get("err") == "quota", "formula-add past the day's 16: quota")
-        panel.add_day = []
-        odc.ADDS_TAKEN = False
+        r2 = await a.command("formula-part", {"id": 17, "off": 0, "data": odc.b64url(rsrc[:odc.ADD_MAX_PART])})
+        ok(r and r.get("ok") and r1.get("ok") and r2.get("err") == "bad-arg", f"red: a part again (a replay past the counter): not at next, bad-arg ({r1}, {r2})")
+        panel.add_started = [time.monotonic()] * odc.ADD_DAY_ADDS
+        wsrc, wpsb, we = published("rain")
+        r = await add(fargs("rain", wsrc, wpsb, we, 18), wsrc + wpsb, parts=False)
+        ok(r and r.get("err") == "quota", "the 17th add started in a day: quota")
+        panel.add_started = []
         panel.card_formulas = [("my-road", "My road"), ("den-clock", "Den clock")]
         panel.formulas_cmd = False
         r = await a.command("formulas")

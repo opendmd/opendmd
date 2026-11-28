@@ -28,7 +28,7 @@
 //! `firmware/keys/gallery*.pub`. Until the project's gallery key is
 //! committed the table is empty and every check is
 //! [`Refusal::UnknownKey`]: nothing can be added, whatever is offered.
-//! `tests/gallery_signatures.rs` holds the table to the committed files
+//! `src/gallery_sig_set.rs` holds the table to the committed files
 //! and every committed signature (`opendmd-web/formulas/signatures.json`)
 //! to the firmware's own verifier; `tools/gallery-sign.py` makes them.
 //!
@@ -53,7 +53,7 @@ pub const SIG_LEN: usize = 64;
 /// The gallery keys this firmware trusts, by id. Empty until the project's
 /// gallery key is committed (`firmware/keys/gallery.pub`, made by
 /// `tools/gallery-sign.py keygen`); a rotation adds the next id beside it.
-/// `tests/gallery_signatures.rs` fails while this table, the committed key
+/// `src/gallery_sig_set.rs` fails while this table, the committed key
 /// files and its pinned hex (`PINNED`) disagree.
 //
 // THE SIGNING COMMIT EDITS THE NEXT LINE BY HAND, and nothing else here:
@@ -88,7 +88,7 @@ pub struct Formula<'a> {
 ///
 /// ```compile_fail
 /// use opendmd_core::gallery_sig::Signed;
-/// let s = Signed { kid: 0, abi: 3, rev: 1, stem: String::from("x"), src_len: 1, src_sha256: [0; 32], psb_len: 6, psb_sha256: [0; 32] };
+/// let s = Signed { kid: 0, abi: 3, rev: 1, stem: String::from("x"), src_len: 1, src_sha256: [0; 32], psb_len: 6, psb_sha256: [0; 32], sig: [0; 64] };
 /// ```
 ///
 /// ```compile_fail
@@ -104,9 +104,14 @@ pub struct Signed {
     src_sha256: [u8; 32],
     psb_len: u32,
     psb_sha256: [u8; 32],
+    sig: [u8; SIG_LEN],
 }
 
 impl Signed {
+    /// The signature it was taken with.
+    pub fn sig(&self) -> &[u8; SIG_LEN] {
+        &self.sig
+    }
     pub fn kid(&self) -> u8 {
         self.kid
     }
@@ -197,9 +202,23 @@ pub fn message(f: &Formula) -> Result<Message, Refusal> {
 /// compiled format the player plays.
 #[derive(Debug, Clone, Copy)]
 pub struct Trust<'a> {
-    pub keys: &'a [(u8, &'a [u8; KEY_LEN])],
-    pub floor: u32,
-    pub abi: u8,
+    keys: &'a [(u8, &'a [u8; KEY_LEN])],
+    floor: u32,
+    abi: u8,
+}
+
+impl<'a> Trust<'a> {
+    /// Another trust (the crate's own tests only: outside them the one way
+    /// to make a `Trust` is [`Trust::panel`]).
+    #[cfg(test)]
+    pub(crate) fn for_tests(keys: &'a [(u8, &'a [u8; KEY_LEN])], floor: u32, abi: u8) -> Trust<'a> {
+        Trust { keys, floor, abi }
+    }
+
+    /// The key ids it trusts.
+    pub fn key_ids(&self) -> impl Iterator<Item = u8> + '_ {
+        self.keys.iter().map(|&(id, _)| id)
+    }
 }
 
 impl Trust<'static> {
@@ -215,14 +234,9 @@ impl Trust<'static> {
 /// witness when it does.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn check(t: &Trust, f: &Formula, sig: &[u8; SIG_LEN]) -> Result<Signed, Refusal> {
+    precheck(t, f)?;
     let msg = message(f)?;
     let key = t.keys.iter().find(|(id, _)| *id == f.kid).map(|&(_, k)| k).ok_or(Refusal::UnknownKey)?;
-    if f.abi != t.abi {
-        return Err(Refusal::WrongAbi);
-    }
-    if f.rev < t.floor {
-        return Err(Refusal::OldRev);
-    }
     let key = VerifyingKey::from_bytes(key).map_err(|_| Refusal::BadSignature)?;
     key.verify_strict(msg.as_bytes(), &Signature::from_bytes(sig)).map_err(|_| Refusal::BadSignature)?;
     Ok(Signed {
@@ -234,12 +248,34 @@ pub fn check(t: &Trust, f: &Formula, sig: &[u8; SIG_LEN]) -> Result<Signed, Refu
         src_sha256: f.src_sha256,
         psb_len: f.psb_len,
         psb_sha256: f.psb_sha256,
+        sig: *sig,
     })
+}
+
+/// [`check`]'s cheap refusals alone (no signature work, no allocation): a
+/// stem outside the rule, a key id `t` does not trust, another compiled
+/// format, a revision under the floor. Run before anything is spent on a
+/// verify.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn precheck(t: &Trust, f: &Formula) -> Result<(), Refusal> {
+    if !stem_ok(f.stem) {
+        return Err(Refusal::BadStem);
+    }
+    if !t.keys.iter().any(|(id, _)| *id == f.kid) {
+        return Err(Refusal::UnknownKey);
+    }
+    if f.abi != t.abi {
+        return Err(Refusal::WrongAbi);
+    }
+    if f.rev < t.floor {
+        return Err(Refusal::OldRev);
+    }
+    Ok(())
 }
 
 /// A witness for the crate's own unit tests (the add's state machine):
 /// made the only way there is, `check`, over a signature by the vectors'
-/// throwaway key A (`tests/gallery_vectors.rs`), which no firmware trusts.
+/// throwaway key A (the vectors'), which no firmware trusts.
 #[cfg(test)]
 pub(crate) fn signed_for_tests(f: &Formula) -> Signed {
     use ed25519_dalek::{Signer, SigningKey};
@@ -249,7 +285,7 @@ pub(crate) fn signed_for_tests(f: &Formula) -> Signed {
     let public = k.verifying_key().to_bytes();
     let keys = [(f.kid, &public)];
     let sig = k.sign(message(f).expect("a stem in the rule").as_bytes()).to_bytes();
-    check(&Trust { keys: &keys, floor: 0, abi: f.abi }, f, &sig).expect("the test key's own signature")
+    check(&Trust::for_tests(&keys, 0, f.abi), f, &sig).expect("the test key's own signature")
 }
 
 #[cfg(test)]
@@ -308,3 +344,12 @@ mod tests {
         const { assert!(REV_FLOOR >= 1) };
     }
 }
+
+// The shared vectors and the committed signatures' check: the crate's own
+// tests (they make trusts of their own, which only cfg(test) can).
+#[cfg(test)]
+#[path = "gallery_sig_vectors.rs"]
+mod vectors;
+#[cfg(test)]
+#[path = "gallery_sig_set.rs"]
+mod set;

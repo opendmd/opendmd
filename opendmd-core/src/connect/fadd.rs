@@ -1,20 +1,19 @@
 //! A Formula added by a remote controller (`formula-add`, `formula-part`;
 //! protocol 5.7): the panel's side, without the card. The arguments' rules,
-//! one add at a time with its two SHA-256s and its next offset, resumes,
-//! the day's tally (kept on the card by the firmware), the add's own rate.
-//! The firmware writes the bytes, checks the compiled program
+//! the gallery's signature, one add at a time with its two SHA-256s and its
+//! next offset, resumes, the adds started a day (in RAM), the add's own
+//! rate. The firmware writes the bytes, checks the compiled program
 //! (`psb::verify`) and lands the files (`firmware/src/connect/fadd.rs`).
 //!
-//! This is the one place a remote controller would hand the panel a
-//! program (every other path refuses inline Formulas and `~sent`). Only a
-//! Formula the project signed may arrive that way (the gallery's
-//! signature, [`crate::gallery_sig`]). An add is held only with the
-//! [`Signed`] witness `gallery_sig::check` returns ([`Adds::begin`]), and
-//! nothing else can make one: the command, the firmware's add and its
-//! landing all take it. Until `formula-add` carries the signature (the
-//! signed-gallery design's step 4) the parser has none to check, so it
-//! refuses every add `not-allowed`; a part with no add held is refused
-//! `not-allowed` before the card. Nothing reaches the card.
+//! This is the one place a remote controller hands the panel a program
+//! (every other path refuses inline Formulas and `~sent`), and only a
+//! Formula the project signed may arrive that way: [`admit`] checks the
+//! gallery's signature (`crate::gallery_sig::check`) over the stem, the
+//! sizes and the hashes the add names, right after the argument rules and
+//! before anything else (the parser), and an add is held only with the
+//! [`Signed`] witness it returns, over exactly those bytes ([`Adds::begin`]).
+//! Nothing else can make one: the command, the firmware's add and its
+//! landing all take it.
 
 use std::time::Duration;
 
@@ -37,16 +36,30 @@ pub const MAX_PSB: u32 = 8 * 1024;
 /// One part's bytes, at most: its 512 base64url characters keep the
 /// largest `formula-part` body within the 700 bytes a command may be.
 pub const MAX_PART: usize = 384;
-/// The name the page shows, at most (characters).
-pub const MAX_NAME: usize = 60;
-/// Adds a day may start, and their bytes ([`Tally`]).
-pub const QUOTA_ADDS: u32 = 16;
-pub const QUOTA_BYTES: u64 = 256 * 1024;
+/// Adds one key may start in a day of uptime, and all keys together
+/// ([`Adds`], in RAM: a restart starts it again, and nothing remote can
+/// restart a panel). It bounds abandoned adds' part files; what may land is
+/// bounded by the signature.
+pub const DAY_ADDS: usize = 16;
+pub const PANEL_DAY_ADDS: usize = 32;
+pub const DAY: Duration = Duration::from_secs(24 * 3600);
+/// A held add's whole life, from its start, however often it is sent
+/// again (the firmware's test image may set a shorter one).
+pub const LIFETIME: Duration = Duration::from_secs(15 * 60);
+/// Gallery signature checks (an Ed25519 verify each, on a task of its own):
+/// per key one every 2 s with a burst of 2; per panel one a second with a
+/// burst of 3. Taken before the verify; a held add sent again by its own key
+/// is not verified again (its witness is compared instead).
+pub const VERIFY_KEY: (u64, u64) = (500_000, 2_000_000);
+pub const VERIFY_PANEL: (u64, u64) = (1_000_000, 3_000_000);
+/// One card read for an add (its directory pass: a new add, or the same
+/// Formula found already there) per key in 2 s, per panel in 1 s.
+pub const PANEL_ADD_EVERY: Duration = Duration::from_secs(1);
 /// Formulas the card may hold for an add to be taken (sources counted in the
 /// add's own directory pass).
 pub const MAX_FORMULAS: usize = 128;
-/// One `formula-add` a panel takes in this long (its own rate: a refused or
-/// over-quota key cannot make the panel read the card four times a second).
+/// One card read for an add per key in this long ([`PANEL_ADD_EVERY`] for
+/// the panel): a key cannot make the panel read the card four times a second.
 pub const ADD_EVERY: Duration = Duration::from_secs(2);
 /// An add with no progress for this long is dropped (its part files too).
 pub const STALE: Duration = Duration::from_secs(600);
@@ -57,7 +70,6 @@ pub const STALE: Duration = Duration::from_secs(600);
 pub struct AddArgs {
     pub id: u32,
     pub stem: String,
-    pub name: String,
     pub src_size: u32,
     pub src_sha256: [u8; 32],
     pub psb_size: u32,
@@ -72,6 +84,117 @@ impl AddArgs {
     /// Whether `w` is a signature over exactly these bytes, under this stem.
     pub fn signed_by(&self, w: &Signed) -> bool {
         w.stem() == self.stem && w.src() == (self.src_size, &self.src_sha256) && w.psb() == (self.psb_size, &self.psb_sha256)
+    }
+}
+
+/// A `formula-add` the gallery's signature admitted: its arguments and the
+/// witness over them (boxed in the command: every command's frames stay
+/// the size they were).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Admitted {
+    pub args: AddArgs,
+    pub signed: Signed,
+}
+
+/// `formula-add`'s signature fields: the gallery key's id, the compiled
+/// format and the signing revision it was signed for, and the signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claim {
+    pub kid: u8,
+    pub abi: u8,
+    pub rev: u32,
+    pub sig: [u8; 64],
+}
+
+/// The gallery's signature checked over exactly what the add names (its
+/// argument stem, never a landing stem; the sizes and hashes the parts are
+/// held to) for `t`: the witness, or `NotAllowed` for any refusal.
+#[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn admit(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust) -> Result<Signed, Refusal> {
+    crate::gallery_sig::check(t, &formula_of(args, c), &c.sig).map_err(|_| Refusal::NotAllowed)
+}
+
+/// A gallery signature check to run, owning all it needs (nothing borrowed
+/// from the caller's stack: a runner may give up waiting for it).
+#[derive(Debug)]
+pub struct VerifyJob {
+    args: AddArgs,
+    claim: Claim,
+    trust: crate::gallery_sig::Trust<'static>,
+}
+
+impl VerifyJob {
+    /// The check itself ([`admit`]).
+    pub fn run(self) -> Result<Signed, Refusal> {
+        admit(&self.args, &self.claim, &self.trust)
+    }
+}
+
+/// Where the gallery's signature check runs: given the job, its result, or
+/// `None` when it could not run it, or gave up waiting (`busy`). The
+/// firmware runs it on a task of its own ([`set_verify_runner`]), off the
+/// network worker's stack; with none set (the host), in place.
+pub type Runner = fn(Box<VerifyJob>) -> Option<Result<Signed, Refusal>>;
+static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
+
+/// The firmware's [`Runner`] (once, at start).
+pub fn set_verify_runner(r: Runner) {
+    let _ = RUNNER.set(r);
+}
+
+/// [`admit`] through the [`Runner`], after its cheap refusals
+/// (`gallery_sig::precheck`: no allocation, no task).
+pub fn admit_where_it_runs(args: &AddArgs, c: &Claim, t: &crate::gallery_sig::Trust<'static>) -> Result<Signed, Refusal> {
+    crate::gallery_sig::precheck(t, &formula_of(args, c)).map_err(|_| Refusal::NotAllowed)?;
+    // (Boxed: only a pointer moves through the frames below, the worker's.)
+    let job = Box::new(VerifyJob { args: args.clone(), claim: c.clone(), trust: *t });
+    match RUNNER.get() {
+        Some(run) => run(job).unwrap_or(Err(Refusal::Busy)),
+        None => job.run(),
+    }
+}
+
+fn formula_of<'a>(args: &'a AddArgs, c: &Claim) -> crate::gallery_sig::Formula<'a> {
+    crate::gallery_sig::Formula {
+        kid: c.kid,
+        abi: c.abi,
+        rev: c.rev,
+        stem: &args.stem,
+        src_len: args.src_size,
+        src_sha256: args.src_sha256,
+        psb_len: args.psb_size,
+        psb_sha256: args.psb_sha256,
+    }
+}
+
+/// Tokens in millionths, refilled at a rate and capped (the verify rates).
+#[derive(Debug, Clone, Copy)]
+struct Tokens {
+    micro: u64,
+    last: Duration,
+}
+
+impl Tokens {
+    fn full(cap: u64, now: Duration) -> Tokens {
+        Tokens { micro: cap, last: now }
+    }
+
+    fn take(&mut self, now: Duration, (per_s, cap): (u64, u64)) -> bool {
+        let dt = now.saturating_sub(self.last).as_micros().min(u128::from(u64::MAX)) as u64;
+        self.micro = self.micro.saturating_add(dt.saturating_mul(per_s) / 1_000_000).min(cap);
+        self.last = self.last.max(now);
+        if self.micro >= 1_000_000 {
+            self.micro -= 1_000_000;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn has(&self, now: Duration, (per_s, cap): (u64, u64)) -> bool {
+        let dt = now.saturating_sub(self.last).as_micros().min(u128::from(u64::MAX)) as u64;
+        self.micro.saturating_add(dt.saturating_mul(per_s) / 1_000_000).min(cap) >= 1_000_000
     }
 }
 
@@ -136,6 +259,19 @@ pub fn b64url(b: &[u8]) -> String {
     s
 }
 
+/// SHA-256 fed in pieces (the firmware's read-back of a part file).
+#[derive(Default)]
+pub struct Hash(Sha256);
+
+impl Hash {
+    pub fn update(&mut self, b: &[u8]) {
+        self.0.update(b);
+    }
+    pub fn finish(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
+}
+
 /// SHA-256 of what `r` reads, in 512-byte pieces (a card file's).
 pub fn sha256_of(mut r: impl std::io::Read) -> std::io::Result<[u8; 32]> {
     let mut h = Sha256::new();
@@ -152,20 +288,25 @@ fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
     a.get(k)
 }
 
-/// `formula-add`'s arguments.
-pub fn add_args(a: &Value) -> Result<AddArgs, Refusal> {
+/// `formula-add`'s arguments, and its signature's fields (`kid` 0-255,
+/// `abi` 0-255, `rev` 0 to 2^32-1, `sig` strict base64url of exactly 64
+/// bytes: else `bad-arg`).
+pub fn add_args(a: &Value) -> Result<(AddArgs, Claim), Refusal> {
     let bad = Refusal::BadArg;
     let int = |k: &str| arg(a, k).and_then(Value::as_int).ok_or(bad);
     let id = u32::try_from(int("id")?).ok().filter(|&i| i != 0).ok_or(bad)?;
     let stem = arg(a, "stem").and_then(Value::as_str).filter(|s| stem_ok(s)).ok_or(bad)?.to_string();
-    let name = arg(a, "name").and_then(Value::as_str).ok_or(bad)?;
-    let name = super::keys::clean_text(name, 4 * MAX_NAME, MAX_NAME).ok_or(bad)?;
+    let kid = u8::try_from(int("kid")?).map_err(|_| bad)?;
+    let abi = u8::try_from(int("abi")?).map_err(|_| bad)?;
+    let rev = u32::try_from(int("rev")?).map_err(|_| bad)?;
+    let sig = arg(a, "sig").and_then(Value::as_str).filter(|s| s.len() == 86).and_then(unb64url).and_then(|b| <[u8; 64]>::try_from(b).ok()).ok_or(bad)?;
     let (src_size, psb_size) = (int("src_size")?, int("psb_size")?);
     if !(1..=i64::from(MAX_SOURCE)).contains(&src_size) || !(i64::from(MIN_PSB)..=i64::from(MAX_PSB)).contains(&psb_size) {
         return Err(if src_size > i64::from(MAX_SOURCE) || psb_size > i64::from(MAX_PSB) { Refusal::TooBig } else { bad });
     }
     let hash = |k: &str| arg(a, k).and_then(Value::as_str).and_then(super::codec::unhex::<32>).ok_or(bad);
-    Ok(AddArgs { id, stem, name, src_size: src_size as u32, src_sha256: hash("src_sha256")?, psb_size: psb_size as u32, psb_sha256: hash("psb_sha256")? })
+    let args = AddArgs { id, stem, src_size: src_size as u32, src_sha256: hash("src_sha256")?, psb_size: psb_size as u32, psb_sha256: hash("psb_sha256")? };
+    Ok((args, Claim { kid, abi, rev, sig }))
 }
 
 /// `formula-part`'s arguments: `(id, off, data)`.
@@ -201,7 +342,12 @@ pub struct Held {
     pub next: u32,
     src: Sha256,
     psb: Sha256,
+    /// Its last progress (a part), and its start (its absolute life).
     pub at: Duration,
+    pub born: Duration,
+    /// Its `.psi` is on the card already, the same source: only the `.psb`
+    /// is to be put back (a refill, the design's step 6).
+    pub refill: bool,
     /// Landed (its `done` may be asked again within [`STALE`]).
     pub landed: bool,
 }
@@ -228,87 +374,6 @@ pub struct Progress {
     pub complete: bool,
 }
 
-/// The day's adds: kept on the card (the firmware's `/formulas/.add-day.*`,
-/// two slots written in turn) so a restart does not reset it. `day`: the
-/// calendar day (Unix days) of the panel's clock when it had one, else
-/// `None`. It starts again only on a later day; a tally made with no clock
-/// is carried into the first day a clock shows, and with no clock at all it
-/// never starts again (adds stop at the quota until a clock shows a later
-/// day). Every `formula-add` that gets past the rate is counted, before the
-/// card is read for it (a refused one too): the card is never read for free.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Tally {
-    /// Written in turn: the higher one is the newer slot.
-    pub seq: u64,
-    pub day: Option<u64>,
-    pub adds: u32,
-    pub bytes: u64,
-}
-
-impl Tally {
-    /// A full day: what anything unreadable counts as.
-    pub const FULL: Tally = Tally { seq: 0, day: None, adds: QUOTA_ADDS, bytes: QUOTA_BYTES };
-
-    /// Its line on the card: `<seq> <day or -> <adds> <bytes>`.
-    pub fn text(&self) -> String {
-        format!("{} {} {} {}\n", self.seq, self.day.map_or("-".to_string(), |d| d.to_string()), self.adds, self.bytes)
-    }
-
-    /// Read back. Only a missing file is a fresh day (the caller's): an
-    /// empty, torn or unreadable one is a full day.
-    pub fn parse(t: &str) -> Tally {
-        let mut w = t.split_whitespace();
-        let (Some(q), Some(d), Some(a), Some(b), None) = (w.next(), w.next(), w.next(), w.next(), w.next()) else {
-            return Tally::FULL;
-        };
-        let day = match d {
-            "-" => None,
-            d => match d.parse() {
-                Ok(d) => Some(d),
-                Err(_) => return Tally::FULL,
-            },
-        };
-        match (q.parse(), a.parse(), b.parse()) {
-            (Ok(seq), Ok(adds), Ok(bytes)) => Tally { seq, day, adds, bytes },
-            _ => Tally::FULL,
-        }
-    }
-
-    /// The tally from the card's two slots (`None`: that slot's file is
-    /// missing). Both missing: a fresh day; either unreadable: a full day;
-    /// else the newer.
-    pub fn from_slots(a: Option<&str>, b: Option<&str>) -> Tally {
-        match (a.map(Tally::parse), b.map(Tally::parse)) {
-            (None, None) => Tally::default(),
-            (Some(t), None) | (None, Some(t)) => t,
-            (Some(x), Some(y)) if x == Tally::FULL || y == Tally::FULL => Tally::FULL,
-            (Some(x), Some(y)) => if x.seq >= y.seq { x } else { y },
-        }
-    }
-
-    /// As of `today` (`None`: no clock): only a later day starts it again;
-    /// a tally with no day is carried into the first one a clock shows.
-    fn roll(&mut self, today: Option<u64>) {
-        match (self.day, today) {
-            (Some(d), Some(t)) if t > d => {
-                *self = Tally { seq: self.seq, day: Some(t), adds: 0, bytes: 0 };
-            }
-            (None, Some(t)) => self.day = Some(t),
-            _ => {}
-        }
-    }
-
-    fn room(&self, bytes: u64) -> bool {
-        self.adds < QUOTA_ADDS && self.bytes.saturating_add(bytes) <= QUOTA_BYTES
-    }
-
-    fn charge(&mut self, adds: u32, bytes: u64) {
-        self.adds = self.adds.saturating_add(adds);
-        self.bytes = self.bytes.saturating_add(bytes);
-        self.seq = self.seq.saturating_add(1);
-    }
-}
-
 /// What a `formula-add` may do, before the card is read.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Pre {
@@ -321,75 +386,153 @@ pub enum Pre {
     New,
 }
 
-/// The panel's adds: one held at a time, the day's tally, the add's rate.
-#[derive(Debug, Default)]
+/// The panel's adds: one held at a time; the adds started in the last day of
+/// uptime, per key and in all; the card reads for adds, per key and in all;
+/// the gallery verifies' rates, per key and in all.
+#[derive(Debug)]
 pub struct Adds {
     pub held: Option<Held>,
-    pub tally: Tally,
-    last_add: Option<Duration>,
+    started: Vec<(KeyId, Duration)>,
+    reads: Vec<(KeyId, Duration)>,
+    panel_read: Option<Duration>,
+    verify_keys: Vec<(KeyId, Tokens)>,
+    verify_panel: Option<Tokens>,
+    lifetime: Duration,
+}
+
+impl Default for Adds {
+    fn default() -> Adds {
+        Adds::with_lifetime(LIFETIME)
+    }
 }
 
 impl Adds {
-    /// The held add, if it is not stale at `now` (else it is dropped and
-    /// its id returned: its part files to remove now).
+    /// With a held add's absolute life `lifetime` ([`LIFETIME`] normally).
+    pub fn with_lifetime(lifetime: Duration) -> Adds {
+        Adds { held: None, started: Vec::new(), reads: Vec::new(), panel_read: None, verify_keys: Vec::new(), verify_panel: None, lifetime }
+    }
+
+    fn live(&self, h: &Held, now: Duration) -> bool {
+        now.saturating_sub(h.at) < STALE && (h.landed || now.saturating_sub(h.born) < self.lifetime)
+    }
+
+    /// The held add, if it is still live at `now` (else it is dropped and
+    /// its id returned: its part files to remove now): no progress for
+    /// [`STALE`], or not landed within its absolute life.
     pub fn expire(&mut self, now: Duration) -> Option<u32> {
-        if self.held.as_ref().is_some_and(|h| now.saturating_sub(h.at) >= STALE) {
+        if self.held.as_ref().is_some_and(|h| !self.live(h, now)) {
             return self.held.take().map(|h| h.args.id);
         }
         None
     }
 
-    /// Before anything is read from the card: the add's own rate, the same
-    /// add again, another key's add under way, the day's tally.
-    pub fn pre(&mut self, k: KeyId, args: &AddArgs, now: Duration, today: Option<u64>) -> Result<Pre, Refusal> {
-        let rated = self.last_add.is_some_and(|t| now.saturating_sub(t) < ADD_EVERY);
-        if let Some(h) = &mut self.held {
-            if h.k == k && &h.args == args && now.saturating_sub(h.at) < STALE {
-                // (Its checks tried again, with all the bytes in: rated too.)
-                let whole = !h.landed && h.next == h.args.total();
-                if whole && rated {
-                    return Err(Refusal::Rate);
-                }
-                if whole {
-                    self.last_add = Some(now);
-                }
-                h.at = now;
-                return Ok(if h.landed { Pre::Landed { stem: h.target.clone() } } else { Pre::Resume { next: h.next } });
+    /// The gallery's signature for `k`'s add (the command's parser, before
+    /// anything else): the cheap refusals; the held add sent again by its own
+    /// key, the same signed statement, takes its witness again (no verify);
+    /// else the verify rates (`rate`), then the verify where the firmware
+    /// runs it.
+    pub fn admit(&mut self, k: KeyId, args: &AddArgs, c: &Claim, now: Duration, t: &crate::gallery_sig::Trust<'static>) -> Result<Signed, Refusal> {
+        crate::gallery_sig::precheck(t, &formula_of(args, c)).map_err(|_| Refusal::NotAllowed)?;
+        if let Some(h) = self.held.as_ref().filter(|h| h.k == k && &h.args == args && self.live(h, now)) {
+            let w = &h.signed;
+            if (w.kid(), w.abi(), w.rev(), w.sig()) == (c.kid, c.abi, c.rev, &c.sig) {
+                return Ok(w.clone());
             }
+        }
+        let key = match self.verify_keys.iter().position(|(x, _)| *x == k) {
+            Some(i) => i,
+            None => {
+                // (Bounded: the oldest bucket goes past 32 keys; the key
+                // list holds 16.)
+                if self.verify_keys.len() >= 32 {
+                    self.verify_keys.remove(0);
+                }
+                self.verify_keys.push((k, Tokens::full(VERIFY_KEY.1, now)));
+                self.verify_keys.len() - 1
+            }
+        };
+        let panel = self.verify_panel.get_or_insert(Tokens::full(VERIFY_PANEL.1, now));
+        if !self.verify_keys[key].1.has(now, VERIFY_KEY) || !panel.has(now, VERIFY_PANEL) {
+            return Err(Refusal::Rate);
+        }
+        self.verify_keys[key].1.take(now, VERIFY_KEY);
+        panel.take(now, VERIFY_PANEL);
+        admit_where_it_runs(args, c, t)
+    }
+
+    fn last_read(&self, k: &KeyId) -> Option<Duration> {
+        self.reads.iter().find(|(x, _)| x == k).map(|&(_, t)| t)
+    }
+
+    /// Before anything is read from the card (and after the signature):
+    /// the card-read rate (per key and in all), the same add again, another
+    /// key's add under way, the adds started in the last day (per key and
+    /// in all). Nothing is counted here: [`note_read`](Self::note_read)
+    /// and [`begin`](Self::begin) do, once the card is read.
+    pub fn pre(&mut self, k: KeyId, args: &AddArgs, now: Duration) -> Result<Pre, Refusal> {
+        let rated = self.last_read(&k).is_some_and(|t| now.saturating_sub(t) < ADD_EVERY)
+            || self.panel_read.is_some_and(|t| now.saturating_sub(t) < PANEL_ADD_EVERY);
+        let live = self.held.as_ref().is_some_and(|h| self.live(h, now));
+        if let Some(h) = self.held.as_ref().filter(|h| live && h.k == k && &h.args == args) {
+            // (Its checks tried again, with all the bytes in: a card read,
+            // rated too. Sent again, it is never made younger.)
+            let whole = !h.landed && h.next == h.args.total();
+            if whole && rated {
+                return Err(Refusal::Rate);
+            }
+            let p = if h.landed { Pre::Landed { stem: h.target.clone() } } else { Pre::Resume { next: h.next } };
+            if whole {
+                self.note_read(k, now);
+            }
+            return Ok(p);
         }
         if rated {
             return Err(Refusal::Rate);
         }
-        self.last_add = Some(now);
-        // (A landed add holds nothing; a stalled one of another key does
-        // until it is stale.)
-        if self.held.as_ref().is_some_and(|h| h.k != k && !h.landed && now.saturating_sub(h.at) < STALE) {
+        // (A landed add holds nothing; a live one of another key does.)
+        if self.held.as_ref().is_some_and(|h| live && h.k != k && !h.landed) {
             return Err(Refusal::Busy);
         }
-        self.tally.roll(today);
-        if !self.tally.room(u64::from(args.total())) {
-            return Err(Refusal::Quota);
-        }
-        // Counted now, before the card is read (a refusal after it too); the
-        // bytes when it begins.
-        self.tally.charge(1, 0);
+        self.day_room(k, now)?;
         Ok(Pre::New)
     }
 
-    /// The card said where it lands: held, charged, with the gallery's
-    /// signature over exactly these bytes (`BadArg` for another's).
+    /// The card is read for `k`'s add now (its directory pass): counted
+    /// against the card-read rate, per key and in all (an add found already
+    /// there too).
+    pub fn note_read(&mut self, k: KeyId, now: Duration) {
+        match self.reads.iter_mut().find(|(x, _)| *x == k) {
+            Some(r) => r.1 = now,
+            None => {
+                self.reads.retain(|&(_, t)| now.saturating_sub(t) < DAY);
+                self.reads.push((k, now));
+            }
+        }
+        self.panel_read = Some(now);
+    }
+
+    fn day_room(&mut self, k: KeyId, now: Duration) -> Result<(), Refusal> {
+        self.started.retain(|&(_, t)| now.saturating_sub(t) < DAY);
+        if self.started.len() >= PANEL_DAY_ADDS || self.started.iter().filter(|(x, _)| *x == k).count() >= DAY_ADDS {
+            return Err(Refusal::Quota);
+        }
+        Ok(())
+    }
+
+    /// The card said where it lands: held, counted (`Quota` past the day's
+    /// [`DAY_ADDS`]), with the gallery's signature over exactly these bytes
+    /// (`BadArg` for another's).
     /// `Ok(Some(id))`: an earlier add given up for it, its part files to
     /// remove.
     ///
-    /// The witness comes from `gallery_sig::check` (this compiles; it is
-    /// refused at run time, as no key signed it):
+    /// The witness comes from `gallery_sig::check` ([`admit`]; this
+    /// compiles, and is refused at run time: no key signed it):
     ///
     /// ```no_run
-    /// use opendmd_core::connect::{fadd::{add_args, Adds}, json};
-    /// use opendmd_core::gallery_sig::{check, Formula, Trust};
-    /// let a = add_args(&json::parse(br#"{"id":1,"stem":"x","name":"x","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
-    /// let f = Formula { kid: 0, abi: 3, rev: 1, stem: &a.stem, src_len: a.src_size, src_sha256: a.src_sha256, psb_len: a.psb_size, psb_sha256: a.psb_sha256 };
-    /// let w = check(&Trust::panel(3), &f, &[0; 64]).unwrap();
+    /// use opendmd_core::connect::{fadd::{add_args, admit, Adds}, json};
+    /// use opendmd_core::gallery_sig::Trust;
+    /// let (a, c) = add_args(&json::parse(br#"{"id":1,"stem":"x","kid":0,"abi":3,"rev":1,"sig":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
+    /// let w = admit(&a, &c, &Trust::panel(3)).unwrap();
     /// Adds::default().begin([0; 8], a, w, "x".into(), Default::default()).unwrap();
     /// ```
     ///
@@ -398,17 +541,25 @@ impl Adds {
     ///
     /// ```compile_fail
     /// use opendmd_core::connect::{fadd::{add_args, Adds, Signed}, json};
-    /// let a = add_args(&json::parse(br#"{"id":1,"stem":"x","name":"x","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
+    /// let (a, _) = add_args(&json::parse(br#"{"id":1,"stem":"x","kid":0,"abi":3,"rev":1,"sig":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
     /// let w = Signed { kid: 0, abi: 3, rev: 1, stem: a.stem.clone(), src_len: a.src_size, src_sha256: a.src_sha256, psb_len: a.psb_size, psb_sha256: a.psb_sha256 };
     /// Adds::default().begin([0; 8], a, w, "x".into(), Default::default()).unwrap();
     /// ```
     pub fn begin(&mut self, k: KeyId, args: AddArgs, signed: Signed, target: String, now: Duration) -> Result<Option<u32>, Refusal> {
+        self.begin_as(k, args, signed, target, false, now)
+    }
+
+    /// [`begin`](Self::begin), `refill`: the source is on the card already
+    /// (its hash the signed one) and only the `.psb` is to be put back.
+    pub fn begin_as(&mut self, k: KeyId, args: AddArgs, signed: Signed, target: String, refill: bool, now: Duration) -> Result<Option<u32>, Refusal> {
         if !args.signed_by(&signed) {
             return Err(Refusal::BadArg);
         }
+        // (The day's room first: nothing held is given up for a refusal.)
+        self.day_room(k, now)?;
         let dropped = self.held.take().filter(|h| !h.landed).map(|h| h.args.id);
-        self.tally.charge(0, u64::from(args.total()));
-        self.held = Some(Held { k, args, signed, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, landed: false });
+        self.started.push((k, now));
+        self.held = Some(Held { k, args, signed, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, born: now, refill, landed: false });
         Ok(dropped)
     }
 
@@ -418,7 +569,8 @@ impl Adds {
         if self.held.is_none() {
             return Err(Refusal::NotAllowed);
         }
-        let h = self.held.as_mut().filter(|h| h.args.id == id && !h.landed && now.saturating_sub(h.at) < STALE).ok_or(Refusal::BadArg)?;
+        let live = self.held.as_ref().is_some_and(|h| self.live(h, now));
+        let h = self.held.as_mut().filter(|h| live && h.args.id == id && !h.landed).ok_or(Refusal::BadArg)?;
         if h.k != k {
             return Err(Refusal::NotAllowed);
         }
@@ -490,7 +642,7 @@ mod tests {
     use crate::connect::json;
 
     fn args(src: &[u8], psb: &[u8], stem: &str) -> AddArgs {
-        AddArgs { id: 7, stem: stem.into(), name: "Rift patrol".into(), src_size: src.len() as u32, src_sha256: sha256(&[src]), psb_size: psb.len() as u32, psb_sha256: sha256(&[psb]) }
+        AddArgs { id: 7, stem: stem.into(), src_size: src.len() as u32, src_sha256: sha256(&[src]), psb_size: psb.len() as u32, psb_sha256: sha256(&[psb]) }
     }
     const K: KeyId = [1; 8];
     const K2: KeyId = [2; 8];
@@ -514,9 +666,11 @@ mod tests {
     fn the_arguments() {
         let src = b"name \"Rift\"\ngray(x)";
         let psb = b"PSB\x03\x00\x04Rift";
-        let a = |extra: &str| format!(r#"{{"id":7,"stem":"rift-patrol","name":"Rift","src_size":{},"src_sha256":"{}","psb_size":{},"psb_sha256":"{}"{extra}}}"#, src.len(), hex(&sha256(&[src])), psb.len(), hex(&sha256(&[psb])));
+        let sig = b64url(&[7; 64]);
+        let a = |extra: &str| format!(r#"{{"id":7,"stem":"rift-patrol","kid":0,"abi":3,"rev":1,"sig":"{sig}","src_size":{},"src_sha256":"{}","psb_size":{},"psb_sha256":"{}"{extra}}}"#, src.len(), hex(&sha256(&[src])), psb.len(), hex(&sha256(&[psb])));
         let v = json::parse(a("").as_bytes()).unwrap();
-        assert_eq!(add_args(&v).unwrap().stem, "rift-patrol");
+        let (args, c) = add_args(&v).unwrap();
+        assert_eq!((args.stem.as_str(), c.kid, c.abi, c.rev, c.sig), ("rift-patrol", 0, 3, 1, [7; 64]));
         for (bad, want) in [
             (a("").replace("rift-patrol", "Rift"), Refusal::BadArg),
             (a("").replace("rift-patrol", "../x"), Refusal::BadArg),
@@ -527,8 +681,19 @@ mod tests {
             (a("").replace(&format!("\"psb_size\":{}", psb.len()), "\"psb_size\":8193"), Refusal::TooBig),
             (a("").replace(&format!("\"psb_size\":{}", psb.len()), "\"psb_size\":5"), Refusal::BadArg),
             (a("").replace(&hex(&sha256(&[src])), &hex(&sha256(&[src])).to_uppercase()), Refusal::BadArg),
+            // The signature's fields: ranges, and exactly 64 bytes of strict base64url.
+            (a("").replace("\"kid\":0", "\"kid\":256"), Refusal::BadArg),
+            (a("").replace("\"kid\":0", "\"kid\":-1"), Refusal::BadArg),
+            (a("").replace("\"abi\":3", "\"abi\":256"), Refusal::BadArg),
+            (a("").replace("\"rev\":1", "\"rev\":4294967296"), Refusal::BadArg),
+            (a("").replace("\"rev\":1,", ""), Refusal::BadArg),
+            (a("").replace(&sig, &b64url(&[7; 63])), Refusal::BadArg),
+            (a("").replace(&sig, &b64url(&[7; 65])), Refusal::BadArg),
+            (a("").replace(&sig, &format!("{sig}==")), Refusal::BadArg),
+            (a("").replace(&sig, &sig.replace('-', "+").replace('_', "/").replacen('H', "+", 1)), Refusal::BadArg),
+            (a("").replace(&sig, &(sig[..85].to_string() + "x")), Refusal::BadArg),
         ] {
-            assert_eq!(add_args(&json::parse(bad.as_bytes()).unwrap()), Err(want), "{bad}");
+            assert_eq!(add_args(&json::parse(bad.as_bytes()).unwrap()).map(drop), Err(want), "{bad}");
         }
         let p = |s: &str| part_args(&json::parse(s.as_bytes()).unwrap());
         assert_eq!(p(r#"{"id":7,"off":0,"data":"AQID"}"#), Ok((7, 0, vec![1, 2, 3])));
@@ -560,14 +725,128 @@ mod tests {
     }
 
     /// `pre` then `begin`, as the firmware does once the card named a target.
-    fn start(adds: &mut Adds, k: KeyId, a: AddArgs, now: Duration, today: Option<u64>) -> Result<Pre, Refusal> {
-        let p = adds.pre(k, &a, now, today)?;
+    fn start(adds: &mut Adds, k: KeyId, a: AddArgs, now: Duration) -> Result<Pre, Refusal> {
+        let p = adds.pre(k, &a, now)?;
         if p == Pre::New {
+            adds.note_read(k, now);
             let stem = a.stem.clone();
             let w = witness(&a);
             adds.begin(k, a, w, stem, now)?;
         }
         Ok(p)
+    }
+
+    /// The vectors' test key A as a `'static` trust, and its claim over `a`.
+    fn test_trust() -> crate::gallery_sig::Trust<'static> {
+        use ed25519_dalek::SigningKey;
+        let seed: [u8; 32] = Sha256::digest(b"opendmd-gallery throwaway test key, never a real one: A").into();
+        let public: &'static [u8; 32] = Box::leak(Box::new(SigningKey::from_bytes(&seed).verifying_key().to_bytes()));
+        let keys: &'static [(u8, &'static [u8; 32])] = Box::leak(Box::new([(0u8, public)]));
+        crate::gallery_sig::Trust::for_tests(keys, 1, 3)
+    }
+
+    fn claim(a: &AddArgs) -> Claim {
+        use ed25519_dalek::{Signer, SigningKey};
+        let seed: [u8; 32] = Sha256::digest(b"opendmd-gallery throwaway test key, never a real one: A").into();
+        let c = Claim { kid: 0, abi: 3, rev: 1, sig: [0; 64] };
+        let sig = SigningKey::from_bytes(&seed).sign(crate::gallery_sig::message(&formula_of(a, &c)).unwrap().as_bytes()).to_bytes();
+        Claim { sig, ..c }
+    }
+
+    /// The verify's own guards: the cheap refusals before anything; the
+    /// verify rates (per key one in 2 s, burst 2; per panel one a second,
+    /// burst 3) before the verify; the held add sent again by its own key
+    /// takes its witness again with no verify (here: with no verify left
+    /// in the rate); any change to the statement is verified anew.
+    #[test]
+    fn admit_guards_the_verify() {
+        let tr = test_trust();
+        let a = args(b"gray(x)\n", b"PSB\x03\x00\x00", "x");
+        let c = claim(&a);
+        let mut adds = Adds::default();
+        for (what, bad) in [("kid", Claim { kid: 9, ..c.clone() }), ("abi", Claim { abi: 4, ..c.clone() }), ("rev", Claim { rev: 0, ..c.clone() })] {
+            assert_eq!(adds.admit(K, &a, &bad, t(0), &tr), Err(Refusal::NotAllowed), "{what}");
+        }
+        assert!(adds.verify_keys.is_empty() && adds.verify_panel.is_none(), "the cheap refusals spend no rate");
+        // Two for the key at once, then one in 2 s.
+        let garbage = Claim { sig: [7; 64], ..c.clone() };
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::NotAllowed));
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::NotAllowed));
+        assert_eq!(adds.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::Rate), "the key's burst used");
+        assert_eq!(adds.admit(K, &a, &garbage, Duration::from_millis(1900), &tr), Err(Refusal::Rate));
+        assert_eq!(adds.admit(K, &a, &garbage, t(2), &tr), Err(Refusal::NotAllowed), "one in 2 s");
+        // The panel's: three keys at once take its burst of 3 (one left over
+        // from above refilled), the next key is rated.
+        let mut p = Adds::default();
+        for (i, k) in [[3u8; 8], [4; 8], [5; 8]].into_iter().enumerate() {
+            assert_eq!(p.admit(k, &a, &garbage, t(10), &tr), Err(Refusal::NotAllowed), "key {i}");
+        }
+        assert_eq!(p.admit([6; 8], &a, &garbage, t(10), &tr), Err(Refusal::Rate), "the panel's burst used");
+        // The held add, sent again by its own key: its witness, no verify.
+        let mut h = Adds::default();
+        let w = h.admit(K, &a, &c, t(0), &tr).unwrap();
+        h.admit(K, &a, &c, t(0), &tr).unwrap();
+        h.begin(K, a.clone(), w.clone(), "x".into(), t(0)).unwrap();
+        for _ in 0..10 {
+            assert_eq!(h.admit(K, &a, &c, t(0), &tr), Ok(w.clone()), "no verify: none left in the rate");
+        }
+        assert_eq!(h.admit(K2, &a, &c, t(0), &tr).map(drop), Ok(()), "another key: verified (its own rate)");
+        assert_eq!(h.admit(K, &a, &garbage, t(0), &tr), Err(Refusal::Rate), "another statement: verified, rated");
+    }
+
+    /// A held add's life is absolute: sent again, it is not made younger;
+    /// past it, it goes, and its parts are refused.
+    #[test]
+    fn a_held_add_has_an_absolute_life() {
+        let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
+        let a = args(&src, &psb, "x");
+        let mut adds = Adds::with_lifetime(t(90));
+        start(&mut adds, K, a.clone(), t(0)).unwrap();
+        for s in [20, 40, 60, 80] {
+            assert_eq!(start(&mut adds, K, a.clone(), t(s)), Ok(Pre::Resume { next: 0 }));
+            adds.part(K, 7, 0, &src[..1], t(s)).ok();
+            adds.held.as_mut().unwrap().next = 0;
+        }
+        assert_eq!(adds.expire(t(89)), None);
+        assert_eq!(adds.expire(t(90)), Some(7), "90 s from its start, whatever was sent since");
+        assert_eq!(adds.part(K, 7, 0, &src[..1], t(91)), Err(Refusal::NotAllowed));
+    }
+
+    /// The day's count and the card-read rate are per key, with a ceiling
+    /// for the panel; a refusal gives up nothing held; only a card read
+    /// counts against the read rate.
+    #[test]
+    fn per_key_counts_and_the_panel_ceiling() {
+        let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
+        let mut adds = Adds::default();
+        let mut now = 10u64;
+        let mut go = |adds: &mut Adds, k: KeyId, id: u32| {
+            now += 3;
+            let r = start(adds, k, AddArgs { id, ..args(&src, &psb, "x") }, t(now));
+            // (Each lands: a landed add holds nothing.)
+            adds.landed("x", t(now));
+            r
+        };
+        for i in 0..DAY_ADDS as u32 {
+            assert_eq!(go(&mut adds, K, 1 + i), Ok(Pre::New));
+        }
+        assert_eq!(go(&mut adds, K, 99), Err(Refusal::Quota), "K's 17th");
+        for i in 0..DAY_ADDS as u32 {
+            assert_eq!(go(&mut adds, K2, 100 + i), Ok(Pre::New), "K2 has its own 16");
+        }
+        assert_eq!(go(&mut adds, [9; 8], 200), Err(Refusal::Quota), "the panel's 32");
+        // A refused begin keeps the held add.
+        let held = adds.held.as_ref().map(|h| h.args.id);
+        let b = AddArgs { id: 300, ..args(&src, &psb, "x") };
+        assert_eq!(adds.begin(K, b.clone(), witness(&b), "x".into(), t(now + 10)), Err(Refusal::Quota));
+        assert_eq!(adds.held.as_ref().map(|h| h.args.id), held);
+        // `pre` alone reads nothing: no rate spent.
+        let mut r = Adds::default();
+        for i in 0..5u32 {
+            assert_eq!(r.pre(K, &AddArgs { id: 500 + i, ..args(&src, &psb, "x") }, t(1)), Ok(Pre::New));
+        }
+        r.note_read(K, t(1));
+        assert_eq!(r.pre(K, &args(&src, &psb, "x"), t(2)), Err(Refusal::Rate));
     }
 
     /// An add is held only with a signature over exactly its bytes, and a
@@ -594,7 +873,7 @@ mod tests {
         let src = vec![b's'; 700];
         let psb = vec![b'p'; 300];
         let mut adds = Adds::default();
-        assert_eq!(start(&mut adds, K, args(&src, &psb, "x"), t(0), None), Ok(Pre::New));
+        assert_eq!(start(&mut adds, K, args(&src, &psb, "x"), t(0)), Ok(Pre::New));
         let all: Vec<u8> = [src.clone(), psb.clone()].concat();
         let p = adds.part(K, 7, 0, &all[..384], t(1)).unwrap();
         assert_eq!(p.runs, vec![(Part::Source, 0, 0..384)]);
@@ -611,7 +890,7 @@ mod tests {
         let psb = vec![b'p'; 100];
         let all: Vec<u8> = [src.clone(), psb.clone()].concat();
         let mut adds = Adds::default();
-        start(&mut adds, K, args(&src, &psb, "x"), t(0), None).unwrap();
+        start(&mut adds, K, args(&src, &psb, "x"), t(0)).unwrap();
         assert_eq!(adds.part(K, 7, 10, &all[10..20], t(1)), Err(Refusal::BadArg));
         assert_eq!(adds.part(K2, 7, 0, &all[..10], t(1)), Err(Refusal::NotAllowed));
         assert_eq!(adds.part(K, 8, 0, &all[..10], t(1)), Err(Refusal::BadArg));
@@ -630,23 +909,25 @@ mod tests {
         let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
         let a = args(&src, &psb, "x");
         let mut adds = Adds::default();
-        start(&mut adds, K, a.clone(), t(0), None).unwrap();
+        start(&mut adds, K, a.clone(), t(0)).unwrap();
         adds.part(K, 7, 0, &src[..5], t(1)).unwrap();
         // Signed again (a new session): from where it was, never rated.
-        assert_eq!(start(&mut adds, K, a.clone(), t(1), None), Ok(Pre::Resume { next: 5 }));
-        // The add's own rate: another add within 2 s.
-        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(1), None), Err(Refusal::Rate));
-        // Another key while it is held: busy.
-        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(3), None), Err(Refusal::Busy));
-        // The same key's other add replaces it.
+        assert_eq!(start(&mut adds, K, a.clone(), t(1)), Ok(Pre::Resume { next: 5 }));
+        // The card-read rate: the same key's other add within 2 s, any
+        // key's within 1 s of the panel's last read.
         let mut b = a.clone();
         b.id = 9;
-        assert_eq!(adds.pre(K, &b, t(6), None), Ok(Pre::New));
+        assert_eq!(adds.pre(K, &b, t(1)), Err(Refusal::Rate), "the key's 2 s");
+        assert_eq!(adds.pre(K2, &args(&src, &psb, "y"), Duration::from_millis(500)), Err(Refusal::Rate), "the panel's 1 s");
+        // Another key while it is held: busy.
+        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(3)), Err(Refusal::Busy));
+        // The same key's other add replaces it.
+        assert_eq!(adds.pre(K, &b, t(6)), Ok(Pre::New));
         assert_eq!(adds.begin(K, b.clone(), witness(&b), "x".into(), t(6)), Ok(Some(7)));
         adds.landed("x-2", t(7));
-        assert_eq!(start(&mut adds, K, b, t(8), None), Ok(Pre::Landed { stem: "x-2".into() }));
+        assert_eq!(start(&mut adds, K, b, t(8)), Ok(Pre::Landed { stem: "x-2".into() }));
         // A landed add holds nothing: another key may start at once.
-        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(11), None), Ok(Pre::New));
+        assert_eq!(start(&mut adds, K2, args(&src, &psb, "y"), t(11)), Ok(Pre::New));
         // A stalled one goes after 10 minutes.
         assert_eq!(adds.expire(t(11 + 600)), Some(7));
         assert!(adds.forget_key(&K2).is_none());
@@ -656,69 +937,36 @@ mod tests {
     fn red_forget_and_expiry() {
         let (src, psb) = (vec![1u8; 10], vec![2u8; 10]);
         let mut adds = Adds::default();
-        start(&mut adds, K, args(&src, &psb, "x"), t(0), None).unwrap();
+        start(&mut adds, K, args(&src, &psb, "x"), t(0)).unwrap();
         assert_eq!(adds.forget_key(&K), Some(7), "the key removed: its add goes");
-        start(&mut adds, K, args(&src, &psb, "x"), t(10), None).unwrap();
+        start(&mut adds, K, args(&src, &psb, "x"), t(10)).unwrap();
         assert_eq!(adds.part(K, 7, 0, &src[..5], t(10 + 600)), Err(Refusal::BadArg), "a stale add takes no part");
     }
 
+    /// 16 adds may start in a day of uptime (in RAM); the 17th is quota,
+    /// until the first of them is a day old. Refusals before `begin` (the
+    /// rate, the same Formula already there) start nothing.
     #[test]
-    fn the_tally_and_its_day() {
+    fn sixteen_adds_a_day_of_uptime() {
         let (src, psb) = (vec![1u8; 100], vec![2u8; 100]);
         let mut adds = Adds::default();
-        let mut now = 0;
-        let mut go = |adds: &mut Adds, id: u32, today| {
-            now += 3;
+        let go = |adds: &mut Adds, id: u32, now: u64| {
             let mut a = args(&src, &psb, "x");
             a.id = id;
-            start(adds, K, a, t(now), today)
+            start(adds, K, a, t(now))
         };
-        for i in 0..QUOTA_ADDS {
-            assert_eq!(go(&mut adds, i + 1, Some(20000)), Ok(Pre::New), "{i}");
+        for i in 0..DAY_ADDS as u32 {
+            assert_eq!(go(&mut adds, i + 1, 10 + 10 * u64::from(i)), Ok(Pre::New), "{i}");
         }
-        assert_eq!(go(&mut adds, 99, Some(20000)), Err(Refusal::Quota), "the 17th of the day");
-        // A restart: the tally comes back from the card, still full.
-        let kept = Tally::from_slots(Some(&adds.tally.text()), None);
-        assert_eq!(kept, adds.tally);
-        let mut again = Adds { tally: kept, ..Adds::default() };
-        assert_eq!(go(&mut again, 100, Some(20000)), Err(Refusal::Quota), "a restart does not reset it");
-        assert_eq!(go(&mut again, 101, None), Err(Refusal::Quota), "no clock: no new day");
-        assert_eq!(go(&mut again, 102, Some(19999)), Err(Refusal::Quota), "an earlier day starts nothing");
-        assert_eq!(go(&mut again, 103, Some(20001)), Ok(Pre::New), "a later day");
-        // A tally made with no clock is carried into the first clocked day.
-        let mut nc = Adds::default();
-        for i in 0..QUOTA_ADDS {
-            assert_eq!(go(&mut nc, 200 + i, None), Ok(Pre::New));
-        }
-        assert_eq!(go(&mut nc, 300, Some(20005)), Err(Refusal::Quota), "the clock set: the same day's 16, not 16 more");
-        // Only a missing file is a fresh day; empty, torn, garbled or crafted ones are full.
-        assert_eq!(Tally::from_slots(None, None), Tally::default());
-        for bad in ["", " ", "x", "1 2", "1 2 3", "1 2 3 4 5", "1 20001 a 3", "1 z 1 1", "-1 1 1 1"] {
-            assert_eq!(Tally::from_slots(Some(bad), None), Tally::FULL, "{bad:?}");
-            assert_eq!(Tally::from_slots(Some(&Tally::default().text()), Some(bad)), Tally::FULL, "{bad:?} in the other slot");
-        }
-        // Two slots: the newer wins.
-        let older = Tally { seq: 4, day: Some(1), adds: 3, bytes: 10 };
-        let newer = Tally { seq: 5, day: Some(1), adds: 4, bytes: 20 };
-        assert_eq!(Tally::from_slots(Some(&older.text()), Some(&newer.text())), newer);
-        assert_eq!(Tally::from_slots(Some(&newer.text()), Some(&older.text())), newer);
-        // A crafted file cannot wrap the bytes.
-        let mut huge = Adds { tally: Tally { seq: 1, day: Some(1), adds: 0, bytes: u64::MAX - 1 }, ..Adds::default() };
-        assert_eq!(go(&mut huge, 400, Some(1)), Err(Refusal::Quota));
-        // Every add past the rate is counted before the card is read: 16 refusals use the day up.
+        assert_eq!(go(&mut adds, 99, 200), Err(Refusal::Quota), "the 17th of the day");
+        assert_eq!(go(&mut adds, 99, 10 + 24 * 3600 - 3), Err(Refusal::Quota), "just before the first is a day old");
+        assert_eq!(go(&mut adds, 100, 10 + 24 * 3600 + 1), Ok(Pre::New), "the first a day old: room for one");
+        assert_eq!(go(&mut adds, 101, 10 + 24 * 3600 + 4), Err(Refusal::Quota));
+        // `pre` alone counts nothing (a Formula found already there never begins).
         let mut r = Adds::default();
-        for i in 0..QUOTA_ADDS {
-            assert_eq!(r.pre(K, &AddArgs { id: 500 + i, ..args(&src, &psb, "x") }, t(1000 + u64::from(i) * 3), Some(1)), Ok(Pre::New));
+        for i in 0..40u32 {
+            assert_eq!(r.pre(K, &AddArgs { id: 500 + i, ..args(&src, &psb, "x") }, t(1000 + u64::from(i) * 3)), Ok(Pre::New));
         }
-        assert_eq!(r.pre(K, &AddArgs { id: 600, ..args(&src, &psb, "x") }, t(2000), Some(1)), Err(Refusal::Quota));
-        // Bytes: 256 KB a day.
-        let mut adds = Adds::default();
-        let big = AddArgs { src_size: MAX_SOURCE, psb_size: MAX_PSB, ..args(&src, &psb, "x") };
-        let mut n = 0u32;
-        while start(&mut adds, K, AddArgs { id: n + 1, ..big.clone() }, t(u64::from(n) * 3), Some(1)).is_ok() {
-            n += 1;
-        }
-        assert_eq!(u64::from(n) * u64::from(big.total()), QUOTA_BYTES - QUOTA_BYTES % u64::from(big.total()));
     }
 
     /// A whole add's checks tried again: one in 2 s, as a new add.
@@ -727,10 +975,10 @@ mod tests {
         let (src, psb) = (vec![1u8; 4], vec![2u8; 6]);
         let a = args(&src, &psb, "x");
         let mut adds = Adds::default();
-        start(&mut adds, K, a.clone(), t(0), None).unwrap();
+        start(&mut adds, K, a.clone(), t(0)).unwrap();
         adds.part(K, 7, 0, &[src.clone(), psb.clone()].concat(), t(1)).unwrap();
-        assert_eq!(adds.pre(K, &a, t(3), None), Ok(Pre::Resume { next: 10 }));
-        assert_eq!(adds.pre(K, &a, t(3), None), Err(Refusal::Rate), "again at once");
-        assert_eq!(adds.pre(K, &a, t(6), None), Ok(Pre::Resume { next: 10 }));
+        assert_eq!(adds.pre(K, &a, t(3)), Ok(Pre::Resume { next: 10 }));
+        assert_eq!(adds.pre(K, &a, t(3)), Err(Refusal::Rate), "again at once");
+        assert_eq!(adds.pre(K, &a, t(6)), Ok(Pre::Resume { next: 10 }));
     }
 }

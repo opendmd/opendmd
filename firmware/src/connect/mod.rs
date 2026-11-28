@@ -54,6 +54,19 @@ mod client;
 mod dispatch;
 #[cfg(feature = "connect-formula-add")]
 mod fadd;
+
+/// Gallery signature verifies run since boot.
+#[cfg(feature = "connect-formula-add")]
+pub fn gallery_verifies() -> u32 {
+    fadd::verifies()
+}
+
+/// The emulator's Connect image: the next Formula landing's dating fails on
+/// purpose (`POST /api/test/clock?date_fail=1`).
+#[cfg(all(feature = "connect-formula-add", feature = "connect-test"))]
+pub fn fadd_date_fail_once() {
+    fadd::DATE_FAIL_ONCE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 #[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 mod measure;
 mod pair;

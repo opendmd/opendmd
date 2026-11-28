@@ -244,6 +244,8 @@ const REMOTE_PSB_MAX: usize = 512;
 #[cfg(feature = "connect")]
 fn each_file(mut f: impl FnMut(&str, u32) -> bool) -> bool {
     use esp_idf_sys as sys;
+    #[cfg(feature = "connect-test")]
+    crate::cardspeed::worker_io::note_dir();
     let Ok(dir) = std::ffi::CString::new("0:/formulas") else {
         return false;
     };
@@ -1058,6 +1060,21 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     // only: a retry's must not take an add under way).
     for e in entries.iter().filter(|e| opts.wait && e.name.starts_with(".add-") && e.name.ends_with(".part")) {
         let _ = fs::remove_file(format!("{dir}/{}", e.name));
+    }
+    // A compiled file with no source beside it (a restart between a remote
+    // add's two renames, the program's first; or a source deleted by hand):
+    // never listed or played, removed (the boot's pass, on a whole listing
+    // only: a `.psi` past a cut one must not cost its `.psb`). The web app
+    // writes a source before its program, so none is ever caught half-saved.
+    if opts.wait && entries.len() < 4 * MAX_FILES {
+        for e in &entries {
+            if let Some(st) = stem(&e.name, ".psb") {
+                if !entries.iter().any(|x| stem(&x.name, ".psi").is_some_and(|b| b.eq_ignore_ascii_case(st))) {
+                    log::info!("formulas: /formulas/{} has no source beside it: removed", e.name);
+                    let _ = fs::remove_file(format!("{dir}/{}", e.name));
+                }
+            }
+        }
     }
     (c, left)
 }

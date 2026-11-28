@@ -67,7 +67,10 @@ impl Client {
             Remote::Playlists => self.playlists(),
             Remote::Formulas { after } => self.formulas(after),
             #[cfg(feature = "connect-formula-add")]
-            Remote::FormulaAdd(args, signed) => self.formula_add(k, args, signed),
+            Remote::FormulaAdd(a) => {
+                let a = *a;
+                self.formula_add(k, a.args, a.signed)
+            }
             #[cfg(feature = "connect-formula-add")]
             Remote::FormulaPart { id, off, data } => self.formula_part(k, id, off, data),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
@@ -352,10 +355,14 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
 #[optimize(size)]
 #[inline(never)]
 fn formulas_page(card: bool, after: Option<&str>) -> (String, Option<String>) {
-    // (Only a build with adds says what they need, the compiled format it
-    // plays: no `abi`, no Add to panel.)
+    // (Only a build with adds says what they need: the compiled format it
+    // plays and the gallery keys it trusts. Without: no `abi`, no Add to
+    // panel.)
     #[cfg(feature = "connect-formula-add")]
-    let mut out = proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI);
+    let mut out = {
+        let ids: Vec<u8> = opendmd_core::gallery_sig::GALLERY_KEYS.iter().map(|&(id, _)| id).collect();
+        proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI, &ids)
+    };
     #[cfg(not(feature = "connect-formula-add"))]
     let mut out = proto::FormulaList::new(card);
     #[cfg(feature = "psi")]
