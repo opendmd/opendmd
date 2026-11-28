@@ -22,7 +22,7 @@ on('overrides', ({ path, from }) => {
   for (const r of live) {
     const x = r.deref();
     if (!x) live.delete(r);
-    else if (x !== from && x.path === path && !x.ops.length && !x.saving) x.load(path);
+    else if (x !== from && x.path === path && !x.mine(path).length && !x.saving) x.load(path);
   }
 });
 
@@ -46,17 +46,19 @@ export class Overrides {
   constructor() {
     this.path = '';      // the playlist's card path
     this.map = new Map(); // gif path -> {path, w?, dwell?, dwell_x?, loops?}
-    this.ops = [];       // this page's changes not saved yet: [p, o]
+    this.ops = [];       // this page's changes not saved yet: [playlist path, gif path, o]
     this.saving = null;
     this.loading = null;
     this.ok = true;
     this.again = false;
-    this.loud = false;
+    this.loud = new Set(); // the playlists whose next save says "Saved"
     this.onChange = () => {};
     live.add(new WeakRef(this));
   }
 
   get name() { return playlistLabel(this.path); }
+  // This playlist's changes not saved yet.
+  mine(path = this.path) { return this.ops.filter((x) => x[0] === path); }
 
   // The old map stays until the new list arrives; a change waits for it,
   // and is refused if the list could not be read (it would wipe the rest).
@@ -67,7 +69,7 @@ export class Overrides {
     if (this.loading === run && this.path === path) {
       this.ok = !!list;
       this.map = new Map(list?.map((o) => [o.path, o]));
-      for (const [p, o] of this.ops) put(this.map, p, o);
+      for (const [, p, o] of this.mine(path)) put(this.map, p, o);
       this.onChange();
     }
     return this;
@@ -82,49 +84,59 @@ export class Overrides {
   async setMany(changes, quiet) {
     await this.loading;
     if (!this.ok) { toast(`Couldn’t read “${this.name}”: try again`, 'bad'); return this.load(this.path); }
-    for (const [p, o] of changes) { this.ops.push([p, o]); put(this.map, p, o); }
-    if (!quiet) this.loud = true;
+    for (const [p, o] of changes) { this.ops.push([this.path, p, o]); put(this.map, p, o); }
+    if (!quiet) this.loud.add(this.path);
     this.onChange();
     return this.save();
   }
 
-  // One write at a time; changes made meanwhile go out in the next. The
-  // file is read again first, and only this page's changes go over it
-  // (another view of this page, another browser, may have written it
-  // since: a copy read earlier would undo theirs), as js/tags.js does.
+  // One write at a time, a playlist at a time; changes made meanwhile go
+  // out in the next. The file is read again first, and only this page's
+  // changes to that playlist go over it (another view of this page,
+  // another browser, may have written it since: a copy read earlier would
+  // undo theirs), as js/tags.js does. A save that fails keeps its changes
+  // (shown, and in the next save) and says so, with Retry.
   async save() {
     if (this.saving) { this.again = true; return this.saving; }
-    const path = this.path, n = this.ops.length, loud = this.loud;
-    this.loud = false;
+    const path = this.ops[0]?.[0];
+    if (path == null) return;
+    const ops = this.mine(path), loud = this.loud.delete(path);
+    let failed = false;
     this.saving = (async () => {
       try {
         const map = new Map((await read(path)).map((o) => [o.path, o]));
-        for (const [p, o] of this.ops.slice(0, n)) put(map, p, o);
+        for (const [, p, o] of ops) put(map, p, o);
         const text = app.wasm.renderOverrides([...map.values()]);
         if (text || !app.device) await app.src.writeFile(fileFor(path), text);
         else await app.src.deleteFile(fileFor(path)).catch((e) => { if (e.status !== 404) throw e; });
-        this.ops.splice(0, n);
+        this.ops = this.ops.filter((x) => !ops.includes(x));
         if (this.path === path) {
-          for (const [p, o] of this.ops) put(map, p, o);
+          for (const [, p, o] of this.mine(path)) put(map, p, o);
           this.map = map;
           this.onChange();
         }
         emit('overrides', { path, from: this });
         if (loud) toast(`Saved for “${playlistLabel(path)}”${app.device && app.activePath === path ? ' · the display is catching up (a few seconds)' : ''}`, 'ok');
-      } catch (e) { toast(`Couldn’t save for “${playlistLabel(path)}”: ${e.message}`, 'bad'); this.ops = []; this.load(path); }
+      } catch (e) {
+        failed = true;
+        if (loud) this.loud.add(path);
+        toast(`Couldn’t save for “${playlistLabel(path)}”: ${e.message}. The change is kept for the next save`, 'bad', ['Retry', () => this.save()]);
+      }
     })();
     await this.saving;
     this.saving = null;
-    if (this.again) { this.again = false; return this.save(); }
+    // (Another playlist's changes waiting, or more made meanwhile; not again at once after a failure.)
+    if (!failed && (this.again || this.ops.length)) { this.again = false; return this.save(); }
+    this.again = false;
   }
 }
 
-// `tagged`: a favourite by its tag, whose ♥ the tags' glyphs show already.
-export function glyphs(o, tagged) {
+// (A weight above 1 has no glyph of its own: a favourite is its tag, whose
+// ♥ the tags' glyphs show; js/tags.js adopt.)
+export function glyphs(o) {
   if (!o) return null;
   const g = [];
-  if (o.w > 1) { if (!tagged) g.push(['♥', 'Favourite: plays more often', 'fav']); }
-  else if (o.w != null && o.w < 1) g.push(['▽', 'Plays less often', 'less']);
+  if (o.w > 1) { /* the tag's ♥ */ } else if (o.w != null && o.w < 1) g.push(['▽', 'Plays less often', 'less']);
   if (o.dwell) g.push([`◔${o.dwell}s`, `Plays for ${o.dwell} seconds`, 'long']);
   else if (o.dwell_x) g.push([`◔${o.dwell_x}×`, `Plays ${o.dwell_x}× as long`, 'long']);
   if (o.loops) g.push([`↻${o.loops}`, `Loops ${o.loops} times`, 'loop']);
@@ -153,7 +165,7 @@ addEventListener('resize', () => { if (wide != (wide = innerWidth)) closeMenu();
 // Move and Remove); with no saved playlist, the only ones.
 export function menu(ov, path, x, y, extra) {
   closeMenu();
-  if (!ov.path && !extra) { toast('save the playlist first', 'bad'); return; }
+  if (!ov.path && !extra) { toast('Save the playlist first', 'bad'); return; }
   const o = ov.get(path) || {};
   const put = (patch) => { closeMenu(); ov.set(path, (x) => ({ ...x, ...patch })); };
   const secs = h('input', { type: 'number', min: 1, max: 86400, placeholder: 's', id: 'ov-secs', value: o.dwell || '', style: 'width:72px' });
@@ -165,9 +177,9 @@ export function menu(ov, path, x, y, extra) {
   const longer = () => open.replaceChildren(head,
     item('ov-2x', o.dwell_x === 2, 'Twice as long', () => put({ dwell_x: o.dwell_x === 2 ? null : 2, dwell: null })),
     h('div.mr', h('span', 'Play for'), secs, h('span.muted', 'seconds'),
-      h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('seconds: 1 to 86400', 'bad'); } }, 'Set')),
+      h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('Seconds: 1 to 86400', 'bad'); } }, 'Set')),
     h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
-      h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')));
+      h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('Loops: 1 to 1000', 'bad'); } }, 'Set')));
   open = h('div.menu', { id: 'ov-menu', role: 'menu' }, head,
     ov.path && [item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS })),
     item('ov-longer', o.dwell || o.dwell_x || o.loops, '◔ Play longer or loop…', longer),

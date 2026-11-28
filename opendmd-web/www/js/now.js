@@ -67,7 +67,8 @@ function favButton() {
   b.set = (p, list) => {
     b.hidden = !(b.p = p) || drawn(p) || !list;
     if (list && list != ov.path) ov.load(list);
-    b.draw(!!app.tags?.get(p)?.t?.includes('favourite') || ov.get(p)?.w > 1);
+    // (The tag alone: a weight from before is adopted into it, js/tags.js adopt.)
+    b.draw(!!app.tags?.get(p)?.t?.includes('favourite'));
   };
   ov.onChange = () => {
     b.set(b.p, ov.path);
@@ -237,7 +238,7 @@ function mountDevice(el) {
   const NOT = () => (app.noMirror ? '' : 'Not mirroring the panel (Settings › Panel)');
   if (!mirrored) cap.textContent = NOT();
   const sendBright = debounce(async (v) => {
-    try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
+    try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('Couldn’t set the brightness: ' + e.message, 'bad'); }
   }, 300);
   bright.input.addEventListener('input', () => sendBright(+bright.input.value));
   on('config', (c) => { bright.ceil(c.max_brightness); if (document.activeElement !== bright.input) bright.set(c.brightness); });
@@ -628,7 +629,7 @@ function mountLocal(el) {
     if (listSel.value) text = await src.readText(listSel.value);
     else text = [...src.files.keys()].filter((p) => /\.gif$/i.test(p)).sort().join('\n');
     list = app.wasm.filterManifest(text, JSON.stringify({ platforms: plats.value, shuffle: shuffle.checked, seed: +seed.value }));
-    if (!list.length) { toast('the filter matched nothing', 'bad'); return; }
+    if (!list.length) { toast('The filter matched nothing', 'bad'); return; }
     i = -1;
     nextBtn.disabled = pauseBtn.disabled = false;
     next();

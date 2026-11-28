@@ -1902,7 +1902,7 @@ def tidy_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.goto(base + "/#library/Tidy_Smoke")
     page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=30000)
     expected.append("/api/sets/tidy-a")
-    expected.append("dir=%2Fgifs%2FTidy_Smoke")  # (the folder left empty goes, then is listed again: a 404)
+
     refuse = lambda r: r.fulfill(status=500, json={"error": "smoke: refused"}) if r.request.method == "PUT" else r.continue_()
     page.route("**/api/sets/tidy-a*", refuse)
     page.evaluate("p => { window.confirm = () => true; return import('./js/details.js').then((m) => m.removeGif(p, 'Tidy Smoke 01')); }", gif)
@@ -2014,6 +2014,117 @@ def pill_checks(browser, base: str, errors: list[str]) -> None:
     c = wait_config(base, lambda c: c["set"] == "")
     page.wait_for_function("document.querySelector('#now-from').textContent.startsWith('All GIFs')", timeout=20000)
     check(c["set"] == "", "now: Playing from switches back to All files")
+    page.context.close()
+
+
+def fav_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Favourites that stick: un-hearted while another playlist plays, its
+    weight goes from every playlist and it is not adopted back when the
+    first plays again; with shuffle off Now's heart turns off and stays
+    off; a weight from before is adopted into the tag once, and an
+    un-heart then sticks; the 1,024-override cap refuses, changing
+    nothing; an overrides save that fails keeps its change (for that
+    playlist only) and Retry writes it; the pill's poll is the slim
+    status."""
+    gs = [p for p in card_gifs() if p.startswith("/gifs/Consoles/SNES_")][-6:]
+    x, y, z = gs[0], gs[1], gs[2]
+    tagsx = lambda p: "favourite" in tag_lines(overlay).get(p, "")
+    wts = lambda setv, p: [o.get("w") for o in get_json(base + "/api/overrides?set=" + urllib.parse.quote(setv))["overrides"] if o["path"] == p]
+    cfg0 = get_json(base + "/api/config")
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library")
+    lib_row(page, x)
+    page.click("#lib-d-fav")
+    wait_until(lambda: tagsx(x) and wts("", x) == [3], 15)
+    check(tagsx(x) and wts("", x) == [3], "fav: ♥ while All GIFs plays: the tag, and w=3 there")
+    # Un-hearted while Christmas plays: the weight goes from All GIFs too.
+    put_json(base + "/api/config", {"set": "filelist.xmas"})
+    refresh_app(page)
+    lib_row(page, x)
+    page.wait_for_selector(f"#lib-d-fav[data-path={json.dumps(x)}][aria-pressed=true]", timeout=20000)
+    page.click("#lib-d-fav")
+    wait_until(lambda: not tagsx(x) and not wts("", x), 15)
+    check(not tagsx(x) and not wts("", x), "fav: un-hearted while another playlist plays: the tag and All GIFs' weight both go")
+    put_json(base + "/api/config", {"set": ""})
+    page.reload()
+    goto_view(page, "library")
+    page.wait_for_timeout(2500)
+    check(not tagsx(x), "fav: All GIFs playing again, it is not adopted back")
+    # Shuffle off: Now's heart turns off, and stays off.
+    put_json(base + "/api/config", {"shuffle": False})
+    post_json(base + "/api/play", {"path": y})
+    post_json(base + "/api/pause", {})
+    try:
+        refresh_app(page)
+        goto_view(page, "now")
+        page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(y)}", timeout=15000)
+        page.click("#now-fav")
+        page.wait_for_function("document.querySelector('#now-fav').textContent === '♥'", timeout=10000)
+        wait_until(lambda: tagsx(y), 10)
+        page.click("#now-fav")
+        page.wait_for_function("document.querySelector('#now-fav').textContent === '♡'", timeout=10000)
+        page.wait_for_timeout(4000)
+        check(page.inner_text("#now-fav") == "♡" and not tagsx(y), "fav: shuffle off: Now's heart turns off and stays off")
+    finally:
+        post_json(base + "/api/pause", {})
+        put_json(base + "/api/config", {"shuffle": cfg0["shuffle"]})
+    # A weight from before: adopted once (a fresh browser), un-hearted, not adopted again.
+    meta = overlay / "filelist.meta"
+    old = meta.read_text() if meta.exists() else ""
+    put_text(base + "/api/files/filelist.meta", old + render_meta_line(z, {"w": 3}) + "\n")
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library")
+    wait_until(lambda: tagsx(z), 20)
+    check(tagsx(z), "fav: a weight from before is adopted into the tag")
+    lib_row(page, z)
+    page.wait_for_selector(f"#lib-d-fav[data-path={json.dumps(z)}][aria-pressed=true]", timeout=20000)
+    page.click("#lib-d-fav")
+    wait_until(lambda: not tagsx(z) and not wts("", z), 15)
+    page.reload()
+    goto_view(page, "library")
+    page.wait_for_timeout(2500)
+    check(not tagsx(z) and not wts("", z), "fav: un-hearted after adoption, it stays off (weight gone, not adopted again)")
+    # The cap: a playlist already giving 1,024 GIFs settings of their own refuses one more.
+    put_text(base + "/api/sets/cap-a", x + "\n")
+    put_text(base + "/api/files/sets/cap-a.meta", "".join(render_meta_line(f"/gifs/Cap/MD_Cap_{i:04d}.gif", {"w": 0.5}) + "\n" for i in range(1024)))
+    put_json(base + "/api/config", {"set": "cap-a", "shuffle": True})
+    try:
+        refresh_app(page)
+        page.evaluate("p => import('./js/tags.js').then((m) => m.setFav([p], true))", x)
+        page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.includes('at most 1,024'))", timeout=15000)
+        page.wait_for_timeout(1000)
+        check(not tagsx(x) and not wts("cap-a", x), "fav: past 1,024 overrides the heart is refused, nothing changed")
+    finally:
+        put_json(base + "/api/config", {"set": "", "shuffle": cfg0["shuffle"]})
+        refresh_app(page)
+    delete_path(base, "/sets/cap-a.meta")
+    delete_path(base, "/sets/cap-a.txt")
+    # A failed overrides save: kept (for its playlist only), said, and Retry writes it.
+    put_text(base + "/api/sets/merge-a", x + "\n")
+    put_text(base + "/api/sets/merge-b", y + "\n")
+    expected.append("/api/files/sets/merge-a.meta")
+    page.route("**/api/files/sets/merge-a.meta", lambda r: r.fulfill(status=500, json={"error": "smoke: refused"}) if r.request.method == "PUT" else r.continue_())
+    got = page.evaluate("""async (p) => { const { Overrides } = await import('./js/overrides.js'); const o = await new Overrides().load('/sets/merge-a.txt');
+        window.__ov = o; await o.set(p, { w: 0.5 }); const a = o.mine('/sets/merge-a.txt').length; await o.load('/sets/merge-b.txt');
+        return [a, o.get(p) ? 'leaked' : 'clean']; }""", x)
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.includes('kept for the next save'))", timeout=10000)
+    check(got == [1, "clean"] and not (overlay / "sets" / "merge-a.meta").exists(),
+          f"overrides: a failed save keeps its change for its playlist only, and says so ({got})")
+    page.unroute("**/api/files/sets/merge-a.meta")
+    expected.remove("/api/files/sets/merge-a.meta")
+    page.evaluate("() => window.__ov.save()")
+    wait_until(lambda: (overlay / "sets" / "merge-a.meta").exists(), 10)
+    check((overlay / "sets" / "merge-a.meta").exists() and x in (overlay / "sets" / "merge-a.meta").read_text(), "overrides: Retry writes the kept change")
+    for f in ("merge-a.meta", "merge-a.txt", "merge-b.txt"):
+        delete_path(base, "/sets/" + f)
+    # The pill's poll off Now: the slim status.
+    asked: list[str] = []
+    page.on("request", lambda r: "/api/status" in r.url and asked.append(r.url))
+    goto_view(page, "library")
+    page.evaluate("() => import('./js/state.js').then((m) => m.app.soon('pill'))")
+    page.wait_for_timeout(1500)
+    check(any(u.endswith("/api/status?now=1") for u in asked), f"pill: its poll is the slim status ({asked[-2:]})")
     page.context.close()
 
 
@@ -2326,10 +2437,13 @@ def facets(page: Page, sel: str, attr: str) -> list:
     return page.eval_on_selector_all(f"{sel} .chip", f"els => els.map(e => [e.dataset.{attr}, +e.querySelector('small').textContent.replace(/,/g, ''), e.classList.contains('on')])")
 
 
-def lib_count(page: Page) -> tuple[int, int]:
-    """Shown, of every GIF on the card ("+": some folders never listed yet)."""
-    a, b = page.inner_text("#lib-count").replace(",", "").split(" of ")
-    return int(a), int(b.split(" ")[0].rstrip("+"))
+def lib_count(page: Page) -> tuple[int, int | None]:
+    """Shown, of every GIF on the card (None: "N shown · more in folders not opened yet")."""
+    t = page.inner_text("#lib-count").replace(",", "")
+    if " of " not in t:
+        return int(t.split(" ")[0]), None
+    a, b = t.split(" of ")
+    return int(a), int(b.split(" ")[0])
 
 
 def folder_counts(page: Page) -> list:
@@ -2338,7 +2452,7 @@ def folder_counts(page: Page) -> list:
 
 
 def wait_counted(page: Page) -> None:
-    page.wait_for_function("/^[\\d,]+ of [\\d,]+/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
+    page.wait_for_function("/^[\\d,]+ (of [\\d,]+|shown)/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
 
 
 def search_checks(page: Page, exact: bool) -> None:
@@ -2388,7 +2502,7 @@ def search_checks(page: Page, exact: bool) -> None:
           f"library search: closing {first} takes its matches out of what is shown (and Select all shown) ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "")
     wait_counted(page)
-    check(lib_count(page)[0] == tab_shown and page.locator("#lib-chips .chip.on").count() == 0,
+    check(lib_count(page) == (tab_shown, total) and page.locator("#lib-chips .chip.on").count() == 0,
           f"library search: cleared -> the folder as it was, platforms off ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "mario")
     wait_counted(page)
@@ -3011,9 +3125,6 @@ def kept_listing_checks(browser, base: str, errors: list[str]) -> None:
     every = page.evaluate("() => import('./js/smart.js').then((m) => m.everyGif())").split("\n")
     check(k[2] in every and k[0] not in every, "kept listings: a folder changed on the card: rows and a smart playlist's every-GIF list as the card has it")
     # Changed by the app: its record goes, so the next visit shows nothing stale.
-    # (The row's still, asked for before the list is read again, is a 404 then.)
-    expected.append("/gifs/Kept_Smoke/")
-    expected.append("/gifs/Stop_Smoke/")  # (stop_checks: stills asked for as the GIFs move away)
     page.evaluate("p => import('./js/refs.js').then((m) => m.relink([{ from: p, to: null }]))", k[1])
     goto_view(page, "now")
     goto_view(page, "library")
@@ -5629,14 +5740,16 @@ def mock_pass(browser) -> None:
         phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
         goto_view(phone, "library")
         pick_cat(phone, "Consoles")
-        phone.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+        phone.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
         open_row_menu(phone, "#lib-list", 0, via="more")
         check("sheet" in (phone.get_attribute("#ov-menu", "class") or ""), "phone: override menu renders as a bottom sheet")
         shot(phone, "override-menu", "phone")
         phone.context.close()
         # Reset them all: the file goes back to gone (an empty map deletes it); the favourite's tag too.
+        # (Un-hearted: its weight goes with the tag, from every playlist.)
         page.evaluate("p => import('./js/tags.js').then((m) => m.setFav([p], false))", fav_path)
-        for idx in (3, 4, 5, 6):
+        wait_until(lambda: not any(o["path"] == fav_path for o in get_json(base + "/api/overrides?set=")["overrides"]), 10)
+        for idx in (4, 5, 6):
             open_row_menu(page, "#lib-list", idx, via="more")
             page.click("#ov-reset")
             page.wait_for_selector("#ov-menu", state="detached")
@@ -5660,6 +5773,7 @@ def mock_pass(browser) -> None:
         smart_checks(browser, base, overlay, errors)
         smart_more_checks(browser, base, overlay, errors)
         tags_checks(browser, base, overlay, errors)
+        fav_more_checks(browser, base, overlay, errors)
         relink_checks(browser, base, overlay, errors)
         tidy_checks(browser, base, overlay, errors)
         stop_checks(browser, base, overlay, errors)
@@ -5854,7 +5968,7 @@ def mock_pass(browser) -> None:
             adds.append(dst)
         goto_view(page, "library")
         pick_cat(page, "Consoles")
-        page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+        page.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
         add_files(page, adds)
         # The Add GIFs dialog: both named from their own names, the second
         # the next number; then Add.
@@ -9980,7 +10094,7 @@ def online_checks(page: Page) -> None:
         return u
     goto_view(page, "library")
     pick_cat(page, "Consoles")
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
     page.fill("#lib-search", "")
     page.click("#lib-add-btn")
     page.wait_for_selector("#lib-add-menu", timeout=5000)
@@ -10040,7 +10154,7 @@ def lib_row(page: Page, path: str) -> None:
     """Pick one GIF in the Library (its category, a search, the row)."""
     goto_view(page, "library")
     pick_cat(page, path.split("/")[2])
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
     before = page.text_content("#lib-count")
     page.fill("#lib-search", path.rsplit("/", 1)[1][:-4])
     sel = f"#lib-list .vrow[data-path={json.dumps(path)}]"
@@ -10409,7 +10523,7 @@ def preview_in_library(page: Page, gif: str) -> str:
     goto_view(page, "library")
     cat, name = gif.split("/")[2], gif.rsplit("/", 1)[1]
     pick_cat(page, cat)
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
     page.fill("#lib-search", name[:-4])
     page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=20000)
     page.click(f"#lib-list .vrow[data-path={json.dumps(gif)}]")
@@ -11642,7 +11756,7 @@ def device_pass(browser, device: str) -> None:
             page.on("response", lambda r: reqs.append((urllib.parse.unquote(r.url), r.status)))
             goto_view(page, "library")
             pick_cat(page, cat)
-            page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+            page.wait_for_function("/ of | shown/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
             for chip in page.query_selector_all("#lib-chips .chip.on"):
                 chip.click()
             page.fill("#lib-search", name[:-4])
