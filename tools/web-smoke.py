@@ -5032,27 +5032,24 @@ def key_checks(browser, page: Page, base: str) -> None:
           "key: a bad api_key is a 400")
     cfg = get_json(base + "/api/config")
     check(cfg.get("api_key_set") is False and "api_key" not in cfg, "key: config has api_key_set false, never the key")
-    # No key: one banner, plain words, offering to set one (js/keynag.js);
-    # Not now hides it for this visit only.
+    # No key: one line at the top of Settings, plain words, linking to the
+    # switch (js/keynag.js); never a banner over the other views.
     nag_errors: list[str] = []
     nag = new_page(browser, "laptop", nag_errors, banner=True)
     nag.goto(base + "/")
-    nag.wait_for_selector("#keynag", timeout=20000)
+    nag.wait_for_selector("#nav", timeout=20000)
+    nag.wait_for_timeout(1500)
     page_was, page = page, nag
-    t = page.inner_text("#keynag")
-    check("Anyone on your WiFi" in t and "Set a key" in t and not re.search(r"cache|copy|bucket", t, re.I),
-          f"key: the no-key banner says so plainly ({t!r})")
-    page.click("#keynag-later")
-    page.reload()
-    page.wait_for_selector("#nav", timeout=20000)
-    page.wait_for_timeout(1500)
-    check(page.locator("#keynag").count() == 0, "key: Not now hides the banner for this visit")
-    page.evaluate("sessionStorage.removeItem('odmd.keynag')")
-    page.reload()
+    check(page.locator("#keynag").count() == 0 and page.locator("#main .banner:not([hidden])").count() == 0,
+          "key: no banner over Now while there is no key")
+    goto_view(page, "settings")
     page.wait_for_selector("#keynag", timeout=20000)
+    t = page.inner_text("#keynag")
+    check("anyone on your WiFi" in t and "Set a key" in t and t.count("\n") == 0 and not re.search(r"cache|copy|bucket", t, re.I),
+          f"key: Settings says so in one line ({t!r})")
     page.click("#keynag-set")
     page.wait_for_selector("#sec-key", timeout=20000)
-    check(page.evaluate("location.hash") == "#settings/device" and page.locator("#keynag").count() == 0,
+    check(page.evaluate("location.hash") == "#settings/device",
           "key: Set a key opens Settings › Device, where the switch is")
     page.context.close()
     page = page_was

@@ -255,7 +255,12 @@ export async function mount(el) {
   const built = {};
   const panel = h('div');
   const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
-  el.append(h('h1.ptitle', 'Settings'), banner, tabs, panel);
+  // No API key: one line under the title (js/keynag.js), gone once one is set.
+  const keyBox = h('div');
+  const nag = (cf) => { if (cf?.api_key_set === false) import('./keynag.js').then((m) => m.line(keyBox)); else keyBox.replaceChildren(); };
+  on('config', nag);
+  nag(c);
+  el.append(h('h1.ptitle', 'Settings'), keyBox, banner, tabs, panel);
   let open = '', visible = true, dev, rc;
   function go(k) {
     if (!BUILD[k]) k = 'play';
