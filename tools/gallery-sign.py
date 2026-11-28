@@ -5,10 +5,10 @@
 """Sign and verify the project's gallery Formulas (the signed-gallery design;
 opendmd_core::gallery_sig is the firmware's verifier).
 
-    uv run tools/gallery-sign.py keygen [--key K] [--pub P]
-    uv run tools/gallery-sign.py sign --formulas DIR [--key K] [--kid N] [--rev R] [--sigs FILE] [--pub P]
-    uv run tools/gallery-sign.py verify --formulas DIR [--sigs FILE] [--pub [ID=]P ...]
-    uv run tools/gallery-sign.py selftest     # the shared vectors, then sign/verify/tamper with throwaway keys
+    uv run --locked tools/gallery-sign.py keygen [--key K] [--pub P]
+    uv run --locked tools/gallery-sign.py sign --formulas DIR [--key K] [--kid N] [--rev R] [--sigs FILE] [--pub P]
+    uv run --locked tools/gallery-sign.py verify --formulas DIR [--sigs FILE] [--pub [ID=]P ...]
+    uv run --locked tools/gallery-sign.py selftest     # the shared vectors, then sign/verify/tamper with throwaway keys
 
 A remote controller may add a Formula to a panel only if the project signed
 it (protocol 5.7). The signature is Ed25519, by the gallery key (never the

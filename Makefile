@@ -214,7 +214,7 @@ test:
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Testing tools/gallery-sign.py (the gallery signer: opendmd-core/tests/gallery-vectors.json, keys, stale and foreign signatures)"
-	uv run --quiet tools/gallery-sign.py selftest
+	uv run --locked --quiet tools/gallery-sign.py selftest
 	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
 	uv run --quiet tools/connect/vectors_check.py
 	@echo "==> Checking the pairing QR code (tools/connect/qr_check.py): the core's matrices against qrcodegen's, the panel's QR screen decoded by ZXing"
@@ -558,8 +558,8 @@ gallery-out: gallery-tool
 	$(GALLERY_TOOL) check --trusted --out $(GALLERY_OUT) $(WEB)/formulas/*.psi 2> $(GALLERY_OUT).log || { cat $(GALLERY_OUT).log; exit 1; }
 	@echo "gallery-out: $$(ls $(GALLERY_OUT)/*.psi | wc -l) project Formulas in $(GALLERY_OUT)"
 gallery-sign: gallery-out
-	@test -f $(GALLERY_KEY) || { echo "no gallery key at $(GALLERY_KEY): uv run tools/gallery-sign.py keygen (once), or GALLERY_KEY=..."; exit 2; }
-	uv run --quiet tools/gallery-sign.py sign --formulas $(GALLERY_OUT) --key $(GALLERY_KEY)
+	@test -f $(GALLERY_KEY) || { echo "no gallery key at $(GALLERY_KEY): uv run --locked tools/gallery-sign.py keygen (once), or GALLERY_KEY=..."; exit 2; }
+	uv run --locked --quiet tools/gallery-sign.py sign --formulas $(GALLERY_OUT) --key $(GALLERY_KEY)
 	@$(MAKE) --no-print-directory gallery-check-only
 gallery-check: gallery-out
 	@$(MAKE) --no-print-directory gallery-check-only
@@ -569,7 +569,7 @@ gallery-check-only:
 	  grep -oE 'GALLERY (SIGNED|UNSIGNED): .*|^test result.*|panicked.*' $(GALLERY_OUT).check.log; \
 	  grep -q '^test result: ok' $(GALLERY_OUT).check.log && grep -qE 'GALLERY (SIGNED|UNSIGNED): ' $(GALLERY_OUT).check.log || { cat $(GALLERY_OUT).check.log; exit 1; }
 	@echo "==> The gallery's signatures again, in Python (tools/gallery-sign.py verify)"
-	uv run --quiet tools/gallery-sign.py verify --formulas $(GALLERY_OUT)
+	uv run --locked --quiet tools/gallery-sign.py verify --formulas $(GALLERY_OUT)
 
 # A release (tools/release.sh; docs/deploying.md "Releasing"). make release
 # VERSION=1.0.1 is a dry run: plan, bump (a detached commit + local tag,
