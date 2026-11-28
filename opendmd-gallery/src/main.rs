@@ -1,7 +1,7 @@
 //! The formula gallery's checker, on the command line.
 //!
 //! ```text
-//! opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] FILE...
+//! opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] [--out DIR] FILE...
 //! opendmd-gallery pr --repo DIR [--base REV] [--head REV] [--previews DIR] [--summary FILE]
 //! ```
 //!
@@ -9,8 +9,12 @@
 //! gallery and the examples); `--json` prints one line per file, the entry
 //! or its problems; `--trusted` (OpenDMD's own examples only) lets the
 //! name or author be OpenDMD's; `--thumbs` writes each one's 128 × 32 thumbnail and
-//! `--previews` a sheet of eight frames, as `<slug>.png`. Only regular files
-//! are read (a symlink is refused, not followed).
+//! `--previews` a sheet of eight frames, as `<slug>.png`; `--out` the
+//! Formula as the gallery sends it to a panel, `<slug>.psi` (the source
+//! without the gallery header) and `<slug>.psb` (it compiled for the panel):
+//! the files the project's gallery signatures are over (`make gallery-sign`,
+//! `tools/gallery-sign.py`). Only regular files are read (a symlink is
+//! refused, not followed).
 //!
 //! `pr` validates what a pull request changes: the commits `--base`
 //! (default `HEAD^1`) and `--head` (default `HEAD`) of the repository at
@@ -37,7 +41,7 @@ const MAX_FILES: usize = 20;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] FILE...\n  \
+        "usage:\n  opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] [--out DIR] FILE...\n  \
          opendmd-gallery pr --repo DIR [--base REV] [--head REV] [--previews DIR] [--summary FILE]"
     );
     ExitCode::from(2)
@@ -48,6 +52,7 @@ struct Opts {
     trusted: bool,
     thumbs: Option<PathBuf>,
     previews: Option<PathBuf>,
+    out: Option<PathBuf>,
     repo: Option<PathBuf>,
     base: String,
     head: String,
@@ -65,6 +70,7 @@ fn main() -> ExitCode {
         trusted: false,
         thumbs: None,
         previews: None,
+        out: None,
         repo: None,
         base: "HEAD^1".into(),
         head: "HEAD".into(),
@@ -84,6 +90,7 @@ fn main() -> ExitCode {
             }
             "--thumbs" => val("--thumbs").map(|v| o.thumbs = Some(v.into())),
             "--previews" => val("--previews").map(|v| o.previews = Some(v.into())),
+            "--out" => val("--out").map(|v| o.out = Some(v.into())),
             "--repo" => val("--repo").map(|v| o.repo = Some(v.into())),
             "--base" => val("--base").map(|v| o.base = v),
             "--head" => val("--head").map(|v| o.head = v),
@@ -99,7 +106,7 @@ fn main() -> ExitCode {
             return usage();
         }
     }
-    for d in [&o.thumbs, &o.previews].into_iter().flatten() {
+    for d in [&o.thumbs, &o.previews, &o.out].into_iter().flatten() {
         if let Err(e) = fs::create_dir_all(d) {
             eprintln!("{}: {e}", d.display());
             return ExitCode::from(2);
@@ -121,6 +128,14 @@ fn pictures(o: &Opts, e: &Entry) -> Result<(), String> {
     if let Some(d) = &o.previews {
         let p = d.join(format!("{}.png", e.slug));
         fs::write(&p, sheet(e)).map_err(|err| format!("{}: {err}", p.display()))?;
+    }
+    if let Some(d) = &o.out {
+        // (`check` compiled it already; the same compiler, the same bytes.)
+        let psb = opendmd_psi::build(&e.src).map_err(|err| format!("{}: {}", e.slug, err.msg))?;
+        for (ext, bytes) in [("psi", e.src.as_bytes()), ("psb", &psb[..])] {
+            let p = d.join(format!("{}.{ext}", e.slug));
+            fs::write(&p, bytes).map_err(|err| format!("{}: {err}", p.display()))?;
+        }
     }
     Ok(())
 }
