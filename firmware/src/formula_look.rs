@@ -195,10 +195,7 @@ pub fn check(path: &str) -> Result<(), String> {
 pub fn build(path: &str) -> Result<opendmd_core::fx_psi::FormulaLook, opendmd_core::psi::Error> {
     use opendmd_core::fx_psi::FormulaLook;
     match opendmd_core::synth::formula_file(path) {
-        Some((file, opts)) => {
-            let p = crate::formulas::read_card(file)?;
-            FormulaLook::from_bytes(&p.bytes, &p.opts(opts))
-        }
+        Some((file, opts)) => FormulaLook::from_bytes(&crate::formulas::read_card(file)?, opts),
         None => FormulaLook::from_path(path),
     }
 }

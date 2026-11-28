@@ -186,7 +186,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe emu-s3-power-safe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	gallery-tool release
+	gallery-tool gallery-out gallery-sign gallery-check gallery-check-only release
 
 # No request URL the web app makes may match EasyPrivacy or EasyList (uBlock
 # Origin / Brave blocked /api/stat?). Fetches the lists once a day into
@@ -199,6 +199,9 @@ blocklist-check:
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: Connect's session half and protocol v1; panel-id: the stable panel ID)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect,connect-formula-add,panel-id
+	@echo "==> Testing $(CORE) with gallery-sig alone (the gallery's signature: its vectors and red cases)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --lib gallery_sig
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features gallery-sig --test gallery_vectors
 	@echo "==> Testing $(CORE) as every release builds Connect: without connect-formula-add, no formula-add on the allow-list"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features connect --lib formula_add_is_absent_without_its_feature
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
@@ -210,6 +213,10 @@ test:
 	tools/release-test-features-check.sh --selftest
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
+	@echo "==> Testing tools/gallery-sign.py (the gallery signer: opendmd-core/tests/gallery-vectors.json, keys, stale and foreign signatures)"
+	uv run --locked --quiet tools/gallery-sign.py selftest
+	@echo "==> The gallery's committed signatures (make gallery-check: no key needed)"
+	@$(MAKE) --no-print-directory gallery-check
 	@echo "==> Checking tools/connect/odc.py (Connect v1 in Python, the mocks' half) against opendmd-core/tests/connect-vectors.json"
 	uv run --quiet tools/connect/vectors_check.py
 	@echo "==> Checking the pairing QR code (tools/connect/qr_check.py): the core's matrices against qrcodegen's, the panel's QR screen decoded by ZXing"
@@ -326,6 +333,8 @@ check:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --features panel-id
 	@echo "==> Checking $(CORE) with connect alone (Connect's session half and protocol v1)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features connect
+	@echo "==> Checking $(CORE) with gallery-sig alone (the gallery's signature on a Formula)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features gallery-sig
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
@@ -337,6 +346,7 @@ check:
 	@echo "==> Checking $(PSI)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	@$(MAKE) --no-print-directory gallery-check
 
 # The UI is heading for the browser, so the core and the renderer have to stay
 # free of anything wasm can't do — `std::time::Instant` above all, which has no
@@ -531,6 +541,40 @@ GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
 gallery-tool:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked
 
+# The project's gallery Formulas signed (the signed-gallery design; protocol
+# 5.7): only a Formula the project signed may be added to a panel by remote.
+# gallery-out: the gallery tool writes each project Formula as the gallery
+# sends it (<stem>.psi without the gallery header, <stem>.psb compiled).
+# gallery-sign: signs them with the gallery key (GALLERY_KEY, never in a repo
+# or CI; tools/gallery-sign.py keygen made it) into
+# $(WEB)/formulas/signatures.json; run it when a Formula, the compiler or the
+# ABI changes, and commit the file. gallery-check (in make check; no key
+# needed): every committed signature through the firmware's own verifier
+# (opendmd-core tests/gallery_signatures.rs), and again in Python; a stale,
+# missing or foreign signature fails. With no gallery key committed yet it
+# says GALLERY UNSIGNED and passes (a panel then refuses every add); once
+# the key is pinned (tests/gallery_signatures.rs PINNED, set by the signing
+# commit) only GALLERY SIGNED passes. Also run by make test (CI).
+GALLERY_OUT := $(CURDIR)/target/gallery-out
+GALLERY_KEY ?= $(HOME)/.config/opendmd/gallery.key
+gallery-out: gallery-tool
+	@mkdir -p $(GALLERY_OUT) && find $(GALLERY_OUT) -maxdepth 1 -type f -name '*.ps[ib]' -delete
+	$(GALLERY_TOOL) check --trusted --out $(GALLERY_OUT) $(WEB)/formulas/*.psi 2> $(GALLERY_OUT).log || { cat $(GALLERY_OUT).log; exit 1; }
+	@echo "gallery-out: $$(ls $(GALLERY_OUT)/*.psi | wc -l) project Formulas in $(GALLERY_OUT)"
+gallery-sign: gallery-out
+	@test -f $(GALLERY_KEY) || { echo "no gallery key at $(GALLERY_KEY): uv run --locked tools/gallery-sign.py keygen (once), or GALLERY_KEY=..."; exit 2; }
+	uv run --locked --quiet tools/gallery-sign.py sign --formulas $(GALLERY_OUT) --key $(GALLERY_KEY)
+	@$(MAKE) --no-print-directory gallery-check-only
+gallery-check: gallery-out
+	@$(MAKE) --no-print-directory gallery-check-only
+gallery-check-only:
+	@echo "==> The gallery's signatures ($(WEB)/formulas/signatures.json) by the firmware's verifier (opendmd-core tests/gallery_signatures.rs)"
+	@cd $(CORE) && GALLERY_OUT=$(GALLERY_OUT) RUSTUP_TOOLCHAIN=stable cargo test -q --features gallery-sig --test gallery_signatures -- --nocapture > $(GALLERY_OUT).check.log 2>&1; \
+	  grep -oE 'GALLERY (SIGNED|UNSIGNED): .*|^test result.*|panicked.*' $(GALLERY_OUT).check.log; \
+	  grep -q '^test result: ok' $(GALLERY_OUT).check.log && grep -qE 'GALLERY (SIGNED|UNSIGNED): ' $(GALLERY_OUT).check.log || { cat $(GALLERY_OUT).check.log; exit 1; }
+	@echo "==> The gallery's signatures again, in Python (tools/gallery-sign.py verify)"
+	uv run --locked --quiet tools/gallery-sign.py verify --formulas $(GALLERY_OUT)
+
 # A release (tools/release.sh; docs/deploying.md "Releasing"). make release
 # VERSION=1.0.1 is a dry run: plan, bump (a detached commit + local tag,
 # undone after), build signed with the real key, every check and the assets;
@@ -567,6 +611,8 @@ clippy:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect,panel-id -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features connect -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect,connect-formula-add,panel-id -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features gallery-sig -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"
@@ -1416,12 +1462,12 @@ emu-image-connect: emu-connect-certs
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic,connect-formula-add FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 # Card Formulas for `formulas` and `formula-add` (the host's psi build: the lane puts
-# ramp on the card over the LAN, and adds the gallery's largest, rift-patrol, by remote).
+# ramp on the card over the LAN, and offers the gallery's largest, rift-patrol, by
+# remote: refused until the panel checks the gallery's signature).
 emu-connect-psb:
 	@mkdir -p $(EMU_CONNECT_DIR)/psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(WEB)/formulas/rift-patrol.psi) -o $(EMU_CONNECT_DIR)/psb/rift-patrol.psb
-	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/connect/lane-look.psi) -o $(EMU_CONNECT_DIR)/psb/lane-look.psb
 emu-connect: emu-build emu-card emu-connect-psb
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
 	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)

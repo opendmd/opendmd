@@ -1017,9 +1017,8 @@ impl Engine {
     }
 
     /// What `path` reads as: a virtual file in memory, a Formula's `.psi`
-    /// path played from the compiled `.psb` beside it, else a remote
-    /// controller's `.psr` on the VM only (read through the source, then
-    /// closed: [`crate::fx_psi::card_program`]) as a virtual file,
+    /// path played from the compiled `.psb` beside it (read through the
+    /// source, then closed: [`crate::fx_psi::read_psb`]) as a virtual file,
     /// else the source's file.
     fn open_reader(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         if let Some(bytes) = synth::open(path) {
@@ -1028,10 +1027,15 @@ impl Engine {
         if let Some((file, opts)) = synth::formula_file(path) {
             #[cfg(feature = "psi")]
             {
-                // Its `.psb`, else a remote controller's `.psr` (then `vm`:
-                // the VM only, never the JIT).
-                let p = crate::fx_psi::card_program(|f| self.source.open(f), file)?;
-                return Ok(Box::new(synth::open_formula_bytes(&p.opts(opts), &p.bytes)));
+                let f = self.source.open(&synth::compiled_path(file)).map_err(|e| {
+                    if e.kind() == io::ErrorKind::NotFound {
+                        io::Error::new(io::ErrorKind::NotFound, crate::fx_psi::NOT_PREPARED)
+                    } else {
+                        e
+                    }
+                })?;
+                let psb = crate::fx_psi::read_psb(f)?;
+                return Ok(Box::new(synth::open_formula_bytes(opts, &psb)));
             }
             #[cfg(not(feature = "psi"))]
             {

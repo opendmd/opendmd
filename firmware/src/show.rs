@@ -421,7 +421,7 @@ pub fn check_formula(path: &str) -> Result<(), String> {
     {
         let r = match opendmd_core::synth::formula_file(path) {
             Some(_) if !crate::CARD_READY.load(Relaxed) => return Err(crate::CARD_NOT_READY.to_string()),
-            Some((file, opts)) => crate::formulas::read_card(file).and_then(|p| boot::FormulaShow::from_card(&p, opts)),
+            Some((file, opts)) => crate::formulas::read_card(file).and_then(|b| boot::FormulaShow::from_bytes(&b, opts)),
             None => boot::FormulaShow::open(path),
         };
         r.map(drop).map_err(|e| e.msg)
@@ -535,10 +535,8 @@ impl Screen {
                 log::info!("boot show: the card's settings name formula {} (at {t} ms)", crate::short(path));
                 Formula::built(path, boot::FormulaShow::open(path), None)
             }
-            Some(Ok(p)) => {
-                // (A `.psr`'s options say `vm`, kept for a retry too.)
-                let opts = p.opts(opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o));
-                let b = p.bytes;
+            Some(Ok(b)) => {
+                let opts = opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o).to_string();
                 let r = boot::FormulaShow::from_bytes(&b, &opts);
                 let keep = r.as_ref().err().and_then(opendmd_core::fx_psi::look_retry).map(|_| (b, opts));
                 log::info!("boot show: the card's formula read at {t} ms");

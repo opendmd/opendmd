@@ -313,6 +313,19 @@ from that machine while CI is down (`PUBLISH=local`; `docs/deploying.md`
 committed `firmware/keys/opendmd.pub` before it is published. CI's builds
 and tests otherwise use a throwaway key (`FW_SIGN_KEY`, `FW_SIGN_PUB`).
 
+**The gallery key is another key.** A Formula added to a panel by remote
+must carry the project's signature (protocol 5.7; the signed-gallery
+design), made with the gallery key, never this one: its private half is
+`~/.config/opendmd/gallery.key` on the maintainer's machine only (never in
+a repo, CI or Cloudflare), its public half `firmware/keys/gallery.pub`,
+compiled into `opendmd_core::gallery_sig::GALLERY_KEYS` (test images only
+so far). `make gallery-sign` signs the project's Formulas into
+`opendmd-web/formulas/signatures.json`; `make gallery-check` (in `make
+check`, no key needed) holds every committed signature to the firmware's
+own verifier and fails on a stale, missing or foreign one. A leaked
+gallery key cannot sign firmware, and a leaked release key cannot sign a
+Formula: the messages' domains differ.
+
 The web app pack is signed with the same key and key ids
 (`docs/www-pack.md` "Signature").
 

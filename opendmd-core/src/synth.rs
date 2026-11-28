@@ -94,49 +94,6 @@ pub const FORMULA_EXT: &str = ".psi";
 /// A compiled Formula's file: `<stem>.psb` beside `<stem>.psi`.
 pub const COMPILED_EXT: &str = ".psb";
 
-/// A program a remote controller delivered for `<stem>.psi` (Connect's
-/// `formula-add`): `<stem>.psr`, never `.psb`. Whatever is read from one
-/// is drawn by the VM only, never the JIT (`fx_psi::card_program`); only
-/// the panel's own compiler writes `<stem>.psb`, and the `.psr` goes once
-/// it has (`card_formulas`). A `.psb` beside it, even a mark, wins.
-pub const REMOTE_EXT: &str = ".psr";
-
-/// [`compiled_path`]'s remote twin (`/formulas/x.psi` -> `/formulas/x.psr`).
-pub fn remote_path(file: &str) -> String {
-    let stem = &file[..file.len().saturating_sub(FORMULA_EXT.len())];
-    format!("{stem}{REMOTE_EXT}")
-}
-
-/// What the panel does after its own compile of a Formula that has a
-/// remote add's `.psr` beside it ([`after_own_compile`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AfterCompile {
-    /// Its `.psb` read back as written and loads: the `.psr` goes.
-    DropRemote,
-    /// A load ran out of heap: both stay (the `.psb` wins where it plays),
-    /// and the next start checks again. Never a reason to drop the `.psb`.
-    KeepBoth,
-    /// It did not read back as written, or a program in it does not load:
-    /// the `.psb` goes and the source is compiled again at the next start.
-    Redo,
-}
-
-/// [`AfterCompile`] for a compile whose `.psb` read back as written
-/// (`same`) and whose programs loaded as `loads` says.
-#[cfg(feature = "psi")]
-pub fn after_own_compile(same: bool, loads: &[Result<(), crate::psi::psb::Refusal>]) -> AfterCompile {
-    if !same {
-        return AfterCompile::Redo;
-    }
-    if loads.iter().any(|r| r.as_ref().err() == Some(&crate::psi::psb::NO_HEAP)) {
-        return AfterCompile::KeepBoth;
-    }
-    if loads.iter().any(Result::is_err) {
-        return AfterCompile::Redo;
-    }
-    AfterCompile::DropRemote
-}
-
 /// The compiled file for a Formula's `.psi` path (`/formulas/x.psi` ->
 /// `/formulas/x.psb`).
 pub fn compiled_path(file: &str) -> String {
@@ -1248,20 +1205,6 @@ mod tests {
             assert!(!is_retired_live(p), "{p}");
         }
         assert_eq!(url_decode(b"a+b%41%zz%4"), "a bA%zz%4");
-    }
-
-    /// A compile beside a `.psr` under a heap squeeze keeps its `.psb`:
-    /// only a read-back that differs, or a program that does not load for
-    /// another reason, costs it.
-    #[cfg(feature = "psi")]
-    #[test]
-    fn after_own_compile_never_drops_a_psb_for_want_of_heap() {
-        use crate::psi::psb::NO_HEAP;
-        assert_eq!(after_own_compile(true, &[Ok(()), Ok(())]), AfterCompile::DropRemote);
-        assert_eq!(after_own_compile(true, &[Ok(()), Err(NO_HEAP)]), AfterCompile::KeepBoth);
-        assert_eq!(after_own_compile(true, &[Err(NO_HEAP), Err("not a compiled Formula")]), AfterCompile::KeepBoth);
-        assert_eq!(after_own_compile(true, &[Err("not a compiled Formula"), Ok(())]), AfterCompile::Redo);
-        assert_eq!(after_own_compile(false, &[Ok(()), Ok(())]), AfterCompile::Redo);
     }
 
     #[test]

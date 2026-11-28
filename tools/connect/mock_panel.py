@@ -92,13 +92,13 @@ class Panel:
         self.formulas_listing: list | None = None  # [next, at, pages]
         self.formulas_opens = 48  # card Formulas looked at per page
         # Formulas added by remote (5.7): the pretend card's files by stem
-        # (source, compiled), the add under way, the day's adds, and the
-        # compiled files not yet compiled here (on the VM only).
+        # (source, compiled), the add under way, the day's adds. (Reached
+        # only with odc.ADDS_TAKEN: a panel refuses every add until the
+        # gallery's signature is checked.)
         self.abi = 3
         self.files: dict[str, tuple[bytes, bytes]] = {}
         self.add: dict | None = None
         self.add_day: list[tuple[float, int]] = []
-        self.unconfirmed: set[str] = set()
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -150,6 +150,8 @@ class Panel:
 
     def on_part(self, k, a):
         h = self.add
+        if not h:
+            raise odc.Bad("not-allowed")  # no add admitted
         if not h or h["a"]["id"] != a["id"] or h.get("landed"):
             raise odc.Bad("bad-arg")
         if h["k"] != k:
@@ -173,7 +175,6 @@ class Panel:
             self.add = None
             raise odc.Bad("bad-arg")
         self.files[h["target"]] = (src, psb)
-        self.unconfirmed.add(h["target"])
         if self.card_formulas is not None:
             self.card_formulas = [x for x in self.card_formulas if x[0] != h["target"]] + [(h["target"], a["name"])]
         h["landed"] = True
@@ -190,7 +191,7 @@ class Panel:
         else:
             self.formulas_first_at = now
             self.formulas_listing = lst = ["", now, 1]
-        fl = odc.FormulaList(self.card_formulas is not None, self.abi, True)
+        fl = odc.FormulaList(self.card_formulas is not None, self.abi)
         if after is None:
             for stem, name in self.builtin_formulas:
                 fl.builtin(stem, name)

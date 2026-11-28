@@ -32,6 +32,8 @@ pub mod frametime;
 pub mod fx;
 #[cfg(feature = "psi")]
 pub mod fx_psi;
+#[cfg(feature = "gallery-sig")]
+pub mod gallery_sig;
 pub mod gifslim;
 pub mod history;
 pub mod hostname;

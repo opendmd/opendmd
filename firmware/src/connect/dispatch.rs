@@ -67,7 +67,7 @@ impl Client {
             Remote::Playlists => self.playlists(),
             Remote::Formulas { after } => self.formulas(after),
             #[cfg(feature = "connect-formula-add")]
-            Remote::FormulaAdd(args) => self.formula_add(k, args),
+            Remote::FormulaAdd(args, signed) => self.formula_add(k, args, signed),
             #[cfg(feature = "connect-formula-add")]
             Remote::FormulaPart { id, off, data } => self.formula_part(k, id, off, data),
             Remote::Controllers => Ok(Some(self.keys.controllers_result(|k| {
@@ -352,13 +352,10 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
 #[optimize(size)]
 #[inline(never)]
 fn formulas_page(card: bool, after: Option<&str>) -> (String, Option<String>) {
-    // (A build with Formulas takes adds: the compiled format it plays, and
-    // the controller's compiled file wanted with the source. Every board
-    // asks for it today: none compiles while Connect is open.)
-    // (Only a build that takes adds says what they need: no `abi`/`psb`, no
-    // Add to panel.)
+    // (Only a build with adds says what they need, the compiled format it
+    // plays: no `abi`, no Add to panel.)
     #[cfg(feature = "connect-formula-add")]
-    let mut out = proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI, true);
+    let mut out = proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI);
     #[cfg(not(feature = "connect-formula-add"))]
     let mut out = proto::FormulaList::new(card);
     #[cfg(feature = "psi")]

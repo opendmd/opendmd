@@ -5,11 +5,16 @@
 //! The firmware writes the bytes, checks the compiled program
 //! (`psb::verify`) and lands the files (`firmware/src/connect/fadd.rs`).
 //!
-//! This is the one place a remote controller hands the panel a program
-//! (every other path refuses inline Formulas and `~sent`): it lands as
-//! `<stem>.psr`, never `.psb`, and whatever is read from a `.psr` is drawn
-//! by the VM only (`fx_psi::card_program`), until the panel's own compiler
-//! has written `<stem>.psb` from the source and removed the `.psr`.
+//! This is the one place a remote controller would hand the panel a
+//! program (every other path refuses inline Formulas and `~sent`). Only a
+//! Formula the project signed may arrive that way (the gallery's
+//! signature, [`crate::gallery_sig`]). An add is held only with the
+//! [`Signed`] witness `gallery_sig::check` returns ([`Adds::begin`]), and
+//! nothing else can make one: the command, the firmware's add and its
+//! landing all take it. Until `formula-add` carries the signature (the
+//! signed-gallery design's step 4) the parser has none to check, so it
+//! refuses every add `not-allowed`; a part with no add held is refused
+//! `not-allowed` before the card. Nothing reaches the card.
 
 use std::time::Duration;
 
@@ -18,6 +23,7 @@ use sha2::{Digest, Sha256};
 use super::json::Value;
 use super::keys::KeyId;
 use super::proto::Refusal;
+pub use crate::gallery_sig::Signed;
 
 /// A stem an add may name: the web app's save rule (`[a-z0-9-]`, 1 to 40,
 /// a letter or digit first), inside the remote play's.
@@ -45,6 +51,7 @@ pub const ADD_EVERY: Duration = Duration::from_secs(2);
 /// An add with no progress for this long is dropped (its part files too).
 pub const STALE: Duration = Duration::from_secs(600);
 
+
 /// `formula-add`'s arguments, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddArgs {
@@ -60,6 +67,11 @@ pub struct AddArgs {
 impl AddArgs {
     pub fn total(&self) -> u32 {
         self.src_size + self.psb_size
+    }
+
+    /// Whether `w` is a signature over exactly these bytes, under this stem.
+    pub fn signed_by(&self, w: &Signed) -> bool {
+        w.stem() == self.stem && w.src() == (self.src_size, &self.src_sha256) && w.psb() == (self.psb_size, &self.psb_sha256)
     }
 }
 
@@ -181,6 +193,8 @@ pub enum Part {
 pub struct Held {
     pub k: KeyId,
     pub args: AddArgs,
+    /// The gallery's signature over them, as `gallery_sig::check` took it.
+    signed: Signed,
     /// The stem it lands under (the args' or a next free one), as the
     /// firmware chose at the start.
     pub target: String,
@@ -362,17 +376,48 @@ impl Adds {
         Ok(Pre::New)
     }
 
-    /// The card said where it lands: held, charged. `Some(id)`: an earlier
-    /// add given up for it, its part files to remove.
-    pub fn begin(&mut self, k: KeyId, args: AddArgs, target: String, now: Duration) -> Option<u32> {
+    /// The card said where it lands: held, charged, with the gallery's
+    /// signature over exactly these bytes (`BadArg` for another's).
+    /// `Ok(Some(id))`: an earlier add given up for it, its part files to
+    /// remove.
+    ///
+    /// The witness comes from `gallery_sig::check` (this compiles; it is
+    /// refused at run time, as no key signed it):
+    ///
+    /// ```no_run
+    /// use opendmd_core::connect::{fadd::{add_args, Adds}, json};
+    /// use opendmd_core::gallery_sig::{check, Formula, Trust};
+    /// let a = add_args(&json::parse(br#"{"id":1,"stem":"x","name":"x","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
+    /// let f = Formula { kid: 0, abi: 3, rev: 1, stem: &a.stem, src_len: a.src_size, src_sha256: a.src_sha256, psb_len: a.psb_size, psb_sha256: a.psb_sha256 };
+    /// let w = check(&Trust::panel(3), &f, &[0; 64]).unwrap();
+    /// Adds::default().begin([0; 8], a, w, "x".into(), Default::default()).unwrap();
+    /// ```
+    ///
+    /// and from nowhere else: the same with a witness made by hand does not
+    /// compile, so neither does any landing without a signature.
+    ///
+    /// ```compile_fail
+    /// use opendmd_core::connect::{fadd::{add_args, Adds, Signed}, json};
+    /// let a = add_args(&json::parse(br#"{"id":1,"stem":"x","name":"x","src_size":1,"src_sha256":"00000000000000000000000000000000000000000000000000000000000000ff","psb_size":6,"psb_sha256":"00000000000000000000000000000000000000000000000000000000000000ff"}"#).unwrap()).unwrap();
+    /// let w = Signed { kid: 0, abi: 3, rev: 1, stem: a.stem.clone(), src_len: a.src_size, src_sha256: a.src_sha256, psb_len: a.psb_size, psb_sha256: a.psb_sha256 };
+    /// Adds::default().begin([0; 8], a, w, "x".into(), Default::default()).unwrap();
+    /// ```
+    pub fn begin(&mut self, k: KeyId, args: AddArgs, signed: Signed, target: String, now: Duration) -> Result<Option<u32>, Refusal> {
+        if !args.signed_by(&signed) {
+            return Err(Refusal::BadArg);
+        }
         let dropped = self.held.take().filter(|h| !h.landed).map(|h| h.args.id);
         self.tally.charge(0, u64::from(args.total()));
-        self.held = Some(Held { k, args, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, landed: false });
-        dropped
+        self.held = Some(Held { k, args, signed, target, next: 0, src: Sha256::new(), psb: Sha256::new(), at: now, landed: false });
+        Ok(dropped)
     }
 
-    /// A part from `k`: strictly at `next`, inside the stream.
+    /// A part from `k`: strictly at `next`, inside the stream. With no add
+    /// held at all: `NotAllowed` (no add was admitted).
     pub fn part(&mut self, k: KeyId, id: u32, off: u32, data: &[u8], now: Duration) -> Result<Progress, Refusal> {
+        if self.held.is_none() {
+            return Err(Refusal::NotAllowed);
+        }
         let h = self.held.as_mut().filter(|h| h.args.id == id && !h.landed && now.saturating_sub(h.at) < STALE).ok_or(Refusal::BadArg)?;
         if h.k != k {
             return Err(Refusal::NotAllowed);
@@ -409,9 +454,10 @@ impl Adds {
         Ok(Progress { runs, next: b, complete })
     }
 
-    /// The held add, if it is `k`'s `id` with all its bytes in.
-    pub fn whole(&self, k: &KeyId, id: u32) -> Option<&Held> {
-        self.held.as_ref().filter(|h| &h.k == k && h.args.id == id && h.next == h.args.total() && !h.landed)
+    /// The held add, if it is `k`'s `id` with all its bytes in, and the
+    /// gallery's signature it was admitted with (what a landing takes).
+    pub fn whole(&self, k: &KeyId, id: u32) -> Option<(&Held, &Signed)> {
+        self.held.as_ref().filter(|h| &h.k == k && h.args.id == id && h.next == h.args.total() && !h.landed).map(|h| (h, &h.signed))
     }
 
     /// It landed as `stem` (kept for a lost `done`; it holds nothing).
@@ -498,14 +544,49 @@ mod tests {
         assert!(stem_choices(&"r".repeat(40)).all(|s| s.len() <= MAX_STEM));
     }
 
+    /// A gallery signature over `a` (the test key's: the only way a
+    /// witness is made, `gallery_sig::check`).
+    fn witness(a: &AddArgs) -> Signed {
+        crate::gallery_sig::signed_for_tests(&crate::gallery_sig::Formula {
+            kid: 0,
+            abi: 3,
+            rev: 1,
+            stem: &a.stem,
+            src_len: a.src_size,
+            src_sha256: a.src_sha256,
+            psb_len: a.psb_size,
+            psb_sha256: a.psb_sha256,
+        })
+    }
+
     /// `pre` then `begin`, as the firmware does once the card named a target.
     fn start(adds: &mut Adds, k: KeyId, a: AddArgs, now: Duration, today: Option<u64>) -> Result<Pre, Refusal> {
         let p = adds.pre(k, &a, now, today)?;
         if p == Pre::New {
             let stem = a.stem.clone();
-            adds.begin(k, a, stem, now);
+            let w = witness(&a);
+            adds.begin(k, a, w, stem, now)?;
         }
         Ok(p)
+    }
+
+    /// An add is held only with a signature over exactly its bytes, and a
+    /// part with no add held is not-allowed.
+    #[test]
+    fn an_add_is_held_only_with_its_own_signature() {
+        let (src, psb) = (b"gray(x)\n".to_vec(), b"PSB\x03\x00\x00".to_vec());
+        let mut adds = Adds::default();
+        assert_eq!(adds.part(K, 7, 0, &src, t(0)).err(), Some(Refusal::NotAllowed), "no add held");
+        let a = args(&src, &psb, "x");
+        let other = witness(&args(b"gray(y)\n", &psb, "x"));
+        assert_eq!(adds.begin(K, a.clone(), other, "x".into(), t(0)), Err(Refusal::BadArg), "another Formula's signature");
+        let stem = witness(&args(&src, &psb, "y"));
+        assert_eq!(adds.begin(K, a.clone(), stem, "x".into(), t(0)), Err(Refusal::BadArg), "another stem's signature");
+        assert!(adds.held.is_none());
+        let w = witness(&a);
+        assert_eq!(adds.begin(K, a.clone(), w.clone(), "x".into(), t(0)), Ok(None));
+        adds.part(K, 7, 0, &[src.clone(), psb.clone()].concat(), t(1)).unwrap();
+        assert_eq!(adds.whole(&K, 7).map(|(_, s)| s.clone()), Some(w));
     }
 
     #[test]
@@ -561,7 +642,7 @@ mod tests {
         let mut b = a.clone();
         b.id = 9;
         assert_eq!(adds.pre(K, &b, t(6), None), Ok(Pre::New));
-        assert_eq!(adds.begin(K, b.clone(), "x".into(), t(6)), Some(7));
+        assert_eq!(adds.begin(K, b.clone(), witness(&b), "x".into(), t(6)), Ok(Some(7)));
         adds.landed("x-2", t(7));
         assert_eq!(start(&mut adds, K, b, t(8), None), Ok(Pre::Landed { stem: "x-2".into() }));
         // A landed add holds nothing: another key may start at once.
