@@ -1,14 +1,18 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
-// partial patch, applied live except WiFi, which needs a reboot), in five
-// tabs, `#settings/play|look|time|replay|device` (bare `#settings` is the first);
+// partial patch, applied live except WiFi, which needs a reboot), in tabs,
+// `#settings/play|look|time|replay|wifi|remote|updates|advanced|about`
+// (bare `#settings` is the first; `#settings/device`, the one tab those
+// last five were, leads to WiFi);
 // only the open tab is in the page. Playback (playlist, platforms, shuffle,
 // how long each GIF stays), Panel at `look` (brightness and its maximum
 // js/power.js, colour, glow, a formula over every GIF, mirroring on Now, the
 // transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode), RePlayOS
-// (Follow RePlayOS, js/follow.js) and
-// Device (status, the playback cache, network — its own Save; a new name
-// is live at once —, Remote control js/remote.js, panel timing js/panel.js, firmware and security
-// js/firmware.js, About). Everything saves as it changes.
+// (Follow RePlayOS, js/follow.js), WiFi (network — its own Save; a new
+// name is live at once —, offline mode, the API key), Remote control
+// (js/remote.js, in a build with it), Updates (js/firmware.js), Advanced
+// (status, reload and reboot, card speed, the playback cache, panel
+// timing js/panel.js) and About: the last but Remote control are
+// js/device.js's. Everything saves as it changes.
 
 import { app, playlistLabel, setPath, platName, NO_FORMULAS } from './state.js';
 import { timeCard, scheduleCard } from './schedule.js';
@@ -18,7 +22,9 @@ import { popup, closeMenu } from './overrides.js';
 import { keepSelect, h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
-const TABS = [['play', 'Playback'], ['look', 'Panel'], ['time', 'Schedule'], ['replay', 'RePlayOS'], ['device', 'Device']];
+const TABS = [['play', 'Playback'], ['look', 'Panel'], ['time', 'Schedule'], ['replay', 'RePlayOS'], ['wifi', 'WiFi'], ['remote', 'Remote control'], ['updates', 'Updates'], ['advanced', 'Advanced'], ['about', 'About']];
+// The tabs js/device.js fills (imported when the first of them opens).
+const DEV = new Set(['wifi', 'updates', 'advanced', 'about']);
 // The bundled Formulas (formulas.json: their sources), fetched once a session.
 let exQ = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
@@ -229,7 +235,7 @@ export async function mount(el) {
           ...(app.noFormulas ? [h('p.cap', { id: 'st-look-none', style: 'margin-top:12px' }, `No Formula over the GIFs: ${NO_FORMULAS.replace(/^F/, 'f')}`)]
             : [(lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
               h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.')]),
-          h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the display a download for each GIF (this browser only)')),
+          h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the display a download for each GIF (this browser only)'), thumbs()),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
           h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview')),
@@ -239,22 +245,20 @@ export async function mount(el) {
     // Location (js/location.js): on a player that keeps one (`lat` in its config).
     time: () => { const loc = 'lat' in c && h('div.grp', { id: 'loc' }); if (loc) import('./location.js').then((m) => m.locationCard(loc)); return tab('time', time.el, loc, sched.el); },
     replay: () => tab('replay', followCard().el),
-    device: () => {
-      const t = tab('device');
-      import('./device.js').then((m) => {
-        dev = m.deviceTab(t, { f, save, banner, sched, thumbs, live: () => visible && open === 'device' });
-        // Remote control (js/remote.js), in a build with it, under Status.
-        if (app.status?.features?.includes('connect')) {
-          const b = h('div.grp', { id: 'rc' }); t.querySelector('#st-status')?.after(b);
-          import('./remote.js').then((r) => { rc = r.remoteCard(b); tick(); });
-        }
-      });
-      return t;
-    },
+    // Remote control (js/remote.js), in a build with it.
+    remote: () => { const b = h('div.grp', { id: 'rc' }); import('./remote.js').then((r) => { rc = r.remoteCard(b); tick(); }); return tab('remote', b); },
+  };
+  let devQ = null;
+  for (const k of DEV) BUILD[k] = () => {
+    const t = tab(k);
+    (devQ ??= import('./device.js').then((m) => (dev = m.deviceTab({ f, save, banner, sched, live: () => visible && open === 'advanced' }))))
+      .then((d) => { t.append(...d.groups[k]); if (DEV.has(open)) d.show(); });
+    return t;
   };
   const built = {};
   const panel = h('div');
-  const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
+  const conn = app.status?.features?.includes('connect');
+  const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.filter(([k]) => k != 'remote' || conn).map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
   // No API key: one line under the title (js/keynag.js), gone once one is set.
   const keyBox = h('div');
   const nag = (cf) => { if (cf?.api_key_set === false) import('./keynag.js').then((m) => m.line(keyBox)); else keyBox.replaceChildren(); };
@@ -263,19 +267,24 @@ export async function mount(el) {
   el.append(h('h1.ptitle', 'Settings'), keyBox, banner, tabs, panel);
   let open = '', visible = true, dev, rc;
   function go(k) {
-    if (!BUILD[k]) k = 'play';
+    // (Device: what WiFi, Updates, Advanced and About were, one tab.)
+    if (k === 'device') { location.replace('#settings/wifi'); return; }
+    if (!BUILD[k] || k == 'remote' && !conn) k = 'play';
     for (const b of tabs.children) { b.classList.toggle('on', b.dataset.tab === k); b.ariaSelected = b.dataset.tab === k; }
     if (k === open) return;
-    if (open === 'device') dev?.hide();
+    if (DEV.has(open) && !DEV.has(k)) dev?.hide();
     open = k;
     panel.replaceChildren(built[k] ??= BUILD[k]());
-    if (k === 'device') dev?.show();
+    if (DEV.has(k)) dev?.show();
+    tabs.querySelector('.on')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     tick();
   }
-  // Device's and RePlayOS's status, every 5 s while open (the app's scheduler).
+  // Advanced's and About's status, and RePlayOS's, every 5 s while open (the app's scheduler).
   function tick() {
-    for (const k of ['device', 'replay']) if (visible && open === k) app.watch(k, 5000); else app.unwatch(k);
-    rc?.(visible && open === 'device');
+    const st = visible && (open === 'advanced' || open === 'about');
+    if (st) app.watch('device', 5000); else app.unwatch('device');
+    if (visible && open === 'replay') app.watch('replay', 5000); else app.unwatch('replay');
+    rc?.(visible && open === 'remote');
   }
 
   // A playlist change while the player is still reading one would queue
@@ -310,8 +319,8 @@ export async function mount(el) {
 
   time.render(app.status);
   return {
-    show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); if (open === 'device') dev?.show(); sched.load(); tick(); },
+    show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); if (DEV.has(open)) dev?.show(); sched.load(); tick(); },
     sub: go,
-    hide() { visible = false; tick(); if (open === 'device') dev?.hide(); },
+    hide() { visible = false; tick(); if (DEV.has(open)) dev?.hide(); },
   };
 }

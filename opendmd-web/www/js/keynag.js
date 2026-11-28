@@ -9,7 +9,7 @@ import { $, h } from './util.js';
 export function line(box) {
   if ($('#keynag')) return;
   box.append(h('p.cap.keyline', { id: 'keynag', role: 'note' }, 'No key: anyone on your WiFi can change this panel. ',
-    h('a', { id: 'keynag-set', href: '#settings/device', onclick: () => setTimeout(() => $('#sec-key')?.scrollIntoView({ block: 'center' }), 600) }, 'Set a key')));
+    h('a', { id: 'keynag-set', href: '#settings/wifi', onclick: () => setTimeout(() => $('#sec-key')?.scrollIntoView({ block: 'center' }), 600) }, 'Set a key')));
 }
 
 export const hide = () => $('#keynag')?.remove();

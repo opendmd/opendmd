@@ -1,8 +1,10 @@
-// Settings › Device (imported when the tab is first open; its own size
-// line): the player's status, the playback cache, network (its own Save; a
-// new name is live at once), offline mode, reload and reboot, and About. Panel timing
-// (js/panel.js), Firmware and Security (js/firmware.js) are modules of
-// their own, loaded with it.
+// Settings' WiFi, Updates, Advanced and About tabs (imported when the
+// first of them opens; its own size line): network (its own Save; a new
+// name is live at once), offline mode and Security on WiFi; Firmware on
+// Updates; the player's status, reload and reboot, card speed, the
+// playback cache, Moving pictures and Panel timing on Advanced; where and
+// what the player is on About. Panel timing (js/panel.js), Firmware and
+// Security (js/firmware.js) are modules of their own, loaded with it.
 
 import { app, playlistLabel, setPath } from './state.js';
 import * as prep from './prepare.js';
@@ -16,9 +18,9 @@ import { h, clear, on, toast, label, niceName, note, saver, bytes, uptime, SITE 
 export const apiDoc = (s) => SITE + (/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(s?.version) && s.www_version === 'v' + s.version
   ? `dev/api/v${s.version}.html` : 'dev/api.html');
 
-// ctx: {f, save, banner, sched, thumbs, live} from settings.js; `live()`
-// while the tab is open and the view up.
-export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
+// ctx: {f, save, banner, sched, live} from settings.js; `live()` while
+// Advanced is open and the view up. -> {groups: {tab: [nodes]}, show, hide}.
+export function deviceTab({ f, save, banner, sched, live }) {
   const c = app.config, netH = h('h3', 'Network'), net = saver(netH);
   Object.assign(f, {
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
@@ -118,16 +120,18 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true }), pt = h('div.grp', { id: 'st-panel', hidden: true }), ps = h('div.grp', { id: 'st-sync', hidden: true });
   import('./firmware.js').then((m) => m.fwCards(fw, sec));
   import('./panel.js').then((m) => { m.syncCard(ps); m.panelCard(pt); });
-  el.append(h('div.grp', { id: 'st-status' }, h('h3', 'Status'), facts, cardNote,
-    h('div.row', { style: 'margin-top:12px' },
-      h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
-      h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
+  const groups = {
+    advanced: [h('div.grp', { id: 'st-status' }, h('h3', 'Status'), facts, cardNote,
+      h('div.row', { style: 'margin-top:12px' },
+        h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
+        h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
     h('div.grp', { id: 'st-cs', hidden: c.card_speed == null }, csH, h('div.form.f2', h('label.stack', 'Speed', csSel)), csCap, csSlow),
     h('div.grp', { id: 'pc' }, pcH,
       note('Prepared GIFs start sooner and play in less memory', 'Preparing leaves your GIF files as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox, thumbs()),
-    h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the display raises the open OpenDMD-Setup access point.'),
+      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
+    ps, pt],
+    wifi: [h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the display raises the open OpenDMD-Setup access point.'),
       h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
@@ -137,7 +141,10 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', ...ent.checked ? ['wifi_eap_ttls'] : [], 'hostname'], netRun) }, 'Save network')), moved, off),
-    ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
+    sec],
+    updates: [fw],
+    about: [h('div.grp', h('h3', 'About'), about)],
+  };
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
   function renderFacts(s) {
@@ -329,6 +336,6 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   on('prepare', renderJob);
   const show = () => { off.hidden = app.config?.network == null; csSay(); renderFacts(app.status); renderJob(prep.job); loadCache(); };
   show();
-  // Leaving the tab: no more cache polls, and a panel test in progress ends.
-  return { show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };
+  // Leaving these tabs: no more cache polls, and a panel test in progress ends.
+  return { groups, show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };
 }
