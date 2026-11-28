@@ -233,11 +233,17 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
     // capture, not committed): the effect path
     // with the JIT on, as the other rows (the tween's VM frame is 757: the
     // player keeps the faster). p0 big and p0 tween again by psi-refresh
-    // (2026-11-28, the same build as the rows above; tween VM 771): p0 big
-    // 1,429 -> 1,729 (VM 2,676) with its program byte for byte the same
-    // (the compiler of 2026-11-04 makes the same listing and estimates);
-    // the cause is on the device's path, not found yet. Megacity not
-    // measured again.
+    // (2026-11-28, the same build as the rows above; tween VM 771); Megacity
+    // not measured again. Against October and November: the VM's real path
+    // moved about as much as the JIT's (Plasma +18 / +9 %, Tunnel +10 /
+    // +11 %, VM / JIT), and Plasma's and Tunnel's sources got heavier since
+    // (rows down, real division, `phase`); a JIT-only residual of ~100 µs
+    // stays on the cube and Fire (their VM flat); p0 big is +300 µs on
+    // both the VM (2,676) and the JIT (1,429 -> 1,729), a stage they share,
+    // with its program byte for byte what the compiler of 2026-11-04 made.
+    // Its method differs too: 64 frames from a prebuilt .psb then, 300
+    // compiled on the board now. Not yet explained: an experiment (the
+    // JIT2_ONLY rows' splits) is pending.
     (
         "p0 Megacity sketch",
         include_str!("device/p0-road-v2-city.psi"),

@@ -494,8 +494,8 @@ fn git(args: &[&str]) -> String {
 ///
 /// **To refresh them** (on a test board; never needed for the build): the
 /// psi-refresh probe measures every row here, each as its test compiles it
-/// (`make fw-release FW_RELEASE_FEATURES=psi-probe,psi-refresh
-/// FW_BETA_FEATURES= DIST=...`, firmware/src/psi_probe/refresh.rs: add a
+/// (`make fw-release VARIANT=4mb FW_VERSION=<version>.probeN
+/// FW_RELEASE_FEATURES=psi-probe,psi-refresh FW_BETA_FEATURES= DIST=...`, firmware/src/psi_probe/refresh.rs: add a
 /// row there), then `uv run tools/psi-refresh.py collect HOST` and
 /// `... apply results.json`. Before it, by hand: build
 /// the probe that measured its table (`make fw-flash FW_FEATURES=psi-probe`

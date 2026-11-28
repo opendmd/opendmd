@@ -18,14 +18,15 @@ them from a board, parse them, and put them into opendmd-psi/tests/measured.rs.
         dropped, never misread; the last good copy of each row wins).
 
     uv run tools/psi-refresh.py apply results.json [--repo DIR] [--dry-run]
-        [--no-storm-front]
+        [--no-storm-front] [--partial]
         Puts the numbers into opendmd-psi/tests/measured.rs and the commit
         each Formula's file was measured at into MEASURED_AT in
         opendmd-psi/tests/estimate.rs: refreshed rows take their file by
         include_str!, the retired rows go (RETIRE below), new rows come
         (ADD). Each row's file must still hash to what the board measured.
         It changes no estimate and no tolerance; its last lines say what to
-        run next.
+        run next. A results file with rows missing, or not from a probe
+        build (its firmware version), is refused unless --partial.
 """
 
 import argparse
@@ -159,11 +160,16 @@ def cmd_collect(a) -> int:
     hdr = {"User-Agent": "psi-refresh"}
     if os.environ.get("OPENDMD_API_KEY"):
         hdr["Authorization"] = f"Bearer {os.environ['OPENDMD_API_KEY']}"
+    # (No redirects followed: the key goes to the board asked, nowhere else.)
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
     deadline = time.time() + a.wait
     text, res = "", None
     while True:
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=20) as r:
+            with opener.open(urllib.request.Request(url, headers=hdr), timeout=20) as r:
                 text = r.read().decode("utf-8", "replace")
         except (urllib.error.URLError, OSError) as e:
             print(f"{time.strftime('%H:%M:%S')} {url}: {e}", flush=True)
@@ -296,6 +302,17 @@ def cmd_apply(a) -> int:
     if not res.get("done") or res.get("failed"):
         print("the results are not a finished probe with no failed rows", file=sys.stderr)
         return 1
+    # (A whole run of a probe build, unless --partial: every row the
+    # report says it measured, and a firmware version that says probe.)
+    if not a.partial:
+        why = []
+        if res.get("of") is None or len(res["rows"]) != res["of"]:
+            why.append(f"{len(res['rows'])} rows, the report says {res.get('of')}")
+        if "probe" not in (res.get("firmware") or ""):
+            why.append(f"firmware {res.get('firmware')!r} is not a probe build")
+        if why:
+            print("refused (--partial to apply anyway): " + "; ".join(why), file=sys.stderr)
+            return 1
     # (The CAL_ rows are the board's calibration, in no table.)
     rows = {(r["table"], r["name"], r["look"]): r for r in res["rows"] if not r["table"].startswith("CAL_")}
     add = [x for x in ADD if not (a.no_storm_front and x[1] == "Storm front")]
@@ -352,7 +369,8 @@ def cmd_apply(a) -> int:
             measured_at[key] = (r["file"], at[r["file"]])
             done.add((table, name, look))
         # New rows: where the first retired row of the table was, else last.
-        new = [x for x in add if x[0] == table]
+        # (Already in the table, from an earlier apply: refreshed above.)
+        new = [x for x in add if x[0] == table and (x[0], x[1], None) not in done]
         for _, name in new:
             r = rows.get((table, name, None))
             if r is None:
@@ -434,6 +452,7 @@ def main() -> int:
     ap_.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap_.add_argument("--dry-run", action="store_true")
     ap_.add_argument("--no-storm-front", action="store_true", help="leave Storm front out of CONSOLEB")
+    ap_.add_argument("--partial", action="store_true", help="apply a results file with rows missing or from a build not named a probe")
     a = ap.parse_args()
     return {"collect": cmd_collect, "parse": cmd_parse, "apply": cmd_apply}[a.cmd](a)
 

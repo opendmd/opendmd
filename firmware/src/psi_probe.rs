@@ -1033,9 +1033,13 @@ fn open_report(root: &str) -> bool {
         // (A report another firmware left unfinished is not this build's
         // failure: kept beside it, `-prev`, and this build's probe runs.)
         let ours = format!("# OpenDMD {} psi-probe report", crate::state::firmware_version());
+        // (If it cannot be kept, nothing runs: the report is not lost.)
         if !old.contains(DONE) && !old.starts_with(&ours) {
+            if let Err(e) = std::fs::write(format!("{root}/filelist-psi-probe-prev.txt"), &old) {
+                log::error!("psi-probe: /{REPORT_NAME} is another firmware's unfinished report, and keeping it as /filelist-psi-probe-prev.txt failed ({e}); not running");
+                return false;
+            }
             log::warn!("psi-probe: /{REPORT_NAME} is another firmware's unfinished report: kept as /filelist-psi-probe-prev.txt");
-            let _ = std::fs::write(format!("{root}/filelist-psi-probe-prev.txt"), &old);
         } else if !old.contains(DONE) {
             log::warn!(
                 "psi-probe: /{REPORT_NAME} has no `{DONE}` line: last boot's probe did not finish; not running it again (delete the file to)"
@@ -2359,12 +2363,11 @@ pub fn run(root: &str) {
     let stack0 = stack_unused();
     // (psi-refresh: the stale board rows of opendmd-psi/tests/measured.rs
     // measured again, and nothing else: refresh.rs.)
-    #[cfg(all(feature = "jit", feature = "psi-refresh"))]
-    {
+    if cfg!(all(feature = "jit", feature = "psi-refresh")) {
+        #[cfg(all(feature = "jit", feature = "psi-refresh"))]
         refresh::probe(start, stack0);
         return;
     }
-    #[allow(unreachable_code)]
     if BEAM_ONLY {
         psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
         let mut out = vec![0u8; psi::W * psi::H * 3];
