@@ -15,7 +15,7 @@
 use ed25519_dalek::{Signer, SigningKey};
 use opendmd_core::gallery_sig::{self, Formula, Refusal, Trust, DOMAIN, KEY_LEN};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/gallery-vectors.json");
 
@@ -61,6 +61,79 @@ fn add_l(s: &[u8]) -> [u8; 32] {
     }
     assert_eq!(carry, 0);
     out
+}
+
+/// `x mod L`, `x` little-endian (any length), by shift and subtract.
+fn mod_l(x: &[u8]) -> [u8; 32] {
+    let l: Vec<u64> = L.chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).chain([0]).collect();
+    let mut r = [0u64; 5];
+    for byte in x.iter().rev() {
+        for bit in (0..8).rev() {
+            let mut carry = u64::from((byte >> bit) & 1);
+            for w in r.iter_mut() {
+                let next = *w >> 63;
+                *w = (*w << 1) | carry;
+                carry = next;
+            }
+            // r >= L: subtract.
+            if (0..5).rev().find(|&i| r[i] != l[i]).is_none_or(|i| r[i] > l[i]) {
+                let mut borrow = 0u64;
+                for i in 0..5 {
+                    let (d, b1) = r[i].overflowing_sub(l[i]);
+                    let (d, b2) = d.overflowing_sub(borrow);
+                    r[i] = d;
+                    borrow = u64::from(b1 || b2);
+                }
+            }
+        }
+    }
+    let mut out = [0u8; 32];
+    for i in 0..4 {
+        out[8 * i..8 * i + 8].copy_from_slice(&r[i].to_le_bytes());
+    }
+    out
+}
+
+/// `a * b`, both 32 bytes little-endian, as 64 bytes.
+fn mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 64] {
+    let w = |x: &[u8; 32]| -> Vec<u128> { x.chunks(8).map(|c| u128::from(u64::from_le_bytes(c.try_into().unwrap()))).collect() };
+    let (a, b) = (w(a), w(b));
+    let mut acc = [0u128; 9];
+    for i in 0..4 {
+        let mut carry = 0u128;
+        for j in 0..4 {
+            let t = acc[i + j] + a[i] * b[j] + carry;
+            acc[i + j] = t & u128::from(u64::MAX);
+            carry = t >> 64;
+        }
+        acc[i + 4] += carry;
+    }
+    let mut out = [0u8; 64];
+    for i in 0..8 {
+        out[8 * i..8 * i + 8].copy_from_slice(&(acc[i] as u64).to_le_bytes());
+    }
+    out
+}
+
+/// A signature by `seed`'s key over `msg` with `R` the identity (small
+/// order): `S = H(R || A || M) * a mod L`, so `[S]B = R + [H]A` holds and
+/// the cofactorless check accepts it; the strict one refuses a small-order
+/// `R`.
+fn identity_r_signature(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+    let h = Sha512::digest(seed);
+    let mut a: [u8; 32] = h[..32].try_into().unwrap();
+    a[0] &= 248;
+    a[31] &= 127;
+    a[31] |= 64;
+    let public = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+    let mut r = [0u8; 32];
+    r[0] = 1;
+    let k = mod_l(&Sha512::new().chain_update(r).chain_update(public).chain_update(msg).finalize());
+    let s = mod_l(&mul(&k, &a));
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(&r);
+    sig[32..].copy_from_slice(&s);
+    sig
 }
 
 /// The vectors' trust: key A under ids 0 and 1 (so a flipped id is caught by
@@ -196,25 +269,37 @@ fn cases(w: &World) -> Vec<Case> {
     let s = sign(&w.a, &unknown);
     v.push(case("unknown-kid", "validly signed as key 9, which the firmware does not know", unknown, s, "unknown-key"));
     v.push(case("bad-stem", "Plasma: outside the stem rule, no message", with(&|f| f.stem = "Plasma".into()), good, "bad-stem"));
-    // Red: other domains' signatures by the same key.
+    v.push(case("bad-stem-dash-first", "-x: a letter or digit first", with(&|f| f.stem = "-x".into()), good, "bad-stem"));
+    v.push(case("bad-stem-empty", "the empty stem", with(&|f| f.stem = String::new()), good, "bad-stem"));
+    v.push(case("bad-stem-41", "41 characters: one past the rule", with(&|f| f.stem = "a".repeat(41)), good, "bad-stem"));
+    let s40 = with(&|f| f.stem = format!("{}-9", "r".repeat(38)));
+    let s = sign(&w.a, &s40);
+    v.push(case("ok-stem-40", "40 characters: the longest stem, the longest message", s40, s, "ok"));
+    // Red: other domains' signatures by the same key over this very message.
+    // Each would be taken if the other domain's prefix (or this one's)
+    // were dropped: what the domains are for.
     let msg = gallery_sig::message(&base.formula()).unwrap();
-    let tail = &msg.as_bytes()[DOMAIN.len()..];
-    let connect = [b"opendmd-connect-v1 cmd\0".as_slice(), tail].concat();
-    v.push(case("connect-command", "key 0's signature over a Connect command (its domain, this message's fields)", base.clone(), w.a.sign(&connect).to_bytes(), "bad-signature"));
-    let mut bundle = b"ODFW44mb".to_vec();
-    let mut version = [0u8; 32];
-    version[..13].copy_from_slice(b"1.1.0-beta.4\0");
-    bundle.extend_from_slice(&version);
-    bundle.extend_from_slice(&(psb.len() as u32).to_le_bytes());
-    bundle.extend_from_slice(&sha256(&psb));
-    v.push(case("firmware-bundle", "key 0's signature over a firmware bundle's header (ODFW44mb, version, length, SHA-256)", base.clone(), w.a.sign(&bundle).to_bytes(), "bad-signature"));
-    let www = [b"ODWPSIG1\0".as_slice(), &sha256(&psb)].concat();
-    v.push(case("www-pack", "key 0's signature over a www pack (ODWPSIG1, key id, SHA-256)", base.clone(), w.a.sign(&www).to_bytes(), "bad-signature"));
-    v.push(case("no-domain", "key 0's signature over the fields without the domain", base.clone(), w.a.sign(tail).to_bytes(), "bad-signature"));
+    let m = msg.as_bytes();
+    let tail = &m[DOMAIN.len()..];
+    let connect = [b"opendmd-connect-v1 cmd\0".as_slice(), m].concat();
+    v.push(case("connect-command", "key 0 signs a Connect command whose body is this gallery message (taken if Connect had no domain)", base.clone(), w.a.sign(&connect).to_bytes(), "bad-signature"));
+    let bundle = [b"ODFW44mb".as_slice(), m].concat();
+    v.push(case("firmware-bundle", "key 0 signs a firmware bundle header (ODFW44mb, its domain) followed by this message (taken if bundles had no magic)", base.clone(), w.a.sign(&bundle).to_bytes(), "bad-signature"));
+    let www = [b"ODWPSIG1".as_slice(), m].concat();
+    v.push(case("www-pack", "key 0 signs a www pack's domain (ODWPSIG1) followed by this message (taken if www packs had no domain)", base.clone(), w.a.sign(&www).to_bytes(), "bad-signature"));
+    v.push(case("no-domain", "key 0 signs this message without its domain (taken if the gallery's were dropped)", base.clone(), w.a.sign(tail).to_bytes(), "bad-signature"));
     // Red: the strict check's own cases.
     let mut s = [0u8; 64];
     s[0] = 1; // R = the identity, S = 0
     v.push(case("small-order-key", "key 3 is the identity point; R = identity, S = 0 verifies any message unless the check is strict", with(&|f| f.kid = 3), s, "bad-signature"));
+    let ir = identity_r_signature(&seed("A"), m);
+    {
+        use ed25519_dalek::Verifier;
+        let k = w.a.verifying_key();
+        assert!(k.verify(m, &ed25519_dalek::Signature::from_bytes(&ir)).is_ok(), "the identity-R signature verifies by the cofactorless (non-strict) check");
+        assert!(k.verify_strict(m, &ed25519_dalek::Signature::from_bytes(&ir)).is_err());
+    }
+    v.push(case("identity-r", "key 0 (an honest key), R the identity, S = H(R,A,M)·a: taken by the non-strict check, refused by the strict one", base.clone(), ir, "bad-signature"));
     let mut s = good;
     s[32..].copy_from_slice(&add_l(&good[32..]));
     v.push(case("non-canonical-s", "the good signature with S + L: the same scalar, not canonical", base.clone(), s, "bad-signature"));

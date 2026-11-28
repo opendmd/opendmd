@@ -54,6 +54,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -120,12 +121,18 @@ def rev_floor() -> int:
 
 def load_key(path: Path) -> SigningKey:
     try:
-        mode = path.stat().st_mode
+        st = path.lstat()
     except OSError as e:
         die(f"cannot read the private key {path}: {e} (make one with `keygen`)")
-    if mode & 0o077:
-        die(f"{path} is readable by others (mode {mode & 0o777:o}): chmod 600 {path}")
-    seed = path.read_bytes()
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        die(f"{path} is not a regular file (a link or something else): refusing it as a key")
+    if st.st_uid != os.getuid():
+        die(f"{path} is not owned by you (uid {st.st_uid}): refusing it as a key")
+    if st.st_mode & 0o077:
+        die(f"{path} is readable by others (mode {st.st_mode & 0o777:o}): chmod 600 {path}")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as f:
+        seed = f.read()
     if len(seed) != 32:
         die(f"{path} is {len(seed)} B, a key is a 32-byte Ed25519 seed")
     return SigningKey(seed)
@@ -191,10 +198,27 @@ def entry(sk: SigningKey, kid: int, rev: int, stem: str, src: bytes, psb: bytes)
             "psb_len": len(psb), "psb_sha256": ps.hex(), "sig": sig.hex()}
 
 
+def write_atomic(path: Path, data: bytes, replace: bool = True) -> None:
+    """`data` as `path`, all or nothing: a unique temporary file beside it,
+    then renamed over it (`replace`) or linked to it (never over a file)."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        if replace:
+            os.replace(tmp, path)
+        else:
+            os.link(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def write_json(path: Path, v: dict) -> None:
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(v, indent=1, sort_keys=True) + "\n")
-    tmp.replace(path)
+    write_atomic(path, (json.dumps(v, indent=1, sort_keys=True) + "\n").encode())
 
 
 def sign_dir(sk: SigningKey, kid: int, rev: int | None, formulas: dict, sigs_path: Path) -> dict:
@@ -265,14 +289,19 @@ def cmd_keygen(a) -> None:
     for p in (key_path, pub_path):
         if p.exists():
             die(f"{p} exists; refusing to overwrite a key")
+    d = key_path.parent
+    if d.exists():
+        # (Never chmod a directory this tool did not make: refuse an open one.)
+        if d.stat().st_mode & 0o077:
+            die(f"{d} is open to others (mode {d.stat().st_mode & 0o777:o}): chmod 700 {d} first")
+    else:
+        d.mkdir(parents=True, mode=0o700)
     sk = SigningKey.generate()
-    key_path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(key_path.parent, 0o700)
-    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(bytes(sk))
     pub_path.parent.mkdir(parents=True, exist_ok=True)
-    pub_path.write_bytes(bytes(sk.verify_key))
+    write_atomic(pub_path, bytes(sk.verify_key), replace=False)
     print(f"private key: {key_path} (0600; keep it out of the repo, back it up)")
     print(f"public key:  {pub_path} ({bytes(sk.verify_key).hex()})")
 
@@ -291,19 +320,39 @@ def cmd_sign(a) -> None:
     print(f"signed {len(formulas)} Formulas with gallery key {a.kid} at rev {sorted(revs)}: {a.sigs}")
 
 
+def rust_table_empty() -> bool:
+    """Whether opendmd_core::gallery_sig::GALLERY_KEYS is the empty table
+    (read from its source line: this tool cannot compile the firmware)."""
+    m = re.search(r"^pub const GALLERY_KEYS: [^=]*= (.*);$", CORE_SRC.read_text(), re.M)
+    if not m:
+        die(f"cannot find GALLERY_KEYS in {CORE_SRC}")
+    return m.group(1).strip() == "&[]"
+
+
 def cmd_verify(a) -> None:
+    """What this can vouch for: the signatures against DIR and the committed
+    key files (or --pub), in Python. Not that the firmware trusts those keys:
+    that is the Rust half of make gallery-check (its table and verifier); it
+    only notes whether the firmware's table line is empty."""
     formulas = published(Path(a.formulas))
     sp = Path(a.sigs)
     sigs = json.loads(sp.read_text()) if sp.exists() else None
-    state, bad = check_dir(formulas, sigs, parse_pubs(a.pub), rev_floor())
+    pubs = parse_pubs(a.pub)
+    state, bad = check_dir(formulas, sigs, pubs, rev_floor())
+    empty = rust_table_empty()
+    if not a.pub and bool(pubs) == empty:
+        bad.append("the firmware's GALLERY_KEYS line (opendmd-core/src/gallery_sig.rs) is "
+                   + ("empty but a gallery key file is committed" if empty else "not empty but no gallery key file is committed"))
     if bad:
         die("\n  ".join(["signatures:"] + bad))
     if state == "unsigned":
-        print(f"GALLERY UNSIGNED: no gallery key committed yet (no firmware/keys/gallery*.pub, no {sp.name}): "
-              f"{len(formulas)} project Formulas, none signed; a panel refuses every add")
+        print(f"python: no gallery key committed (no firmware/keys/gallery*.pub, no {sp.name}, GALLERY_KEYS empty): "
+              f"{len(formulas)} project Formulas, none signed")
     else:
         n = sum(len(x) for x in sigs["formulas"].values())
-        print(f"GALLERY SIGNED: {len(formulas)} project Formulas, {n} signatures, each current and verified")
+        print(f"python: {len(formulas)} project Formulas, {n} signatures, each current and verifying against "
+              f"{'the keys given' if a.pub else 'the committed key files'} ({', '.join(map(str, sorted(pubs)))}); "
+              "whether the firmware trusts them is the Rust check's to say")
 
 
 def check_vectors(path: Path) -> int:
@@ -343,6 +392,17 @@ def check_vectors(path: Path) -> int:
             die(f"vectors {c['name']}: {got}, the core says {c['expect']}")
         if c["expect"] == "ok" and signer[c["kid"]].sign(msg).signature != sig:
             die(f"vectors {c['name']}: this tool's signature is not the core's")
+        if c["name"] == "identity-r":
+            # R the identity, S = H(R || A || M) * a mod L: what makes it pass
+            # a cofactorless check (worked out here independently).
+            h = hashlib.sha512(bytes(signer[c["kid"]])).digest()
+            a_ = bytearray(h[:32])
+            a_[0] &= 248
+            a_[31] &= 127
+            a_[31] |= 64
+            k = int.from_bytes(hashlib.sha512(sig[:32] + keys[c["kid"]] + msg).digest(), "little") % L
+            if sig[:32] != b"\x01" + bytes(31) or int.from_bytes(sig[32:], "little") != k * int.from_bytes(a_, "little") % L:
+                die("vectors identity-r: not R = identity, S = H(R,A,M)*a")
         n += 1
     return n
 
@@ -373,6 +433,19 @@ def cmd_selftest(_a) -> None:
             die("a key others can read was taken")
         os.chmod(key, 0o600)
         print("key mode 0644   -> refused")
+        link = t / "link.key"
+        link.symlink_to(key)
+        if not refuses(lambda: load_key(link)):
+            die("a symlinked key was taken")
+        print("key a symlink   -> refused")
+        open_dir = t / "open"
+        open_dir.mkdir(mode=0o755)
+        os.chmod(open_dir, 0o755)
+        if not refuses(lambda: cmd_keygen(argparse.Namespace(key=str(open_dir / "g.key"), pub=str(t / "g.pub")))):
+            die("keygen wrote into a directory others can read")
+        if open_dir.stat().st_mode & 0o777 != 0o755:
+            die("keygen changed a directory it did not make")
+        print("key dir 0755    -> refused, left as it was")
         sk = load_key(key)
         d = t / "out"
         d.mkdir()
