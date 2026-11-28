@@ -22,6 +22,19 @@ use serde_json::{json, Value};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/connect-vectors.json");
 
+/// base64url, no padding (the controller's spelling of `sig` and `data`).
+fn b64url(b: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut s = String::new();
+    for ch in b.chunks(3) {
+        let n = ch.iter().enumerate().fold(0u32, |n, (i, &x)| n | (u32::from(x) << (16 - 8 * i)));
+        for i in 0..=ch.len() {
+            s.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    s
+}
+
 fn seed(name: &str) -> [u8; 32] {
     sha256(&[b"opendmd-connect throwaway test key, never a real one: ", name.as_bytes()])
 }
@@ -74,7 +87,19 @@ fn cases(w: &World) -> Vec<Case> {
     let a = |n: u64, c: &str, args: &str| sign(&w.a, &body(n, c, args));
     let case = |name, note, frame, expect, server| Case { name, note, frame, before: vec![], expect, server };
     let fsha = hex(&[0x22; 32]);
-    let fadd = |stem: &str, src: u32| format!(r#""id":3,"stem":"{stem}","name":"Rift patrol","src_size":{src},"src_sha256":"{fsha}","psb_size":4439,"psb_sha256":"{fsha}""#);
+    let zero_sig = b64url(&[0; 64]);
+    let fadd = |stem: &str, src: u32| format!(r#""id":3,"stem":"{stem}","kid":0,"abi":3,"rev":1,"sig":"{zero_sig}","src_size":{src},"src_sha256":"{fsha}","psb_size":4439,"psb_sha256":"{fsha}""#);
+    // rift-patrol as the gallery publishes it: its committed signature
+    // (opendmd-web/formulas/signatures.json, the real gallery key 0).
+    let published = {
+        let sigs: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas/signatures.json")).unwrap()).unwrap();
+        let e = sigs["formulas"]["rift-patrol"][0].clone();
+        let sig: Vec<u8> = (0..128).step_by(2).map(|i| u8::from_str_radix(&e["sig"].as_str().unwrap()[i..i + 2], 16).unwrap()).collect();
+        format!(
+            r#""id":3,"stem":"rift-patrol","kid":{},"abi":{},"rev":{},"sig":"{}","src_size":{},"src_sha256":"{}","psb_size":{},"psb_sha256":"{}""#,
+            e["kid"], e["abi"], e["rev"], b64url(&sig), e["src_len"], e["src_sha256"].as_str().unwrap(), e["psb_len"], e["psb_sha256"].as_str().unwrap()
+        )
+    };
     let mut v = Vec::new();
 
     // Blue: what must work.
@@ -87,7 +112,9 @@ fn cases(w: &World) -> Vec<Case> {
     v.push(case("ok-formulas", "what the panel can play: no arguments", a(1, "formulas", ""), "ok", "forward"));
     // (A well-formed add carries no gallery signature yet: refused, as no
     // witness is made. A part parses; the panel refuses it with no add held.)
-    v.push(case("unsigned-formula-add", "a Formula's source and compiled file to come (5.7): no gallery signature, refused", a(1, "formula-add", &fadd("rift-patrol", 10835)), "not-allowed", "forward"));
+    v.push(case("ok-formula-add", "a published gallery Formula (rift-patrol) with its gallery signature (5.7)", a(1, "formula-add", &published), "ok", "forward"));
+    v.push(case("unsigned-formula-add", "a well-formed add whose signature is not the gallery's: refused", a(1, "formula-add", &fadd("rift-patrol", 10835)), "not-allowed", "forward"));
+    v.push(case("landing-stem-formula-add", "rift-patrol's signature offered for rift-patrol-2 (a landing stem): refused", a(1, "formula-add", &published.replace("\"rift-patrol\"", "\"rift-patrol-2\"")), "not-allowed", "forward"));
     v.push(case("ok-formula-part", "a part (base64url, at most 384 bytes): parses; with no add held the panel refuses it", a(1, "formula-part", r#""id":3,"off":0,"data":"bmFtZSAiUmlmdCI""#), "ok", "forward"));
     v.push(case("bad-formula-add-stem", "a stem with a path in it", a(1, "formula-add", &fadd("../wifi", 10)), "bad-arg", "forward"));
     v.push(case("bad-formula-add-upper", "the stem rule: lower case", a(1, "formula-add", &fadd("Rift", 10)), "bad-arg", "forward"));
@@ -441,9 +468,9 @@ fn build() -> Value {
 fn formula_lists() -> serde_json::Value {
     let mut cases = Vec::new();
     let mut case = |note: &str, card: bool, builtin: Vec<(String, String)>, cards: Vec<(String, String)>, cut: bool, next: Option<&str>| {
-        // (`abi`/`psb` with a note that says so.)
+        // (`abi` and `gk` with a note that says so.)
         let add = note.starts_with("with abi");
-        let mut l = if add { proto::FormulaList::with_add(card, 3) } else { proto::FormulaList::new(card) };
+        let mut l = if add { proto::FormulaList::with_add(card, 3, &[0]) } else { proto::FormulaList::new(card) };
         let nb = builtin.iter().take_while(|(s, n)| l.builtin(s, n)).count();
         let nc = cards.iter().take_while(|(s, n)| l.card(s, n)).count();
         let result = l.finish(cut, next);
@@ -458,7 +485,7 @@ fn formula_lists() -> serde_json::Value {
         vec![e("fire", "Fire \"hot\""), e("big-clock", "Big\\clock")],
         vec![e("my-road", "My road \u{2028}"), e("del", "\u{7f}\u{1}\u{8}\u{c}\t\n\r"), e("cafe", "Caf\u{e9} \u{1F600}")], false, None);
     case("no card", false, vec![e("fire", "Fire")], vec![e("x", "X")], true, Some("x"));
-    case("with abi and psb (5.7)", true, vec![e("fire", "Fire")], vec![e("my-road", "My road")], false, None);
+    case("with abi and the gallery key ids (5.7)", true, vec![e("fire", "Fire")], vec![e("my-road", "My road")], false, None);
     case("cut by the caller, with next", true, vec![], vec![e("a", "A")], true, Some("a"));
     case("cut by the caller, no next", true, vec![], vec![], true, None);
     // The boundary: one entry whose name lands the result at the room to the

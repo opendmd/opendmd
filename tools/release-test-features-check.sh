@@ -27,6 +27,7 @@ MARKERS=(
   "emu-ballast" "ballast: "
   "emu-crash-test" "emu-crash-test: "
   "connect-formula-add" "formula-add: "
+  "connect-test's clock hook" "clock-test: "
   "psi-probe, psi-refresh, paint-probe (the measurement probes)" "psi-probe: "
   "probe (the SD and frame timing probe)" "switch tick="
   "the card-failure hooks (bench, connect-test)" "card mount(s) will fail on purpose"

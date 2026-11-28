@@ -92,13 +92,13 @@ class Panel:
         self.formulas_listing: list | None = None  # [next, at, pages]
         self.formulas_opens = 48  # card Formulas looked at per page
         # Formulas added by remote (5.7): the pretend card's files by stem
-        # (source, compiled), the add under way, the day's adds. (Reached
-        # only with odc.ADDS_TAKEN: a panel refuses every add until the
-        # gallery's signature is checked.)
-        self.abi = 3
+        # (source, compiled), the add under way, when the day's adds began
+        # (in RAM, 16 in 24 h). Only a gallery-signed add gets here (odc's
+        # parse_command checks the signature, as the core's parser does).
+        self.abi = odc.GALLERY_ABI
         self.files: dict[str, tuple[bytes, bytes]] = {}
         self.add: dict | None = None
-        self.add_day: list[tuple[float, int]] = []
+        self.add_started: list[float] = []
 
     async def register(self, http: aiohttp.ClientSession):
         async with http.post(f"{self.server}/v1/register", data=f'{{"v":{odc.VERSION},"secret_hash":"{odc.sha256(self.secret).hex()}"}}') as r:
@@ -140,11 +140,10 @@ class Panel:
         if target is None:
             raise odc.Bad("quota")
         now = time.monotonic()
-        self.add_day = [(t, b) for t, b in self.add_day if now - t < 86400]
-        total = a["src_size"] + a["psb_size"]
-        if len(self.add_day) >= odc.ADD_QUOTA_ADDS or sum(b for _, b in self.add_day) + total > odc.ADD_QUOTA_BYTES:
+        self.add_started = [t for t in self.add_started if now - t < odc.ADD_DAY]
+        if len(self.add_started) >= odc.ADD_DAY_ADDS:
             raise odc.Bad("quota")
-        self.add_day.append((now, total))
+        self.add_started.append(now)
         self.add = {"k": k, "a": a, "target": target, "next": 0, "buf": b"", "at": now}
         return {"next": 0}
 
@@ -176,7 +175,9 @@ class Panel:
             raise odc.Bad("bad-arg")
         self.files[h["target"]] = (src, psb)
         if self.card_formulas is not None:
-            self.card_formulas = [x for x in self.card_formulas if x[0] != h["target"]] + [(h["target"], a["name"])]
+            n = int.from_bytes(psb[4:6], "big")
+            name = psb[6:6 + n].decode(errors="replace") or h["target"]
+            self.card_formulas = [x for x in self.card_formulas if x[0] != h["target"]] + [(h["target"], name)]
         h["landed"] = True
         return {"done": True, "stem": h["target"]}
 

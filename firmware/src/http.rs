@@ -1780,6 +1780,19 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     #[cfg(feature = "bench")]
     let c_cut = ctx.clone();
+    // The emulator's Connect image only (`connect-test`, never a release):
+    // set the panel's clock, for the lane's add with the clock stepped back.
+    #[cfg(feature = "connect-test")]
+    server.route("/api/test/clock", Method::Post, |req| {
+        let Some(t) = query_param(req.query(), "unix").and_then(|v| v.parse::<i64>().ok()) else {
+            return req.bad_request("unix=<seconds>");
+        };
+        let tv = esp_idf_sys::timeval { tv_sec: t as _, tv_usec: 0 };
+        // SAFETY: a valid timeval, no timezone.
+        unsafe { esp_idf_sys::settimeofday(&tv, core::ptr::null()) };
+        log::warn!("clock-test: the clock set to {t} on purpose (connect-test)");
+        req.json(r#"{"ok":true}"#)
+    })?;
     server.route("/api/reboot", Method::Post, #[optimize(size)] move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check

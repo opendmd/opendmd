@@ -524,8 +524,7 @@ def parse_command(c: str, a: dict, max_brightness: int, can_add: bool, keys: dic
         return c, {"after": a.get("after")}
     if c == "formula-add":
         args = add_args(a)
-        if not ADDS_TAKEN:
-            raise Bad("not-allowed")
+        gallery_check(args)
         return c, args
     if c == "formula-part":
         return c, part_args(a)
@@ -646,13 +645,39 @@ ADD_MAX_STEM = 40
 ADD_MAX_SOURCE = 16 * 1024
 ADD_MIN_PSB, ADD_MAX_PSB = 6, 8 * 1024
 ADD_MAX_PART = 384
-ADD_QUOTA_ADDS, ADD_QUOTA_BYTES = 16, 256 * 1024
-# Whether a formula-add is admitted (the core: only with the witness
-# opendmd_core::gallery_sig::check makes, and the command carries no
-# signature yet): False, every formula-add refused not-allowed after its
-# argument rules; a part with no add held is the panel's not-allowed. Only a
-# test of the mock's own add flow sets it (roundtrip.py), never a panel.
-ADDS_TAKEN = False
+# Adds that may start in a day of uptime (fadd::DAY_ADDS: in RAM).
+ADD_DAY_ADDS, ADD_DAY = 16, 24 * 3600
+# The gallery's signature (opendmd_core::gallery_sig): its domain, the keys
+# a panel trusts by id (firmware/keys/gallery.pub is key 0), the floor, and
+# the compiled format the mock panel plays.
+GALLERY_DOMAIN = b"opendmd-gallery-v1 formula\0"
+GALLERY_REV_FLOOR = 1
+GALLERY_ABI = 3
+_L = 2**252 + 27742317777372353535851937790883648493
+
+
+def gallery_keys() -> dict[int, bytes]:
+    from pathlib import Path
+    keys = Path(__file__).resolve().parents[2] / "firmware" / "keys"
+    return {0: (keys / "gallery.pub").read_bytes()} if (keys / "gallery.pub").exists() else {}
+
+
+def gallery_message(kid, abi, rev, stem, src_len, src_sha, psb_len, psb_sha) -> bytes:
+    return (GALLERY_DOMAIN + bytes([kid, abi]) + rev.to_bytes(4, "little") + bytes([len(stem)]) + stem.encode()
+            + src_len.to_bytes(4, "little") + src_sha + psb_len.to_bytes(4, "little") + psb_sha)
+
+
+def gallery_check(a: dict, keys: dict[int, bytes] | None = None, abi: int = GALLERY_ABI, floor: int = GALLERY_REV_FLOOR) -> None:
+    """fadd::admit: the signature over the argument stem, sizes and hashes
+    (raises Bad("not-allowed") for any refusal), strictly."""
+    keys = gallery_keys() if keys is None else keys
+    if a["kid"] not in keys or a["abi"] != abi or a["rev"] < floor or int.from_bytes(a["sig"][32:], "little") >= _L:
+        raise Bad("not-allowed")
+    msg = gallery_message(a["kid"], a["abi"], a["rev"], a["stem"], a["src_size"], a["src_sha256"], a["psb_size"], a["psb_sha256"])
+    try:
+        nacl.signing.VerifyKey(keys[a["kid"]]).verify(msg, a["sig"])
+    except Exception:  # noqa: BLE001 (a bad signature or a key libsodium refuses)
+        raise Bad("not-allowed") from None
 
 
 def add_stem_ok(s) -> bool:
@@ -677,20 +702,25 @@ def add_args(a: dict) -> dict:
     def no(code="bad-arg"):
         raise Bad(code)
     i = a.get("id")
-    if not is_int(i) or not 0 < i <= 0xFFFFFFFF or not add_stem_ok(a.get("stem")) or not isinstance(a.get("name"), str):
+    if not is_int(i) or not 0 < i <= 0xFFFFFFFF or not add_stem_ok(a.get("stem")):
         no()
-    name = clean_text(a["name"], 240, 60)
+    kid, abi, rev, sig = a.get("kid"), a.get("abi"), a.get("rev"), a.get("sig")
+    if not (is_int(kid) and 0 <= kid <= 255 and is_int(abi) and 0 <= abi <= 255 and is_int(rev) and 0 <= rev <= 0xFFFFFFFF):
+        no()
+    sig = unb64url(sig) if isinstance(sig, str) and len(sig) == 86 else None
+    if sig is None or len(sig) != 64:
+        no()
     ss, ps = a.get("src_size"), a.get("psb_size")
     if not is_int(ss) or not is_int(ps):
         no()
     if ss > ADD_MAX_SOURCE or ps > ADD_MAX_PSB:
         no("too-big")
-    if ss < 1 or ps < ADD_MIN_PSB or name is None:
+    if ss < 1 or ps < ADD_MIN_PSB:
         no()
     sh, ph = unhex(a.get("src_sha256"), 32), unhex(a.get("psb_sha256"), 32)
     if sh is None or ph is None:
         no()
-    return {"id": i, "stem": a["stem"], "name": name, "src_size": ss, "src_sha256": sh, "psb_size": ps, "psb_sha256": ph}
+    return {"id": i, "stem": a["stem"], "kid": kid, "abi": abi, "rev": rev, "sig": sig, "src_size": ss, "src_sha256": sh, "psb_size": ps, "psb_sha256": ph}
 
 
 def part_args(a: dict) -> dict:
@@ -740,8 +770,8 @@ class FormulaList:
     whole stays within RESULT_ROOM bytes whatever the closing; the first
     that does not fit and every one after it are left out (`more`)."""
 
-    def __init__(self, card: bool, abi: int | None = None):
-        head = "{" if abi is None else '{"abi":%d,' % abi
+    def __init__(self, card: bool, abi: int | None = None, keys: tuple[int, ...] = (0,)):
+        head = "{" if abi is None else '{"abi":%d,"gk":[%s],' % (abi, ",".join(map(str, keys)))
         self.s, self.has_card, self.card_open, self.more = head + '"builtin":[', card, False, False
 
     def _closing(self) -> int:

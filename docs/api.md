@@ -339,6 +339,15 @@ Errors: `400` no `path=`, or not card-absolute.
 curl -s "$DMD/api/exists?path=/filelist.txt"
 ```
 
+### POST /api/test/clock
+
+Only in the emulator's Connect image (the `connect-test` feature; a release,
+a beta and every other build have no such route): `?unix=N` sets the
+panel's clock to N seconds since 1970, so the lane can step it back in the
+middle of a Formula's add (protocol 5.7). `200 {"ok":true}`; no `unix`:
+`400`. It logs `clock-test: …`, which `tools/release-test-features-check.sh`
+refuses in a release image.
+
 ### POST /api/reboot
 
 Replies `{"ok":true,"rebooting":true}`, stops any card write, restarts.

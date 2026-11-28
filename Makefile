@@ -213,6 +213,8 @@ test:
 	tools/release-test-features-check.sh --selftest
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
+	@echo "==> Testing tools/gallery-key-check.py (an image with formula-add holds the committed gallery key, none a test key)"
+	uv run --quiet tools/gallery-key-check.py --selftest
 	@echo "==> Testing tools/gallery-sign.py (the gallery signer: opendmd-core/tests/gallery-vectors.json, keys, stale and foreign signatures)"
 	uv run --locked --quiet tools/gallery-sign.py selftest
 	@echo "==> The gallery's committed signatures (make gallery-check: no key needed)"
@@ -256,9 +258,9 @@ test:
 # OpenDMD Connect v1 end to end on localhost (tools/connect/roundtrip.py): the
 # mock server, the mock panel and controllers in one process, blue cases and
 # the red list over the wire. No device, no Cloudflare; throwaway keys.
-connect-mock:
+connect-mock: gallery-out
 	uv run --quiet tools/connect/vectors_check.py
-	uv run --quiet tools/connect/roundtrip.py
+	GALLERY_OUT=$(GALLERY_OUT) uv run --quiet tools/connect/roundtrip.py
 
 # Do the firmware's pinned TLS roots (firmware/src/connect/tls.rs ROOTS)
 # still trust the Connect server's live chain, with the panel's one suite,
@@ -1140,6 +1142,8 @@ fw-release-variant:
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
 	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
+	@# The gallery key: the committed (pinned) one with formula-add, none without, never a test key.
+	uv run --quiet tools/gallery-key-check.py $(FW_APP_IMAGE)
 	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
 	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition, $$(( $(WWW_BYTES) - size )) B spare (need $(WWW_PACK_SPARE))"; \
 	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }; \
@@ -1462,15 +1466,14 @@ emu-image-connect: emu-connect-certs
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs-p1/root.der OPENDMD_CONNECT_TEST_KEY=$$(uv run --quiet tools/connect/emu_lane.py pubkey) \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect,connect-test,connect-send-classic,connect-formula-add FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 # Card Formulas for `formulas` and `formula-add` (the host's psi build: the lane puts
-# ramp on the card over the LAN, and offers the gallery's largest, rift-patrol, by
-# remote: refused until the panel checks the gallery's signature).
+# ramp on the card over the LAN; the Formulas it adds by remote are the gallery's own,
+# their bytes from gallery-out and their signatures from signatures.json).
 emu-connect-psb:
 	@mkdir -p $(EMU_CONNECT_DIR)/psb
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/offline/ramp.psi) -o $(EMU_CONNECT_DIR)/psb/ramp.psb
-	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(WEB)/formulas/rift-patrol.psi) -o $(EMU_CONNECT_DIR)/psb/rift-patrol.psb
-emu-connect: emu-build emu-card emu-connect-psb
+emu-connect: emu-build emu-card emu-connect-psb gallery-out
 	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
-	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb $(EMU_ARGS)
+	uv run --quiet tools/connect/emu_lane.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs-p1 --psb $(EMU_CONNECT_DIR)/psb --gallery $(GALLERY_OUT) $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real

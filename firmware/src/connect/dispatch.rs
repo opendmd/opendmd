@@ -352,10 +352,14 @@ pub fn settle(link: &Link, p: Pending, answer: Result<Applied, String>) -> Optio
 #[optimize(size)]
 #[inline(never)]
 fn formulas_page(card: bool, after: Option<&str>) -> (String, Option<String>) {
-    // (Only a build with adds says what they need, the compiled format it
-    // plays: no `abi`, no Add to panel.)
+    // (Only a build with adds says what they need: the compiled format it
+    // plays and the gallery keys it trusts. Without: no `abi`, no Add to
+    // panel.)
     #[cfg(feature = "connect-formula-add")]
-    let mut out = proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI);
+    let mut out = {
+        let ids: Vec<u8> = opendmd_core::gallery_sig::GALLERY_KEYS.iter().map(|&(id, _)| id).collect();
+        proto::FormulaList::with_add(card, opendmd_core::psi::psb::ABI, &ids)
+    };
     #[cfg(not(feature = "connect-formula-add"))]
     let mut out = proto::FormulaList::new(card);
     #[cfg(feature = "psi")]

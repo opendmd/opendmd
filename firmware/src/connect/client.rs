@@ -233,9 +233,6 @@ pub struct Client {
     /// A Formula added by remote, under way (`fadd`).
     #[cfg(feature = "connect-formula-add")]
     pub(super) adds: opendmd_core::connect::fadd::Adds,
-    /// The day's tally of adds read from the card (once, at the first add).
-    #[cfg(feature = "connect-formula-add")]
-    pub(super) tally_loaded: bool,
     /// The settings' card copy (`settings_card`) is due then: once remote
     /// config commands stop (one card write for a drag), or at the
     /// session's end.
@@ -271,6 +268,8 @@ impl Client {
     #[inline(never)]
     pub fn new(link: Link) -> Client {
         tls::install_allocator();
+        #[cfg(feature = "connect-formula-add")]
+        super::fadd::install();
         let streak = crate::restarts::crash_streak();
         let (hold_s, crash_off) = match (streak.crashes, streak.power_loop) {
             (0, false) => (Some(HOLD_S), false),
@@ -330,8 +329,6 @@ impl Client {
             formulas_rate: proto::FormulasRate::default(),
             #[cfg(feature = "connect-formula-add")]
             adds: Default::default(),
-            #[cfg(feature = "connect-formula-add")]
-            tally_loaded: false,
             card_due: None,
             last_use: Vec::new(),
             pair_reqs: Vec::new(),
@@ -1290,6 +1287,10 @@ impl Client {
         let t = now_us();
         let checked = sess.check(&self.keys, &limits, f, core_now());
         let us = (now_us() - t) as u32;
+        #[cfg(feature = "connect-formula-add")]
+        if let Ok(a) = &checked {
+            super::fadd::note_check_us(&a.cmd, us);
+        }
         tele(|t| {
             t.commands += 1;
             t.check_max_us = t.check_max_us.max(us);
@@ -1299,6 +1300,13 @@ impl Client {
                 t.refused += 1;
             }
         });
+        #[cfg(feature = "connect-test")]
+        let kind = match &checked {
+            Ok(a) => stack_kind(&a.cmd),
+            Err(_) => "refused",
+        };
+        #[cfg(feature = "connect-test")]
+        stack_probe("check", kind);
         let ack = match checked {
             Ok(acc) => {
                 self.note_use(acc.k);
@@ -1314,6 +1322,8 @@ impl Client {
                 r.ack()
             }
         };
+        #[cfg(feature = "connect-test")]
+        stack_probe("run", kind);
         // What the command changed (keys, name): taken in now, so the next
         // frame is checked against the list as it is.
         let _ = self.sync_shared();
@@ -1653,4 +1663,33 @@ fn psram_largest(need: u32) -> u32 {
     return unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_SPIRAM) as u32 };
     #[cfg(not(esp32s3))]
     0
+}
+
+/// The emulator's Connect image only (`connect-test`): the network
+/// worker's stack floor, logged each time it falls, with the command and
+/// the stage it fell at (the lane's map of what is deepest).
+#[cfg(feature = "connect-test")]
+fn stack_probe(stage: &str, kind: &str) {
+    use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    static LOW: AtomicU32 = AtomicU32::new(u32::MAX);
+    // SAFETY: the calling task's own high-water mark.
+    let u = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+    if u < LOW.load(Relaxed) {
+        LOW.store(u, Relaxed);
+        log::info!("stackprobe: the network worker's floor {u} B, after the {stage} of {kind}");
+    }
+}
+
+#[cfg(feature = "connect-test")]
+fn stack_kind(c: &proto::Command) -> &'static str {
+    match c {
+        #[cfg(feature = "connect-formula-add")]
+        proto::Command::FormulaAdd(..) => "formula-add",
+        #[cfg(feature = "connect-formula-add")]
+        proto::Command::FormulaPart { .. } => "formula-part",
+        proto::Command::Play { .. } => "play",
+        proto::Command::Formulas { .. } => "formulas",
+        proto::Command::Send(_) => "send",
+        _ => "another command",
+    }
 }

@@ -300,7 +300,7 @@ for anything else. At compile time no name in it may contain any of
 | `playlist` | `set` | `""` (the main list) or one name of at most 64 bytes: no `/`, `\`, `..`, control character, leading `.` or trailing `.` or space | `ApplyConfig`; `ack` may say `pending` |
 | `playlists` | none | | `r`: the `/sets` listing, bounded to fit the panel's 2,048-byte text limit |
 | `formulas` | `after` (optional) | a stem | `r`: the Formulas this panel can play by reference, built in and on its card, a page at a time within the panel's 2,048-byte text limit (5.6) |
-| `formula-add` | `id, stem, name, src_size, src_sha256, psb_size, psb_sha256` | 5.7 | an add, its bytes to follow |
+| `formula-add` | `id, stem, kid, abi, rev, sig, src_size, src_sha256, psb_size, psb_sha256` | 5.7 | a gallery-signed add, its bytes to follow |
 | `formula-part` | `id, off, data` | 5.7 | the add's bytes; the last one lands it |
 | `send` | `id, name, size, sha256, copy_size, copy_sha256, play` | section 8 | a transfer |
 | `send-cancel` | `id` | | |
@@ -320,11 +320,14 @@ other member of `a` is `bad-arg`, so a later controller can tell a panel
 that lacks a later argument.
 
 ```json
-{"abi":3,"psb":true,"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
-{"abi":3,"psb":true,"builtin":[],"card":[["saved-023","Saved"],["saved-024","Saved"]],"more":true,"next":"saved-024"}
+{"abi":3,"gk":[0],"builtin":[["fire","Fire"],["big-clock","Big clock"]],"card":[["my-road","My road"]],"more":false}
+{"abi":3,"gk":[0],"builtin":[],"card":[["saved-023","Saved"],["saved-024","Saved"]],"more":true,"next":"saved-024"}
 ```
 
-- `abi` (a build with `formula-add`, 5.7): the compiled format it plays.
+- `abi` and `gk` (a build with `formula-add`, 5.7): the compiled format it
+  plays and the ids of the gallery keys it trusts (`[0]` today). A
+  controller offers Add to panel only for a Formula the gallery signed for
+  that `abi` with one of those keys.
 
 - `builtin`: the Formulas built into the firmware, `[stem, name]` each,
   played as `@formula:<stem>`; `name` from its `name "…"` line, else
@@ -368,59 +371,88 @@ that lacks a later argument.
 
 ### 5.7 Adding a Formula: `formula-add`, `formula-part`
 
-A controller adds a Formula to the panel's card (the gallery's "Add to
-panel"): its source and its compiled file for the panel's `abi` (5.6), as
-`/formulas/<stem>.psi` and `<stem>.psb`.
+A controller adds a Formula from the gallery to the panel's card (the
+gallery's "Add to panel"): its source and its compiled file, exactly as the
+project published and signed them, as `/formulas/<stem>.psi` and
+`<stem>.psb`. The two commands exist only in builds with the firmware's
+`connect-formula-add` feature (test images so far): every release and beta
+answers them `not-allowed`, and its `formulas` reports no `abi`, so a
+controller offers no Add to panel (`tools/release-test-features-check.sh`
+holds the code out of a release image; `tools/gallery-key-check.py` holds
+an image with it to the committed gallery key and no test key).
 
-**Taken from nobody yet.** Only a Formula the project signed may arrive
-this way: `formula-add` will carry the gallery's signature over the stem,
-the ABI, a signing revision and both files' lengths and SHA-256s
-(`opendmd_core::gallery_sig`, made by `tools/gallery-sign.py`), checked
-before the card is touched. Until it does, **every
-`formula-add` is refused `not-allowed`** after its
-argument rules (malformed arguments stay `bad-arg`), and a part with no
-add held is `not-allowed` before the card: an add is held, and lands, only
-with the witness `gallery_sig::check` returns for a good signature, which
-no other code can make. No program reaches a panel by remote. The two
-commands exist only in builds with the firmware's `connect-formula-add`
-feature (test images): every release and beta answers them `not-allowed`
-too, and its `formulas` reports no `abi`, so a controller offers no Add to
-panel (a release image's check, `tools/release-test-features-check.sh`,
-holds the code out of it). A file named `<stem>.psr` (an earlier test
-image's format) is no file of the panel's: it is never read, listed,
-played or removed.
+**Only what the project signed.** A Formula the project publishes is signed
+with the gallery key (never the firmware's; `firmware/keys/gallery.pub` is
+key 0; `tools/gallery-sign.py`, `opendmd-web/formulas/signatures.json`):
+Ed25519, strictly verified, over `"opendmd-gallery-v1 formula\0"`, the key
+id, the compiled format, a signing revision, the stem, and the source's and
+the compiled file's lengths and SHA-256s (`opendmd_core::gallery_sig`). The
+panel checks that signature when it takes the command, after the
+command's own signature check has returned (one after the other, never one
+inside the other; on the firmware, on a task of its own, so the network
+worker's stack holds one verify at a time) and right after the argument
+rules, before the rate, the day's count, the card or anything else: over the
+stem, sizes and hashes the add names (the argument stem, never the stem it
+lands under), which are the ones the parts are then held to. Every refusal
+(a key id the firmware does not trust, another compiled format, a revision
+under the firmware's floor, a signature that does not verify) is
+`not-allowed`. An add is held, and lands, only with the witness that check
+returns, which no other code can make. A file named `<stem>.psr` (an
+earlier test image's format) is no file of the panel's.
 
-The commands, as a build that takes adds will take them:
-
-1. `formula-add {id, stem, name, src_size, src_sha256, psb_size,
-   psb_sha256}`: `id` a non-zero 32-bit number; `stem` the web app's save
-   rule, `[a-z0-9-]`, 1 to 40, a letter or digit first; `name` what the
-   source's `name` line says (at most 60 characters after cleaning);
-   `src_size` 1 to 16,384 and `psb_size` 6 to 8,192 (more: `too-big`);
-   both hashes hex. (The signed form adds the signature's fields and drops
-   `name`, which the compiled file carries.) The panel looks for where it
-   lands: the stem, else `<stem>-2` … `<stem>-9` (a stem is taken when its
-   `.psi` or `.psb` is there); a remote add never overwrites. A taken stem
-   whose source has the signed length and `src_sha256` is the same
-   Formula: `r {done: true, stem}`, nothing written. None free: `quota`.
-   Otherwise `r {next: 0}`. Also: the add's own rate (one in 2 s per
-   panel: `rate`), the same add signed again (`r {next}` from where it
-   was, or `done` again if it landed), another key's add under way
-   (`busy`), at most 128 Formulas on the card (`quota`), `no-card`, `busy`
-   (a LAN transfer or update on the card).
+1. `formula-add {id, stem, kid, abi, rev, sig, src_size, src_sha256,
+   psb_size, psb_sha256}`: `id` a non-zero 32-bit number; `stem` the
+   gallery's slug, `[a-z0-9-]`, 1 to 40, a letter or digit first; `kid`
+   and `abi` 0 to 255, `rev` 0 to 2^32-1, `sig` strict base64url of exactly
+   64 bytes (out of range or malformed: `bad-arg`); `src_size` 1 to 16,384
+   and `psb_size` 6 to 8,192 (more: `too-big`); both hashes hex. Then the
+   signature (`not-allowed`). Then, before the card is read: the add's own
+   rate (one in 2 s per panel: `rate`), the same add signed again (`r
+   {next}` from where it was, or `done` again if it landed), another key's
+   add under way (`busy`), 16 adds started in the last day of the panel's
+   uptime (`quota`; counted in RAM when an add begins; a restart starts it
+   again, and nothing remote can restart a panel). The panel looks for
+   where it lands: the stem, else `<stem>-2` … `<stem>-9` (a stem is taken
+   when its `.psi` or `.psb` is there); a remote add never overwrites. A
+   taken stem whose source has the signed length and `src_sha256` is the
+   same Formula: `r {done: true, stem}`, nothing written. None free, or 128
+   Formulas on the card: `quota`. Otherwise `r {next: 0}`. Also `no-card`,
+   `busy` (a LAN transfer or update on the card).
 2. `formula-part {id, off, data}`: `data` base64url (no padding, canonical)
    of 1 to 384 bytes (512 characters: the largest such body stays within
    700 bytes), strictly at the panel's `next`; the stream is the source then
-   the compiled file. Each part's `ack` is `r {next}`. A part out of order
-   is `bad-arg` and nothing is written; another key's is `not-allowed`.
-3. On the last part the panel checks both SHA-256s, that the source is
-   UTF-8 with no NUL, that the compiled file is `PSB` with this player's
-   ABI and that every program in it passes `psb::verify` (behind a heap
-   gate; below it `busy`, the bytes kept for the same `formula-add` signed
-   again); then renames the compiled file to `<stem>.psb` and the source
-   to `<stem>.psi` (a rename never replaces a file) and answers
-   `r {done: true, stem}`. A check that fails is `bad-arg`, and nothing is
-   kept.
+   the compiled file. Each part's `ack` is `r {next}`. With no add held:
+   `not-allowed`, before the card. A part out of order is `bad-arg` and
+   nothing is written; another key's is `not-allowed`.
+3. On the last part the panel checks both SHA-256s against the signed ones
+   (a tampered part: `bad-arg`, nothing kept), that the source is UTF-8 with
+   no NUL, that the compiled file is `PSB` with this player's ABI and that
+   every program in it passes `psb::verify` (behind a heap gate; below it
+   `busy`, the bytes kept for the same `formula-add` signed again); then
+   renames the compiled file to `<stem>.psb` and the source to
+   `<stem>.psi` (a rename never replaces a file), gives the `.psb` its
+   source's date (so the panel's mount pass takes it as current whatever
+   the clock did), and answers `r {done: true, stem}`. It plays at once, on
+   the JIT where the JIT takes it, like a Formula the panel compiled itself.
+
+**What a page sends** (Add to panel): for the gallery Formula `slug`, the
+published source (the gallery file without its two or three header lines,
+as `opendmd-gallery check --out` writes `<slug>.psi`) and compiled file
+(`<slug>.psb`), fetched as bytes (`arrayBuffer`, never through text
+decoding), unchanged; `stem` the slug; `kid`, `abi`, `rev` and the
+lengths and hashes from that Formula's entry in `signatures.json` for a key
+`formulas` lists in `gk`, with `abi` equal to the panel's; `sig` that
+entry's hex signature as base64url. A Formula the page changed, or one
+without an entry, has no Add to panel.
+
+**What this leaves.** A paired controller (or a page using its key) can
+add only Formulas the project published, byte for byte, up to 16 a day and
+128 on the card, each under a free stem; the owner removes them on the LAN.
+A signed Formula found harmful is revoked by re-signing the rest at a
+higher `rev` and raising the firmware's floor: panels not updated still
+take the old signature. A stolen gallery key alone adds nothing (commands
+come only from paired keys); with a paired key it gives what a LAN user
+has. Formulas already on a card are untouched by any of this.
 
 Inline and `~sent` play stay excluded: `play` takes no inline Formula
 (`@formula?psb=…`) and never `~sent`, so a compromised page or a hostile

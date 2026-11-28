@@ -2,17 +2,16 @@
 //! protocol 5.7): the card's half of `opendmd_core::connect::fadd`. Built
 //! only with `connect-formula-add` (test images: never a release).
 //!
-//! **Only signed Formulas.** [`Client::formula_add`] and the landing take
-//! the [`Signed`] witness only `gallery_sig::check` makes (the core's
-//! parser, before any card access), and the core holds an add only with a
-//! witness over exactly its bytes. `formula-add` carries no signature yet
-//! (the signed-gallery design's step 4), so the parser refuses every add,
-//! nothing here runs past a part's first check (no add held:
-//! `not-allowed`), and no program arrives by remote at all.
+//! **Only signed Formulas.** The core's parser checks the gallery's
+//! signature over the add's argument stem, sizes and hashes
+//! (`fadd::admit`, `gallery_sig::check`) right after the argument rules and
+//! before anything here runs; [`Client::formula_add`] and the landing take
+//! the [`Signed`] witness only that check makes, and the core holds an add
+//! only with a witness over exactly its bytes. Any refusal is `not-allowed`.
 //!
 //! - **Before any card read:** the add's own rate, the same add signed
-//!   again (no card read at all), another key's add under way, the day's
-//!   tally (`/formulas/.add-day`, kept across restarts), a LAN transfer or
+//!   again (no card read at all), another key's add under way, the adds
+//!   started in the last day of uptime (16, in RAM), a LAN transfer or
 //!   update under way (`busy`).
 //! - **One directory pass** (no lookup per name): the Formulas on the card
 //!   (at most [`fadd::MAX_FORMULAS`] sources, else `quota`) and the taken
@@ -30,15 +29,16 @@
 //!   `formula-add` signed again tries again).
 //! - **Landing:** the compiled file renamed to `<stem>.psb` first, then the
 //!   source to `<stem>.psi` (a rename never replaces a file); a failed
-//!   second rename removes the first. The source's part was written before
-//!   the program's (the stream is the source, then the program), so the
-//!   `.psb` is not older than its source: the mount pass takes it as
-//!   current. A restart between the two renames leaves a `.psb` with no
-//!   source: never listed or played (both go by the `.psi`).
+//!   second rename removes the first. Then the `.psb` is given its source's
+//!   FAT date (`f_utime`, as `card_formulas` dates its own), so the mount
+//!   pass takes the signed program as current whatever the clock did during
+//!   the add; it plays (on the JIT where it takes it) at once. A restart
+//!   between the renames leaves a `.psb` with no source: never listed or
+//!   played (both go by the `.psi`).
 
 use super::client::{core_now, Client};
 use crate::config;
-use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Signed, Tally};
+use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Signed};
 use opendmd_core::connect::keys::KeyId;
 use opendmd_core::connect::proto::Refusal;
 use std::io::{Read, Write};
@@ -48,11 +48,6 @@ type Done = Result<Option<String>, Refusal>;
 fn dir() -> String {
     format!("{}/formulas", config::SD_MOUNT)
 }
-
-/// The day's tally's two slots, written in turn (the newer, by its seq,
-/// counts): a restart mid-write leaves the other whole (the torn one reads
-/// as a full day).
-const TALLY_SLOTS: [&str; 2] = [".add-day.a", ".add-day.b"];
 
 fn part_path(id: u32, p: Part) -> String {
     format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psb" })
@@ -66,31 +61,6 @@ fn remove_parts(id: u32) {
 /// A LAN transfer (an upload, a stream, an update's) shares the card.
 fn lan_busy() -> bool {
     crate::cache_builder::transfer_in_flight() || crate::stream::uploads() > 0
-}
-
-/// Today by the panel's clock (Unix days), when it has one.
-fn today() -> Option<u64> {
-    crate::clock::unix_valid().and_then(|t| u64::try_from(t).ok()).map(|t| t / 86_400)
-}
-
-/// The tally as the card keeps it: both slots missing, a fresh day; one
-/// unreadable (or the card failing), a full day; else the newer.
-pub(super) fn load_tally() -> Tally {
-    let slot = |n: &str| match std::fs::read_to_string(format!("{}/{n}", dir())) {
-        Ok(t) => Ok(Some(t)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(()),
-    };
-    match (slot(TALLY_SLOTS[0]), slot(TALLY_SLOTS[1])) {
-        (Ok(a), Ok(b)) => Tally::from_slots(a.as_deref(), b.as_deref()),
-        _ => Tally::FULL,
-    }
-}
-
-/// Into the slot its seq names (the other one keeps the last tally whole).
-fn save_tally(t: &Tally) -> bool {
-    let _ = std::fs::create_dir_all(dir());
-    std::fs::write(format!("{}/{}", dir(), TALLY_SLOTS[(t.seq % 2) as usize]), t.text()).is_ok()
 }
 
 /// The add's directory pass: the stems taken (lower case) and how many
@@ -218,7 +188,70 @@ fn room(psb_size: usize) -> bool {
     crate::state::free_heap() as usize >= psb_size + CHECK_STACK + 12 * 1024 + 20 * 1024 && crate::state::largest_free_block() >= 12 * 1024
 }
 
-/// The checks' task's stack (the program loads and the source's pass).
+/// Give `psb` its source `psi`'s FAT date (`f_stat`, `f_utime`: no clock
+/// involved). False: it could not.
+fn date_like(psb: &str, psi: &str) -> bool {
+    use esp_idf_sys as sys;
+    let c = |p: &str| std::ffi::CString::new(format!("0:{}", p.strip_prefix(config::SD_MOUNT).unwrap_or(p))).ok();
+    let (Some(src), Some(dst)) = (c(psi), c(psb)) else { return false };
+    // SAFETY: a FILINFO FatFs fills, two NUL-terminated paths.
+    unsafe {
+        let mut fi: sys::FILINFO = std::mem::zeroed();
+        sys::f_stat(src.as_ptr(), &mut fi) == sys::FRESULT_FR_OK && sys::f_utime(dst.as_ptr(), &fi) == sys::FRESULT_FR_OK
+    }
+}
+
+/// The last plain command's check (µs), for the add's log line.
+static PLAIN_CHECK_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A board measurement (the log, any build with adds): how long an add's
+/// command took to check, its own signature and the gallery's one after the
+/// other, beside a plain command's (one signature).
+pub(super) fn note_check_us(cmd: &opendmd_core::connect::proto::Command, us: u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if matches!(cmd, opendmd_core::connect::proto::Command::FormulaAdd(..)) {
+        log::info!("formula-add: checked in {us} us (the command's signature, then the gallery's; a plain command's check: {} us)", PLAIN_CHECK_US.load(Relaxed));
+    } else {
+        PLAIN_CHECK_US.store(us, Relaxed);
+    }
+}
+
+/// The gallery signature check's task's stack: an Ed25519 verify keeps 7
+/// to 8.5 KB of frames (`ota.rs`), with room above it.
+const VERIFY_STACK: usize = 10 * 1024;
+
+/// The core's [`fadd::Runner`]: the gallery's signature check on a task of
+/// its own (the network worker waits for it), never on the worker's stack.
+fn run_verify(job: &mut (dyn FnMut() + Send)) -> bool {
+    let t = std::time::Instant::now();
+    match crate::psi_stack::run_with_prio(VERIFY_STACK, Some(1), job) {
+        Some(((), left)) => {
+            log::info!("formula-add: the gallery's signature checked on a task of its own in {} us ({left} B of its stack left)", t.elapsed().as_micros());
+            true
+        }
+        None => false,
+    }
+}
+
+/// At start (Connect's client): the gallery's check runs where [`run_verify`] puts it.
+pub(super) fn install() {
+    fadd::set_verify_runner(run_verify);
+}
+
+/// What the checks' task did.
+enum Landing {
+    /// The heap had no room for a program's check: kept, tried again.
+    Busy,
+    /// Not a Formula this panel can play.
+    Refused,
+    /// A rename failed: nothing of the add is left.
+    Failed,
+    /// In place; `dated`: the `.psb` given its source's date.
+    Landed { dated: bool },
+}
+
+/// The checks' task's stack (the program loads, the source's pass, the
+/// renames and the date).
 const CHECK_STACK: usize = 8 * 1024;
 
 impl Client {
@@ -240,13 +273,9 @@ impl Client {
             return Err(Refusal::Busy);
         }
         self.formula_tick();
-        if !self.tally_loaded {
-            self.adds.tally = load_tally();
-            self.tally_loaded = true;
-        }
         let now = core_now();
         let id = args.id;
-        match self.adds.pre(k, &args, now, today())? {
+        match self.adds.pre(k, &args, now)? {
             Pre::Landed { stem } => return Ok(done(&stem)),
             Pre::Resume { next } => {
                 if let Some((_, w)) = self.adds.whole(&k, id) {
@@ -257,23 +286,14 @@ impl Client {
             }
             Pre::New => {}
         }
-        // The attempt counted before the card is read for it (fails closed:
-        // no tally kept, no add).
-        if !save_tally(&self.adds.tally) {
-            return Err(Refusal::NoCard);
-        }
         let stem = match target(&args)? {
             Err(stem) => return Ok(done(&stem)),
             Ok(stem) => stem,
         };
-        // (Held only with a signature over exactly these bytes.)
+        // (Held only with a signature over exactly these bytes, and only
+        // within the day's 16.)
         if let Some(old) = self.adds.begin(k, args, signed, stem, now)? {
             remove_parts(old);
-        }
-        // Its bytes on the tally (fails closed: no part file without it).
-        if !save_tally(&self.adds.tally) {
-            self.adds.drop_held();
-            return Err(Refusal::NoCard);
         }
         let _busy = crate::cache_builder::busy();
         for p in [Part::Source, Part::Psb] {
@@ -354,43 +374,69 @@ impl Client {
         if !read {
             return Err(Refusal::Busy);
         }
-        // The checks (the source's pass, the program's loads) on a task of
-        // their own: not on the network worker's stack (a few KB left).
-        let src_path = part_path(id, Part::Source);
+        // The checks (the source's pass, the program's loads) and the
+        // landing (two renames, the date) on a task of their own: FatFs's
+        // lookups are deep, and the network worker's stack has none to spare
+        // (the emulator lane holds its floor).
+        let d = dir();
+        let (psb_to, psi_to) = (format!("{d}/{stem}.psb"), format!("{d}/{stem}.psi"));
+        let (src_part, psb_part) = (part_path(id, Part::Source), part_path(id, Part::Psb));
+        let (to_b, to_i) = (psb_to.clone(), psi_to.clone());
         let run = crate::psi_stack::run_with_prio(CHECK_STACK, Some(1), move || {
-            if psb.len() == psb_size && source_ok(&src_path) { psb_ok(&psb) } else { Ok(false) }
+            if psb.len() != psb_size || !source_ok(&src_part) {
+                return Landing::Refused;
+            }
+            match psb_ok(&psb) {
+                Err(()) => return Landing::Busy,
+                Ok(false) => return Landing::Refused,
+                Ok(true) => {}
+            }
+            // The program first, then its source; a rename never replaces a
+            // file. Either failing leaves nothing at all from this add.
+            if std::fs::rename(&psb_part, &to_b).is_err() {
+                return Landing::Failed;
+            }
+            if std::fs::rename(&src_part, &to_i).is_err() {
+                let _ = std::fs::remove_file(&to_b);
+                return Landing::Failed;
+            }
+            // The program as current as its source (the mount pass keeps it).
+            Landing::Landed { dated: date_like(&to_b, &to_i) }
         });
-        let Some((checked, left)) = run else {
+        let Some((landing, left)) = run else {
             // (No task to check on: the heap. Kept, tried again.)
             return Err(Refusal::Busy);
         };
-        log::info!("formula-add: checked on a task of its own ({left} B of its stack left)");
-        if checked.is_err() {
-            return Err(Refusal::Busy);
-        }
-        if checked != Ok(true) {
-            log::warn!("formula-add: refused: not a Formula this panel can play");
-            self.adds.drop_held();
-            remove_parts(id);
-            return Err(Refusal::BadArg);
-        }
-        let d = dir();
-        let (psb_to, psi_to) = (format!("{d}/{stem}.psb"), format!("{d}/{stem}.psi"));
-        // The program first, then its source; a rename never replaces a
-        // file. Either step failing leaves nothing at all from this add.
-        if std::fs::rename(part_path(id, Part::Psb), &psb_to).is_err() {
-            self.adds.drop_held();
-            remove_parts(id);
-            return Err(Refusal::Busy);
-        }
-        if std::fs::rename(part_path(id, Part::Source), &psi_to).is_err() {
-            let _ = std::fs::remove_file(&psb_to);
-            self.adds.drop_held();
-            remove_parts(id);
-            return Err(Refusal::Busy);
+        log::info!("formula-add: checked and landed on a task of its own ({left} B of its stack left)");
+        match landing {
+            Landing::Busy => return Err(Refusal::Busy),
+            Landing::Refused => {
+                log::warn!("formula-add: refused: not a Formula this panel can play");
+                self.adds.drop_held();
+                remove_parts(id);
+                return Err(Refusal::BadArg);
+            }
+            Landing::Failed => {
+                self.adds.drop_held();
+                remove_parts(id);
+                return Err(Refusal::Busy);
+            }
+            Landing::Landed { dated } => {
+                if !dated {
+                    log::warn!("formula-add: /formulas/{stem}.psb could not be given its source's date: the next start may prepare it again");
+                }
+            }
         }
         crate::fatidx::note_written(&psi_to);
-        log::info!("formula-add: landed as /formulas/{stem}.psi and its .psb");
+        // (A board measurement: the network worker's stack never used yet,
+        // with the add's checks and landing on it.)
+        // SAFETY: a read of the calling task's own high-water mark.
+        let unused = unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) };
+        log::info!(
+            "formula-add: landed as /formulas/{stem}.psi and its .psb (signed by gallery key {}, rev {}; the network worker's stack {unused} B never used)",
+            signed.kid(),
+            signed.rev()
+        );
         self.adds.landed(&stem, core_now());
         Ok(done(&stem))
     }

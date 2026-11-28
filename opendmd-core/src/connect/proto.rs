@@ -202,6 +202,19 @@ pub fn verify_body(public: &[u8; 32], body: &[u8], sig: &[u8; 64]) -> bool {
     key.verify_strict(&msg, &Signature::from_bytes(sig)).is_ok()
 }
 
+/// `formula-add`: its argument rules, then the gallery's signature
+/// (`fadd::admit_where_it_runs`: on the firmware, a task of its own, after
+/// the command's own check has returned). In a frame of its own, so the
+/// check every command goes through (`Session::check`) is no deeper for it.
+#[cfg(feature = "connect-formula-add")]
+#[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn formula_add_command(a: &Value) -> Result<Command, Refusal> {
+    let (args, claim) = super::fadd::add_args(a)?;
+    let signed = super::fadd::admit_where_it_runs(&args, &claim, &crate::gallery_sig::Trust::panel(crate::psi::psb::ABI))?;
+    Ok(Command::FormulaAdd(args, signed))
+}
+
 /// The server's pre-check (P1-PLAN 2.5): a known key and a good signature,
 /// before the frame goes to the panel. `keys`: (id, public key) pairs.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
@@ -588,17 +601,16 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             };
             Command::Formulas { after }
         }
-        // An add needs the gallery's signature, checked here
-        // (`gallery_sig::check`, whose witness `Command::FormulaAdd` takes).
-        // The command carries none yet (the signed-gallery design's step 4),
-        // so there is nothing to check and no witness: after its argument
-        // rules every add is refused. (A part with no add held is the
-        // firmware's `not-allowed`, before the card.)
+        // An add needs the gallery's signature, checked here, right after
+        // its argument rules and before anything else (the rate, the day's
+        // count, the card): `fadd::admit` (`gallery_sig::check` over the
+        // argument stem, sizes and hashes), whose witness
+        // `Command::FormulaAdd` takes. Any refusal is `not-allowed`. (This
+        // runs after the command's own signature check has returned, never
+        // inside it. A part with no add held is the firmware's
+        // `not-allowed`, before the card.)
         #[cfg(feature = "connect-formula-add")]
-        "formula-add" => {
-            super::fadd::add_args(a)?;
-            return Err(Refusal::NotAllowed);
-        }
+        "formula-add" => formula_add_command(a)?,
         #[cfg(feature = "connect-formula-add")]
         "formula-part" => {
             let (id, off, data) = super::fadd::part_args(a)?;
@@ -835,10 +847,13 @@ impl FormulaList {
     }
 
     /// [`new`](Self::new), saying first what an add needs (5.7): the
-    /// compiled format this player takes (`abi`).
+    /// compiled format this player takes (`abi`) and the gallery keys it
+    /// trusts (`gk`, their ids): a controller sends a signature by one of
+    /// them, for that format.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn with_add(card: bool, abi: u8) -> FormulaList {
-        FormulaList { s: format!(r#"{{"abi":{abi},"builtin":["#), has_card: card, card_open: false, more: false }
+    pub fn with_add(card: bool, abi: u8, keys: &[u8]) -> FormulaList {
+        let ids: Vec<String> = keys.iter().map(u8::to_string).collect();
+        FormulaList { s: format!(r#"{{"abi":{abi},"gk":[{}],"builtin":["#, ids.join(",")), has_card: card, card_open: false, more: false }
     }
 
     /// Anything left out yet?
@@ -1336,26 +1351,67 @@ mod tests {
         assert_eq!(l.finish(false, None).len(), RESULT_ROOM);
     }
 
-    /// With `connect-formula-add` (test images only) the two commands are
-    /// on the allow-list, but every add is refused `not-allowed` after its
-    /// argument rules: it carries no gallery signature, so no witness is
-    /// made (well-formed ones too). Malformed ones stay `bad-arg`; a part
-    /// parses (the firmware refuses it with no add held).
+    /// With `connect-formula-add` (test images only): a published gallery
+    /// Formula's own signature (the committed `signatures.json`) is taken,
+    /// over its argument stem, sizes and hashes; any change to what it
+    /// covers, another key id, format or a revision under the floor is
+    /// `not-allowed`; malformed fields are `bad-arg`. A part parses (the
+    /// firmware refuses it with no add held).
     #[cfg(feature = "connect-formula-add")]
     #[test]
-    fn formula_add_refuses_every_add_until_signatures_are_checked() {
+    fn formula_add_takes_only_a_published_signature() {
+        use super::super::fadd::b64url;
         use super::super::json;
         let keys = KeyList::new();
         let limits = Limits { max_brightness: 128 };
-        let sha = "22".repeat(32);
-        let add = format!(r#"{{"id":3,"stem":"rift-patrol","name":"Rift patrol","src_size":10835,"src_sha256":"{sha}","psb_size":4439,"psb_sha256":"{sha}"}}"#);
+        let sigs: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas/signatures.json")).unwrap()).unwrap();
+        let e = &sigs["formulas"]["plasma"][0];
+        let sig = b64url(&super::super::codec::unhex::<64>(e["sig"].as_str().unwrap()).unwrap());
+        let body = |stem: &str, kid: u64, abi: u64, rev: u64, src: u64, sig: &str| {
+            format!(
+                r#"{{"id":3,"stem":"{stem}","kid":{kid},"abi":{abi},"rev":{rev},"sig":"{sig}","src_size":{src},"src_sha256":"{}","psb_size":{},"psb_sha256":"{}"}}"#,
+                e["src_sha256"].as_str().unwrap(),
+                e["psb_len"],
+                e["psb_sha256"].as_str().unwrap()
+            )
+        };
+        let (src, kid, abi, rev) = (e["src_len"].as_u64().unwrap(), e["kid"].as_u64().unwrap(), e["abi"].as_u64().unwrap(), e["rev"].as_u64().unwrap());
+        let run = |b: String| parse_command("formula-add", &json::parse(b.as_bytes()).unwrap(), &limits, true, &keys);
+        match run(body("plasma", kid, abi, rev, src, &sig)) {
+            Ok(Command::FormulaAdd(a, w)) => assert!(a.signed_by(&w) && w.stem() == "plasma"),
+            other => panic!("the published signature: {other:?}"),
+        }
+        let mut flipped = super::super::codec::unhex::<64>(e["sig"].as_str().unwrap()).unwrap();
+        flipped[10] ^= 1;
+        for (what, b) in [
+            ("another stem (a landing stem)", body("plasma-2", kid, abi, rev, src, &sig)),
+            ("another source's size", body("plasma", kid, abi, rev, src + 1, &sig)),
+            ("another format", body("plasma", kid, abi + 1, rev, src, &sig)),
+            ("a revision under the floor", body("plasma", kid, abi, 0, src, &sig)),
+            ("an unknown key id", body("plasma", 9, abi, rev, src, &sig)),
+            ("a flipped bit", body("plasma", kid, abi, rev, src, &b64url(&flipped))),
+            ("no signature (zeros)", body("plasma", kid, abi, rev, src, &b64url(&[0; 64]))),
+        ] {
+            assert_eq!(run(b).map(drop), Err(Refusal::NotAllowed), "{what}");
+        }
+        assert_eq!(run(body("plasma", 256, abi, rev, src, &sig)).map(drop), Err(Refusal::BadArg), "kid past 255");
+        assert_eq!(run(body("plasma", kid, abi, rev, src, &sig[..80])).map(drop), Err(Refusal::BadArg), "a short sig");
         let part = r#"{"id":3,"off":0,"data":"bmFtZSAiUmlmdCI"}"#;
-        let v = json::parse(add.as_bytes()).unwrap();
-        assert_eq!(parse_command("formula-add", &v, &limits, true, &keys), Err(Refusal::NotAllowed));
         let v = json::parse(part.as_bytes()).unwrap();
         assert!(matches!(parse_command("formula-part", &v, &limits, true, &keys), Ok(Command::FormulaPart { id: 3, off: 0, .. })));
-        let bad = json::parse(br#"{"id":3,"stem":"../wifi"}"#).unwrap();
-        assert_eq!(parse_command("formula-add", &bad, &limits, true, &keys), Err(Refusal::BadArg), "malformed: bad-arg first");
+        // The largest add is a command (a 40-character stem, every field at its widest).
+        let dev = Dev([0; 16]);
+        let wide = format!(
+            r#""id":{},"stem":"{}","kid":255,"abi":255,"rev":{},"sig":"{sig}","src_size":16384,"src_sha256":"{}","psb_size":8192,"psb_sha256":"{}""#,
+            u32::MAX,
+            "r".repeat(40),
+            u32::MAX,
+            "f".repeat(64),
+            "f".repeat(64)
+        );
+        let b = command_body(&dev, &[0; 12], MAX_N, "formula-add", &wide);
+        assert!(b.len() <= MAX_BODY, "{}", b.len());
     }
 
     /// Without `connect-formula-add` (every release and beta) the two
