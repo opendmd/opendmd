@@ -224,8 +224,8 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
-	@echo "==> Testing $(ARTLIB) (Create Art's pipeline)"
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(ARTLIB) (Create Art's pipeline; feature webp: the site's WebP reader)"
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo test --features webp
 	@echo "==> Testing $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
@@ -265,7 +265,7 @@ connect-roots-check:
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node -- --features webp
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
@@ -333,7 +333,7 @@ check:
 	@echo "==> Checking $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(ARTLIB)"
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features webp
 	@echo "==> Checking $(PSI)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
@@ -352,7 +352,7 @@ check-wasm:
 	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(ARTLIB) and $(ART) for $(WASM_TARGET)"
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features webp
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
@@ -574,8 +574,8 @@ clippy:
 	@echo "==> Clippy $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(ARTLIB)"
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features webp -- -D warnings
+	cd $(ARTLIB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) --features webp -- -D warnings
 	@echo "==> Clippy $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings

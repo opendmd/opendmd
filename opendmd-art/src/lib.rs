@@ -13,8 +13,12 @@
 pub mod anim;
 pub mod encode;
 pub mod pipeline;
+#[cfg(feature = "webp")]
+pub mod webp;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_anim;
+#[cfg(all(test, feature = "webp"))]
+mod tests_webp;
