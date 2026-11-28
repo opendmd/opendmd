@@ -400,7 +400,9 @@ export async function mount(el) {
     if (!tg && app.setNames?.has('.tags')) tagsMod().then(() => tree.refresh()).catch(() => {});
     const has = (p) => p && lists.some((x) => x.path === p);
     const want = [ov.path, store.get('lib.ov'), app.activePath].find(has) || lists[0]?.path || '/filelist.txt';
-    await ov.load(want); // each time: Now's ☆ or the Playlists editor may have changed it
+    await ov.load(want); // each time: Now's ♥ or the Playlists editor may have changed it
+    // (Favourites from before the tag, a weight alone: into the tag, js/tags.js adopt.)
+    if ([...ov.map.values()].some((o) => o.w > 1)) tagsMod().then((m) => m.adopt(ov)).catch(() => {});
   }
 
   await tree.load();

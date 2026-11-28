@@ -69,7 +69,11 @@ function favButton() {
     if (list && list != ov.path) ov.load(list);
     b.draw(!!app.tags?.get(p)?.t?.includes('favourite') || ov.get(p)?.w > 1);
   };
-  ov.onChange = () => b.set(b.p, ov.path);
+  ov.onChange = () => {
+    b.set(b.p, ov.path);
+    // (Favourites from before the tag, a weight alone: into the tag, js/tags.js adopt.)
+    if ([...ov.map.values()].some((o) => o.w > 1)) import('./tags.js').then((m) => m.adopt(ov)).catch(() => {});
+  };
   on('tags', () => b.set(b.p, ov.path));
   return b;
 }

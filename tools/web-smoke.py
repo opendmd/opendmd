@@ -1808,6 +1808,42 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     wait_until(lambda: page.inner_text("#lib-selbar b") == "0", 5)
     check(page.inner_text("#lib-selbar b") == "0", "tags: ♥ Favourite done clears the selection")
     page.click("#lib-sel-done")
+    # Their weights in the playlist playing (it shuffles: the mock's default), and Undo puts back exactly what was.
+    ws = lambda: {o["path"]: o.get("w") for o in get_json(base + "/api/overrides?set=" + urllib.parse.quote(playing))["overrides"] if o["path"] in g}
+    wait_until(lambda: ws() == {g[0]: 3, g[1]: 3}, 10)
+    check(ws() == {g[0]: 3, g[1]: 3}, f"tags: ♥ Favourite gives both w=3 in the playlist playing ({ws()})")
+    page.click("#toasts .toast:has-text('are favourites') button")
+    t = wait_tags(overlay, lambda t: "favourite" not in t.get(g[1], ""))
+    wait_until(lambda: ws() == {g[0]: 3}, 10)
+    check(g[1] not in t and t.get(g[0]) == "t=favourite,smoke tag" and ws() == {g[0]: 3},
+          f"tags: its Undo puts back the tags and the weights exactly (the one already a favourite keeps its w=3: {ws()})")
+    page.evaluate("ps => import('./js/tags.js').then((m) => m.setFav(ps, true))", g)
+    t = wait_tags(overlay, lambda t: all("favourite" in t.get(p, "") for p in g))
+    # In order (shuffle off) a weight changes nothing: the heart writes the tag alone, no overrides file, no reindex.
+    shuffle0 = get_json(base + "/api/config")["shuffle"]
+    put_json(base + "/api/config", {"shuffle": False})
+    refresh_app(page)
+    g2 = [p for p in card_gifs() if p.startswith("/gifs/Consoles/SNES_") and p not in g and p not in before][0]
+    page.evaluate("p => import('./js/tags.js').then((m) => m.setFav([p], true))", g2)
+    t = wait_tags(overlay, lambda t: "favourite" in t.get(g2, ""))
+    page.wait_for_timeout(1000)
+    check("favourite" in t.get(g2, "") and not any(o["path"] == g2 for o in get_json(base + "/api/overrides?set=" + urllib.parse.quote(playing))["overrides"]),
+          "tags: with shuffle off, ♥ is the tag alone (no weight written)")
+    page.evaluate("p => import('./js/tags.js').then((m) => m.setFav([p], false))", g2)
+    wait_tags(overlay, lambda t: g2 not in t)
+    put_json(base + "/api/config", {"shuffle": shuffle0})
+    refresh_app(page)
+    # The Library's own copy of those overrides, changed from a row's menu after the bulk ♥ wrote through
+    # another: the weights stay (each save reads the file again and puts only its own change over it).
+    lib_row(page, g[0])
+    page.click(f"#lib-list .vrow[data-path={json.dumps(g[0])}] .more", force=True)
+    page.click("#ov-less")
+    wait_until(lambda: ws().get(g[0]) == 0.5, 10)
+    check(ws() == {g[0]: 0.5, g[1]: 3}, f"tags: a row menu change after the bulk ♥ keeps the other's weight ({ws()})")
+    page.click(f"#lib-list .vrow[data-path={json.dumps(g[0])}] .more", force=True)
+    page.click("#ov-less")
+    wait_until(lambda: g[0] not in ws(), 10)
+    page.fill("#lib-search", "")
     no_leaks(page, "library tags")
     # Tags of GIFs not on the card (a card edited on a PC).
     name1 = g[1].rsplit("/", 1)[1]

@@ -6,7 +6,7 @@
 // /api/overrides?set=); the page never says so.
 
 import { app, playlistLabel, setValue } from './state.js';
-import { h, toast, label, base, isFormula, formulaName } from './util.js';
+import { h, on, emit, toast, label } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
@@ -15,15 +15,45 @@ export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV });
 
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
+// Every Overrides of this page (weakly): one that saves tells the others
+// with the same playlist, which read it again (`overrides`).
+const live = new Set();
+on('overrides', ({ path, from }) => {
+  for (const r of live) {
+    const x = r.deref();
+    if (!x) live.delete(r);
+    else if (x !== from && x.path === path && !x.ops.length && !x.saving) x.load(path);
+  }
+});
+
+// One change `o` (or a function of the current entry) to `p` in `map`.
+function put(map, p, o) {
+  if (o.call) o = o(map.get(p) || {});
+  const keep = Object.fromEntries(Object.entries(o).filter(([k, v]) => k !== 'path' && v != null && v !== false));
+  if (Object.keys(keep).length) map.set(p, { path: p, ...keep });
+  else map.delete(p);
+}
+
+// A playlist's overrides as the card has them now; throws if they can't be read.
+async function read(path) {
+  if (!path) return [];
+  if (app.device) return (await app.src.overrides(setValue(path))).overrides;
+  const text = await app.src.readText(fileFor(path));
+  return text ? [...app.wasm.parseOverrides(text)] : [];
+}
+
 export class Overrides {
   constructor() {
     this.path = '';      // the playlist's card path
     this.map = new Map(); // gif path -> {path, w?, dwell?, dwell_x?, loops?}
+    this.ops = [];       // this page's changes not saved yet: [p, o]
     this.saving = null;
     this.loading = null;
     this.ok = true;
     this.again = false;
+    this.loud = false;
     this.onChange = () => {};
+    live.add(new WeakRef(this));
   }
 
   get name() { return playlistLabel(this.path); }
@@ -32,18 +62,12 @@ export class Overrides {
   // and is refused if the list could not be read (it would wipe the rest).
   async load(path) {
     this.path = path;
-    const run = this.loading = (async () => {
-      if (!path) return [];
-      try {
-        if (app.device) return (await app.src.overrides(setValue(path))).overrides;
-        const text = await app.src.readText(fileFor(path));
-        return text ? [...app.wasm.parseOverrides(text)] : [];
-      } catch (e) { toast(`${this.name}: ${e.message}`, 'bad'); }
-    })();
+    const run = this.loading = read(path).catch((e) => { toast(`${this.name}: ${e.message}`, 'bad'); });
     const list = await run;
     if (this.loading === run && this.path === path) {
       this.ok = !!list;
       this.map = new Map(list?.map((o) => [o.path, o]));
+      for (const [p, o] of this.ops) put(this.map, p, o);
       this.onChange();
     }
     return this;
@@ -52,29 +76,42 @@ export class Overrides {
   get(p) { return this.map.get(p); }
 
   // Replace one GIF's override (an empty one removes it; `o` may be a
-  // function of the current one) and save.
-  async set(p, o) {
+  // function of the current one) and save. `quiet`: no "Saved" toast (a
+  // heart's weight: the heart is the feedback).
+  set(p, o, quiet) { return this.setMany([[p, o]], quiet); }
+  async setMany(changes, quiet) {
     await this.loading;
-    if (!this.ok) { toast(`couldn’t read “${this.name}”: try again`, 'bad'); return this.load(this.path); }
-    if (o.call) o = o(this.get(p) || {});
-    const keep = Object.fromEntries(Object.entries(o).filter(([k, v]) => k !== 'path' && v != null && v !== false));
-    if (Object.keys(keep).length) this.map.set(p, { path: p, ...keep });
-    else this.map.delete(p);
+    if (!this.ok) { toast(`Couldn’t read “${this.name}”: try again`, 'bad'); return this.load(this.path); }
+    for (const [p, o] of changes) { this.ops.push([p, o]); put(this.map, p, o); }
+    if (!quiet) this.loud = true;
     this.onChange();
     return this.save();
   }
 
-  // One write at a time; changes made meanwhile go out in the next.
+  // One write at a time; changes made meanwhile go out in the next. The
+  // file is read again first, and only this page's changes go over it
+  // (another view of this page, another browser, may have written it
+  // since: a copy read earlier would undo theirs), as js/tags.js does.
   async save() {
     if (this.saving) { this.again = true; return this.saving; }
-    const file = fileFor(this.path);
-    const text = app.wasm.renderOverrides([...this.map.values()]);
+    const path = this.path, n = this.ops.length, loud = this.loud;
+    this.loud = false;
     this.saving = (async () => {
       try {
-        if (text || !app.device) await app.src.writeFile(file, text);
-        else await app.src.deleteFile(file);
-        toast(`saved for “${this.name}”${app.device && app.activePath === this.path ? ' · the display is catching up (a few seconds)' : ''}`, 'ok');
-      } catch (e) { toast(`saving for “${this.name}”: ${e.message}`, 'bad'); this.load(this.path); }
+        const map = new Map((await read(path)).map((o) => [o.path, o]));
+        for (const [p, o] of this.ops.slice(0, n)) put(map, p, o);
+        const text = app.wasm.renderOverrides([...map.values()]);
+        if (text || !app.device) await app.src.writeFile(fileFor(path), text);
+        else await app.src.deleteFile(fileFor(path)).catch((e) => { if (e.status !== 404) throw e; });
+        this.ops.splice(0, n);
+        if (this.path === path) {
+          for (const [p, o] of this.ops) put(map, p, o);
+          this.map = map;
+          this.onChange();
+        }
+        emit('overrides', { path, from: this });
+        if (loud) toast(`Saved for “${playlistLabel(path)}”${app.device && app.activePath === path ? ' · the display is catching up (a few seconds)' : ''}`, 'ok');
+      } catch (e) { toast(`Couldn’t save for “${playlistLabel(path)}”: ${e.message}`, 'bad'); this.ops = []; this.load(path); }
     })();
     await this.saving;
     this.saving = null;
@@ -168,7 +205,7 @@ export function actions(btn, id, items, head) {
 
 export function moreButton(ov, path, extra) {
   return h('button.sm.more', {
-    title: 'Play less often, longer or loop…', 'aria-label': `options for ${isFormula(path) ? formulaName(path) : base(path)}`,
+    title: 'Play less often, longer or loop…', 'aria-label': `Options for ${label(app.wasm.parsePath(path))}`,
     onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4, extra); },
   }, '…');
 }
