@@ -21,6 +21,9 @@
 // time, at the GIF's own timing) and all of them when it is saved. The
 // timeline trims, deletes, speeds up or slows down, reverses and ping-pongs;
 // the order and delays are the module's (`setEdit`), not worked out here.
+// An animated WebP comes in the same way, its frames decoded by the site's
+// reader (`o.webp`, loadWebp) and handed over as they come; a video by the
+// site's video reader (`o.video`).
 //
 // Loaded when the view is first opened, with its stylesheet and its own
 // wasm module (pkg-art/: the pixel work and the GIF writer,
@@ -70,6 +73,8 @@ async function run(step, alive, progress) {
     if (alive && !alive()) return false;
   }
 }
+// An animated WebP (a VP8X chunk with its animation flag), by its first bytes.
+const isAnimWebp = (head) => head.startsWith('RIFF') && head.slice(8, 16) === 'WEBPVP8X' && (head.charCodeAt(20) & 2) !== 0;
 // An MP4 (an ftyp box that is not an AVIF/HEIF still) or a WebM, by its first bytes.
 const isVideo = (head, type) => (head.slice(4, 8) === 'ftyp' && !/^(avi[fs]|hei[cfx]|mif1|msf1)/.test(head.slice(8, 12)))
   || head.startsWith('\x1a\x45\xdf\xa3') || type.startsWith('video/');
@@ -82,7 +87,8 @@ let art = null; // the wasm module
 // mounts it too, with `o`: `css: false` (its own stylesheet imports the
 // Studio's), `acts` (buttons beside Save), `relay` (an address the browser
 // may not fetch, through the site), `video` (the site's video reader, a
-// module: any video the browser plays becomes frames) — and reads what Save would write
+// module: any video the browser plays becomes frames), `webp` (the site's
+// animated WebP reader, a module with its own wasm) — and reads what Save would write
 // through `ready()` and `out()`.
 export async function mount(root, o = {}) {
   [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
@@ -276,8 +282,12 @@ function build(root, o) {
     const tok = ++S.tok;
     msg.textContent = 'Reading…';
     seen.hidden = true;
-    const head = String.fromCharCode(...new Uint8Array(await blob.slice(0, 12).arrayBuffer()));
+    const head = String.fromCharCode(...new Uint8Array(await blob.slice(0, 32).arrayBuffer()));
     if (isVideo(head, blob.type)) return loadVideo(blob, from, tok);
+    if (isAnimWebp(head)) {
+      const r = await loadWebp(blob, from, tok);
+      if (r !== 'still') return r;
+    }
     if (head.startsWith('GIF8')) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       if (art.gifFrames(bytes) > 1) return loadGif(bytes, from, tok);
@@ -329,6 +339,47 @@ function build(root, o) {
     el.dataset.tImport = Math.round(performance.now() - t0);
     restage(true);
     return true;
+  }
+
+  // An animated WebP: the site's reader (`o.webp`, its own wasm, loaded
+  // only now) composites each frame as a browser shows it, on black, at the
+  // picture's own size, and the art module takes them as it takes a GIF's
+  // (fromPictures: an upscale undone, the frames' times, the plays), as
+  // they come. One of a single frame is read as a still ('still'); a frame
+  // that won't decode keeps the ones before it. The panel's own app has no
+  // reader and says where to go (its browser would show the first frame).
+  async function loadWebp(blob, from, tok) {
+    if (!o.webp) { msg.textContent = 'That is an animated WebP: the Studio on opendmd.dev reads those; here, pick a GIF or a picture'; return false; }
+    const t0 = performance.now();
+    const alive = () => tok === S.tok;
+    let st = null, reader;
+    // (The reader's module not loaded — offline, a deploy in between — is said as its wasm not loading is.)
+    try { reader = await o.webp(); } catch { msg.textContent = 'The WebP reader could not be loaded: check your connection, then try again'; return false; }
+    try {
+      const r = await reader.frames(blob, {
+        alive,
+        progress: (i, n) => { msg.textContent = `Reading frames… ${i} of ${n}`; },
+        // (True once the art module keeps no more: its 5,000 frames.)
+        put: (rgb, ms, i) => (st ? st.pushFrame(rgb, ms) : !(st = art.Studio.fromPictures(rgb, i.w, i.h, i.n, ms, i.plays))),
+      });
+      if (r?.still) return 'still';
+      if (!r || !alive()) { st?.free(); return false; }
+      if (r.damaged || r.cut) st.end(!!r.cut);
+      adopt(st, from);
+      const [ow, oh, ww, wh, reduce, , capped] = st.info();
+      msg.textContent = `${from.label || 'WebP'}: ${ow} × ${oh} · ${st.sourceFrames} frames`
+        + (reduce > 1 ? ` · working at ${ww} × ${wh} (1/${reduce} size) to fit in memory` : '')
+        + (capped ? ` · only the first ${st.sourceFrames.toLocaleString()} frames are kept` : '')
+        + (r.cut ? ` · only its first ${r.n.toLocaleString()} of ${r.total.toLocaleString()} frames are read (more would be slow on a phone)` : '')
+        + (r.damaged ? ' · the rest of the file is damaged' : '');
+      Object.assign(el.dataset, { tImport: Math.round(performance.now() - t0), webp: 1 });
+      restage(true);
+      return true;
+    } catch (e) {
+      st?.free();
+      if (alive()) msg.textContent = e.message || String(e);
+      return false;
+    }
   }
 
   // A video (MP4, WebM): the site's reader (`o.video`) plays it into
@@ -390,7 +441,7 @@ function build(root, o) {
     smoothSet(false);
     if (anim) animate(st);
     else A.on = false;
-    Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '', video: '' });
+    Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '', video: '', webp: '' });
     text(true);
     naming();
   }

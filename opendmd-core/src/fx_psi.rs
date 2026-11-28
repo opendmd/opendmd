@@ -93,8 +93,7 @@ pub struct PsiFx {
     drawn: u32,
     /// This frame is raced ([`set_beam`]): decided in `frame_inner`.
     racing: bool,
-    /// Never on the JIT: a program a remote controller delivered (a
-    /// `.psr`, [`card_program`]).
+    /// Never on the JIT: `vm` on its options ([`jit_refusal`]).
     vm_only: bool,
     /// The JIT's kernel for the pixel stage (the ESP32 with `psi-jit`).
     #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -874,9 +873,8 @@ struct Query<'a> {
     held: Option<std::sync::Arc<Vec<u8>>>,
     delay_ms: Option<u8>,
     sliders: [Option<i32>; 3],
-    /// `vm` on its options: drawn by the VM only, never the JIT (a program
-    /// read from a `.psr`: [`card_program`]; anyone may ask for it, never
-    /// take it off).
+    /// `vm` on its options: drawn by the VM only, never the JIT (anyone
+    /// may ask for it; nothing takes it off).
     vm_only: bool,
 }
 
@@ -925,47 +923,6 @@ fn with_bytes<'a>(psb: &'a [u8], opts: &str) -> Query<'a> {
     let mut q = query(opts);
     q.psb = std::borrow::Cow::Borrowed(psb);
     q
-}
-
-/// A card Formula's program as read for playing: the bytes, and whether
-/// they came from a remote controller's `.psr` (then the VM only). The one
-/// way the firmware and the engine read a card Formula's program
-/// ([`card_program`]); its options go through [`CardProgram::opts`], so a
-/// `.psr`'s are always `vm`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CardProgram {
-    pub bytes: Vec<u8>,
-    pub vm_only: bool,
-}
-
-impl CardProgram {
-    /// `opts` for this program: with `vm` when it is a `.psr`'s.
-    pub fn opts(&self, opts: &str) -> String {
-        match (self.vm_only, opts.is_empty()) {
-            (false, _) => opts.to_string(),
-            (true, true) => "vm=1".to_string(),
-            (true, false) => format!("{opts}&vm=1"),
-        }
-    }
-}
-
-/// The program for the card Formula `file` (`/formulas/<stem>.psi`, as
-/// `open` takes paths): its `.psb` if that opens (the panel's own compile,
-/// or a mark: then nothing plays), else its `.psr` (a remote controller's,
-/// VM only), else [`NOT_PREPARED`]. Any other error is the error: a torn,
-/// unreadable or missing anything is "not playable", never "JIT".
-pub fn card_program<R: std::io::Read>(mut open: impl FnMut(&str) -> std::io::Result<R>, file: &str) -> std::io::Result<CardProgram> {
-    use std::io::ErrorKind::NotFound;
-    match open(&crate::synth::compiled_path(file)) {
-        Ok(f) => return read_psb(f).map(|bytes| CardProgram { bytes, vm_only: false }),
-        Err(e) if e.kind() != NotFound => return Err(e),
-        Err(_) => {}
-    }
-    match open(&crate::synth::remote_path(file)) {
-        Ok(f) => read_psb(f).map(|bytes| CardProgram { bytes, vm_only: true }),
-        Err(e) if e.kind() == NotFound => Err(std::io::Error::new(NotFound, NOT_PREPARED)),
-        Err(e) => Err(e),
-    }
 }
 
 /// A compiled Formula's file (`.psb`), read whole; `InvalidInput` ("too
@@ -1972,7 +1929,7 @@ pub struct FormulaLook {
     /// take, a new formula or a new file (a cold flash cache, the file's
     /// open in the same tick).
     cold: u8,
-    /// Never on the JIT ([`card_program`]), as [`PsiFx`]'s.
+    /// Never on the JIT (`vm` on its options), as [`PsiFx`]'s.
     vm_only: bool,
     /// The JIT's kernel for its pixel stage (the ESP32 with `psi-jit`).
     #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -2494,14 +2451,14 @@ impl std::fmt::Debug for FormulaLook {
     }
 }
 
-/// Why the VM draws a program, before anything else is asked: one a
-/// remote controller delivered (a `.psr`) never reaches the JIT.
-pub const UNCONFIRMED_WHY: &str = "added by remote: on the VM until the panel compiles it";
+/// Why the VM draws a program, before anything else is asked: its path
+/// asked for the VM (`vm`).
+pub const VM_ASKED_WHY: &str = "asked for the VM";
 
 /// The JIT's first gate (its only caller is the kernel's build path,
 /// `jit::Jit::kernel_for`, which asks it before anything else).
 pub fn jit_refusal(vm_only: bool) -> Option<&'static str> {
-    vm_only.then_some(UNCONFIRMED_WHY)
+    vm_only.then_some(VM_ASKED_WHY)
 }
 
 /// Whether the program this Formula draws is held to the VM.
@@ -2613,8 +2570,8 @@ mod jit {
         /// VM in turn). Not made yet: made now, and the VM draws this frame
         /// (the check reads its bytes).
         pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Prog, vm_only: bool) -> Option<&mut psi::jit::Kernel> {
-            // First, before any build: a program the panel has not compiled
-            // itself never reaches the JIT (`super::jit_refusal`).
+            // First, before any build: a program held to the VM never
+            // reaches the JIT (`super::jit_refusal`).
             if let Some(why) = super::jit_refusal(vm_only) {
                 if self.why != Some(why) || self.kernel.is_some() {
                     log::info!("formula: on the VM ({why})");
@@ -2911,7 +2868,7 @@ mod alloc_box {
             b.0.gov = self.0.gov;
             b.0.played_ms = self.0.played_ms;
             b.0.played_us = self.0.played_us;
-            // (A clone of a remote program is one: never on the JIT.)
+            // (A clone of a program held to the VM is held too.)
             b.0.vm_only = self.0.vm_only;
             b
         }
@@ -2937,52 +2894,10 @@ mod alloc_box {
 #[cfg(test)]
 mod tests {
 
-    /// A card of files by path, for [`card_program`].
-    fn card<'a>(files: &'a [(&'a str, &'a [u8])]) -> impl FnMut(&str) -> std::io::Result<std::io::Cursor<Vec<u8>>> + 'a {
-        move |p: &str| {
-            files
-                .iter()
-                .find(|(n, _)| *n == p)
-                .map(|(_, b)| std::io::Cursor::new(b.to_vec()))
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))
-        }
-    }
-
-    /// Which file a card Formula plays from, and the VM's hold on a `.psr`:
-    /// a `.psb` wins (even a mark: nothing plays), a `.psr` alone plays on
-    /// the VM only, neither is "not prepared", and any other error is the
-    /// error, never a fallback.
-    #[test]
-    fn card_programs_and_the_vm() {
-        let prog = psi::build("name \"Remote\"\ngray(x * 0.37 + t)").unwrap();
-        let mark = b"PSB\0\x01\x02\x03\x04\x05\x06\x07\x08".to_vec();
-        let f = "/formulas/r.psi";
-        let got = card_program(card(&[("/formulas/r.psr", &prog)]), f).unwrap();
-        assert_eq!(got, CardProgram { bytes: prog.clone(), vm_only: true });
-        assert_eq!(got.opts(""), "vm=1");
-        assert_eq!(got.opts("a=1&vm=0"), "a=1&vm=0&vm=1");
-        let got = card_program(card(&[("/formulas/r.psb", &prog), ("/formulas/r.psr", &prog)]), f).unwrap();
-        assert!(!got.vm_only, "the panel's own compile wins");
-        let got = card_program(card(&[("/formulas/r.psb", &mark), ("/formulas/r.psr", &prog)]), f).unwrap();
-        assert!(!got.vm_only && got.bytes == mark && PsiFx::from_bytes(&got.bytes, "").is_err(), "a mark wins: nothing plays");
-        let e = card_program(card(&[]), f).unwrap_err();
-        assert_eq!(e.to_string(), NOT_PREPARED);
-        let broken = |p: &str| -> std::io::Result<std::io::Cursor<Vec<u8>>> {
-            if p.ends_with(".psb") {
-                Err(std::io::Error::other("card read failed"))
-            } else {
-                Ok(std::io::Cursor::new(prog.clone()))
-            }
-        };
-        assert!(card_program(broken, f).is_err(), "an unreadable .psb is no reason to play the .psr");
-    }
-
-    /// Tripwire (beside the behavioural checks: the emulator lane plays
-    /// `.psr` programs as effects, looks and start-up shows and asserts no
-    /// kernel is built): the JIT is built in one place in the core,
+    /// Tripwire: the JIT is built in one place in the core,
     /// `jit::Jit::kernel_for`, after its first gate `jit_refusal(vm_only)`;
     /// both its callers pass their `vm_only`; and in the firmware only the
-    /// measuring probes (never a release, never a card program) call it.
+    /// measuring probes (never a release) call it.
     #[test]
     fn the_jit_is_built_in_one_place_behind_the_vm_gate() {
         fn code(path: &std::path::Path) -> String {
@@ -3026,37 +2941,26 @@ mod tests {
         }
     }
 
-    /// A program read from a `.psr`, driven to where the JIT would be
-    /// built: the JIT's first gate (`jit_refusal`, the first thing
-    /// `jit::Jit::kernel_for` asks) refuses it, as an effect, a look, a
-    /// start-up show, a clone and after a retune; the same bytes as a
-    /// panel-compiled `.psb` pass it. (Asking for `vm` on a path only ever
-    /// adds the hold.)
+    /// `vm` on a path holds a program to the VM (the JIT's first gate,
+    /// `jit_refusal`, refuses it) as an effect, a look, a clone and after a
+    /// retune that asks for it; the same bytes without it pass the gate.
     #[test]
-    fn a_psr_never_reaches_the_jit() {
-        let prog = psi::build("name \"Remote\"\ngray(x * 0.37 + t)").unwrap();
-        let look = psi::build("name \"Remote look\"\nlook screen 40\ngray(x * 0.37 + t)").unwrap();
-        let f = "/formulas/r.psi";
-        let remote = card_program(card(&[("/formulas/r.psr", &prog)]), f).unwrap();
-        let own = card_program(card(&[("/formulas/r.psb", &prog)]), f).unwrap();
-        let fx = PsiFx::from_bytes(&remote.bytes, &remote.opts("a=0.5")).unwrap();
-        assert!(fx.vm_only() && jit_refusal(fx.vm_only()) == Some(UNCONFIRMED_WHY), "a .psr's effect");
+    fn vm_on_a_path_holds_it_to_the_vm() {
+        let prog = psi::build("name \"Held\"\ngray(x * 0.37 + t)").unwrap();
+        let look = psi::build("name \"Held look\"\nlook screen 40\ngray(x * 0.37 + t)").unwrap();
+        let fx = PsiFx::from_bytes(&prog, "a=0.5&vm=1").unwrap();
+        assert!(fx.vm_only() && jit_refusal(fx.vm_only()) == Some(VM_ASKED_WHY), "an effect asked for the VM");
         let fx2 = fx.clone();
         assert!(fx2.vm_only() && jit_refusal(fx2.vm_only()).is_some(), "its clone");
-        let mine = PsiFx::from_bytes(&own.bytes, &own.opts("a=0.5")).unwrap();
-        assert!(!mine.vm_only() && jit_refusal(mine.vm_only()).is_none(), "the same bytes as the panel's .psb");
-        let rl = card_program(card(&[("/formulas/l.psr", &look)]), "/formulas/l.psi").unwrap();
-        let l = FormulaLook::from_bytes(&rl.bytes, &rl.opts("")).unwrap();
-        assert!(l.vm_only(), "a .psr as the look");
-        let show = crate::boot::FormulaShow::from_bytes(&remote.bytes, &remote.opts("")).unwrap();
-        let _ = show;
-        // A retune onto an inline program decides by that program's own path.
-        let mut fx3 = PsiFx::from_bytes(&remote.bytes, &remote.opts("")).unwrap();
+        let free = PsiFx::from_bytes(&prog, "a=0.5").unwrap();
+        assert!(!free.vm_only() && jit_refusal(free.vm_only()).is_none(), "the same bytes without vm");
+        assert!(FormulaLook::from_bytes(&look, "vm=1").unwrap().vm_only(), "a look asked for the VM");
+        let mut fx3 = PsiFx::from_bytes(&prog, "vm=1").unwrap();
         fx3.retune_from(&path_of(&prog, "")[crate::synth::FORMULA.len()..], Retune::Edit).unwrap();
-        assert!(!fx3.vm_only(), "a LAN live edit's inline program is the LAN's");
-        let mut fx4 = PsiFx::from_bytes(&own.bytes, "").unwrap();
+        assert!(!fx3.vm_only(), "a retune decides by its own path");
+        let mut fx4 = PsiFx::from_bytes(&prog, "").unwrap();
         fx4.retune_from(&format!("{}&vm=1", &path_of(&prog, "")[crate::synth::FORMULA.len()..]), Retune::Edit).unwrap();
-        assert!(fx4.vm_only(), "vm on a path holds it");
+        assert!(fx4.vm_only(), "vm on a retune's path holds it");
     }
 
     use super::*;

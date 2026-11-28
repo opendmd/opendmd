@@ -27,7 +27,7 @@ Where the URLs come from (so a new route is covered without editing this):
     packages' files (pkg, pkg-art, pkg-psi);
   - with --site-root (the site's repository, which runs this with it): the
     site's Worker routes (site/worker/src/index.ts, and its /formulas/
-    paths), the site's own wasm (pkg-studio, its opendmd-studio-web) and the
+    paths), the site's own wasm (pkg-studio, its opendmd-studio-web; pkg-webp, opendmd-webp-web) and the
     site's pages: the built site (--site, default <site-root>/target/site) if
     there is one, else site/pages, the theme and public-repo sources;
   - --site alone: a built site's files.
@@ -155,7 +155,8 @@ def web_assets(site_root=None):
     pkgs = {"pkg": ROOT / "opendmd-web", "pkg-art": ROOT / "opendmd-art-web", "pkg-psi": ROOT / "opendmd-psi-web"}
     if site_root:
         pkgs["pkg-studio"] = site_root / "opendmd-studio-web"  # the site's own, laid over the web app
-    for d, crate in (("pkg", "opendmd_web"), ("pkg-art", "opendmd_art_web"), ("pkg-psi", "opendmd_psi_web"), ("pkg-studio", "opendmd_studio_web")):
+        pkgs["pkg-webp"] = site_root / "opendmd-webp-web"  # the site's animated WebP reader
+    for d, crate in (("pkg", "opendmd_web"), ("pkg-art", "opendmd_art_web"), ("pkg-psi", "opendmd_psi_web"), ("pkg-studio", "opendmd_studio_web"), ("pkg-webp", "opendmd_webp_web")):
         if d not in pkgs:
             continue
         crate_name = crate

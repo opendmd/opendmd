@@ -61,6 +61,7 @@ FORBIDDEN = [
 NETWORK_OFF = re.compile(r'network off \("network": "off" in the settings\)')
 WORKER_OFF = re.compile(r"\[net\] network off: no WiFi this boot")
 PREPARED = re.compile(r"formulas: /formulas/(\S+)\.psi prepared for the panel \(([^)]*)\): (\d+) B in (\d+) ms; heap (\d+) B free before, (\d+) B at the lowest; compile stack (\d+) B left")
+FULL_SUMMARY = re.compile(r"formulas: (\d+) on the card: (\d+) ready, (\d+) prepared now, (\d+) do not compile, (\d+) short of memory, (\d+) not tried yet, (\d+) card writes failed")
 SUMMARY = re.compile(r"formulas: (\d+) on the card: (\d+) ready, (\d+) prepared now, (\d+) do not compile, (\d+) short of memory")
 HEARTBEAT = re.compile(r"heartbeat: heap (\d+) B free \((?:largest \d+ B, )?floor (\d+) B.*wifi off")
 
@@ -179,12 +180,12 @@ class Lane:
         # playlist with no start-up show: skipped until it is ready, then
         # played.
         files["/formulas/zlate.psi"] = (FIXTURES / "ramp.psi").read_bytes()
-        # A release and remote adds' programs (`.psr`, made only by a build with
-        # connect-formula-add): one with its source, one with none. A release
-        # plays a `.psr` on the VM and removes one only with its `.psi` (a LAN
-        # delete): the pass compiles the first's source and leaves both.
+        # Stray `.psr` files (the retired remote-add format, only ever on test
+        # cards): no file of the panel's. One beside a source holding another
+        # program (the pass compiles the source as if it were not there), one
+        # with no source; both left as they are.
         files["/formulas/rampr.psi"] = (FIXTURES / "ramp.psi").read_bytes()
-        files["/formulas/rampr.psr"] = (Path(self.a.host_psb) / "ramp.psb").read_bytes()
+        files["/formulas/rampr.psr"] = (Path(self.a.host_psb) / "tick.psb").read_bytes()
         files["/formulas/orphan.psr"] = (Path(self.a.host_psb) / "ramp.psb").read_bytes()
         files["/filelist.txt"] = (
             "/formulas/zlate.psi\n/formulas/cut.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
@@ -336,7 +337,7 @@ class Lane:
             want = 0 if self.cut_healed else 1
             if int(m[3]) != want or int(m[2]) + int(m[3]) + int(m[4]) + int(m[5]) != int(m[1]):
                 raise LaneFail(f"the second start should compile {want} (the refused one, if not healed already): {m[0]}")
-            if want and not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
+            if not self.cut_healed and not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
                 raise LaneFail("cut.psi was not prepared again at the next start")
             self.ok("next start", m[0] + " (the marks and times kept)")
             _, m = e.wait_for(re.compile(r"boot show: formula /formulas/tick\.psi does not build \((.*)\): the built-in show"), 120,
@@ -344,6 +345,62 @@ class Lane:
             if "shows the time" not in m[1]:
                 raise LaneFail(f"the start-up show was refused for another reason: {m[0]}")
             self.ok("start-up show, prepared", "the clock Formula refused, the wordmark")
+        finally:
+            e.kill()
+        self.write_failures(out, image)
+
+    def write_failures(self, out: Path, image: Path):
+        """A card that will not take a compiled file (the emu-census image's
+        hook: a source `wfail*` with its `.wfail` marker has its .psb write
+        fail once). A3, from boot A's card with two such sources: the first
+        tried fails, counted as a card write failure, not short of memory;
+        then nothing more is compiled this start (the other one not tried,
+        no retry), nothing is left beside it. A4, the markers gone: both are
+        prepared at that next start."""
+        a3, a3_out = self.dir / "card-a3.img", self.dir / "card-a3-out.img"
+        a3_out.unlink(missing_ok=True)
+        src = (FIXTURES / "ramp.psi").read_bytes()
+        files = {}
+        for n in (1, 2):
+            files[f"/formulas/wfail{n}.psi"] = src.replace(b"Offline ramp", f"Write fails {n}".encode(), 1)
+            files[f"/formulas/wfail{n}.wfail"] = b"once\n"
+        make_card(out, a3, files)
+        e = self.emu("A3", image, a3, 30, ("--net", "none"), card_out=a3_out)
+        try:
+            self.booted_ours(e)
+            i, m = e.wait_for(re.compile(r"formulas: /formulas/(wfail[12])\.psi: the card would not take its compiled file \(a card write failure\): prepared again at the next start; no more compiles this start"),
+                              300, what="the forced write failure (the emu-census image's hook)")
+            failed = m[1]
+            other = "wfail2" if failed == "wfail1" else "wfail1"
+            _, sm = e.wait_for(FULL_SUMMARY, 300, what="A3's summary")
+            hooked = e.find(re.compile(r"its \.psb write taken as failed \(a test image\)"))
+            after = [x for j, x in e.find(PREPARED) if j > i]
+            shorts = [x[0] for _, x in e.find(re.compile(r"formulas: short of memory for .*"))]
+            if len(hooked) != 1 or int(sm[7]) != 1 or int(sm[6]) < 1:
+                raise LaneFail(f"A3: one write failure, the rest not tried, wanted: {len(hooked)} hooked; {sm[0]}")
+            if after or any("wfail" in x for x in shorts) or e.find(re.compile(r"a retry compiled")):
+                raise LaneFail(f"A3: compiled after the write failure, or taken as short, or retried: {[x[0] for x in after][:3]} {shorts[:1]}")
+            self.ok("write failure, then stop", f"{failed}.psi's .psb write failed: a card write failure, not short of memory; nothing compiled after it this start ({other}.psi not tried), no retry ({sm[0][:150]})")
+        finally:
+            e.kill()
+        if not a3_out.exists():
+            raise LaneFail(f"boot A3 wrote no card image back ({a3_out})")
+        left = {n: subprocess.run(["mdir", "-b", "-i", str(a3_out), f"::/formulas/{n}"], env={"MTOOLS_SKIP_CHECK": "1", "PATH": "/usr/bin:/bin"},
+                                  capture_output=True).returncode == 0 for n in (f"{failed}.psb", f"{other}.psb", f"{failed}.wfail", f"{other}.wfail")}
+        if left != {f"{failed}.psb": False, f"{other}.psb": False, f"{failed}.wfail": False, f"{other}.wfail": True}:
+            raise LaneFail(f"A3's card: {left} (no .psb for either, the failed one's marker taken, the untried one's kept)")
+        self.ok("write failure, the card", f"no {failed}.psb or {other}.psb left; {other}'s marker untouched (never tried)")
+        a4 = self.dir / "card-a4.img"
+        shutil.copyfile(a3_out, a4)
+        subprocess.run(["mdel", "-i", str(a4), f"::/formulas/{other}.wfail"], check=True, env={"MTOOLS_SKIP_CHECK": "1", "PATH": "/usr/bin:/bin"})
+        e = self.emu("A4", image, a4, 30, ("--net", "none"))
+        try:
+            self.booted_ours(e)
+            _, sm = e.wait_for(FULL_SUMMARY, 300, what="A4's summary")
+            got = {x[1] for _, x in e.find(PREPARED)}
+            if not {"wfail1", "wfail2"} <= got or int(sm[7]) != 0:
+                raise LaneFail(f"A4: both prepared at the next start, no write failure, wanted: {sorted(got)}; {sm[0]}")
+            self.ok("write failure, next start", f"wfail1 and wfail2 prepared ({sm[0][:150]})")
         finally:
             e.kill()
 
@@ -366,8 +423,12 @@ class Lane:
             r = subprocess.run(["mcopy", "-n", "-i", str(out), f"::/formulas/{name}", str(got_dir / name)],
                                env={"MTOOLS_SKIP_CHECK": "1", "PATH": "/usr/bin:/bin"}, capture_output=True)
             if r.returncode != 0:
-                raise LaneFail(f"/formulas/{name} is not on the card after the pass (a release keeps a .psr, and compiles its source)")
-        self.ok("remote programs kept", "a release leaves .psr files (rampr.psr beside its compiled .psb, orphan.psr with no source)")
+                raise LaneFail(f"/formulas/{name} is not on the card after the pass (a stray .psr is left alone, its source compiled)")
+        if (got_dir / "rampr.psb").read_bytes() != (host / "ramp.psb").read_bytes():
+            raise LaneFail("rampr.psb is not its source's compile (the stray .psr beside it got in)")
+        if (got_dir / "rampr.psr").read_bytes() != (host / "tick.psb").read_bytes():
+            raise LaneFail("rampr.psr was changed by the pass")
+        self.ok("stray .psr ignored", "rampr.psb compiled from its source as if no .psr were there (byte for byte the host's); rampr.psr and orphan.psr left alone")
         mark = (got_dir / "broken.psb").read_bytes()
         if len(mark) != 12 or mark[:4] != b"PSB\0":
             raise LaneFail(f"broken.psb is not the mark ({mark[:16]!r})")

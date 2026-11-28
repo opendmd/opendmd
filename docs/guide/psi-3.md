@@ -1,6 +1,6 @@
 # Make a Formula, 3: add a shape
 
-There are two ways to put a shape on the panel. You can describe it by distance, as a rule every pixel checks. You can also draw it, with lines and circles, the way you would on paper. This page does both.
+There are two ways to put a shape on the panel. The colour line can test how far each pixel is from the shape, or a `draw` block can draw the shape with lines and circles. This page shows both.
 
 ## A shape by distance
 
@@ -33,11 +33,11 @@ d = len(px - bx, py - 16)
 pal(fire, 1 - d/12)
 ```
 
-`bx` swings between 24 and 104 and back, once a loop. Notice that `bx` reads only the time, so it is the same for every pixel. Psi works it out once a frame. `d` reads `px` and `py`, so it is worked out for each of the 4,096 pixels. That difference matters when a Formula gets bigger, and [How Psi thinks](psi.md) explains it.
+`bx` swings between 24 and 104 and back, once a loop. `bx` reads only the time, so it is the same for every pixel, and the display works it out once a frame. `d` reads `px` and `py`, so it is worked out for each of the 4,096 pixels. [How often each line is worked out](psi.md#how-often-each-line-is-worked-out) explains why that matters for a bigger Formula.
 
-## Drawing instead
+## The draw block
 
-A `draw { … }` block works the way a pen does. It runs once a frame, before any pixel is worked out, and puts marks on the panel at positions in pixels, counted from the top left.
+A `draw { … }` block runs once a frame, before any pixel is worked out. Its lines draw shapes at positions given in pixels, counted from the top left.
 
 ```psi
 name "Ball"
@@ -49,7 +49,7 @@ draw {
 
 `circfill(x, y, r, colour)` paints a filled circle. Painting is drawn on top of everything else, so this Formula needs no colour line. Under the paint you see whatever is under the Formula: on this page a sample picture of sky, sun and hills, and on the display black, or the GIF it is drawn over. There are also `circ` for a ring, `rect` and `rectfill` for boxes, `trifill` for triangles, `pset` for one pixel, `print` for text and `cls` to fill the whole panel.
 
-Inside `draw`, there is no "this pixel". A line such as `dot(x, 1)` gets an error, because `x` changes from pixel to pixel and `draw` runs before any of them.
+A `draw` block can't read the pixel's position. `dot(x, 1)` is an error, because `x` is different for each pixel and `draw` runs once, before any of them.
 
 ```psi-bad
 name "Oops"
@@ -74,7 +74,7 @@ pal(fire, ink)
 
 The line goes from the middle to a point that goes round it. `pal(fire, ink)` then colours the ink. Change `fire` to `ice` and the same line is drawn in blue.
 
-## Many at once
+## Repeating with `for`
 
 `for k < 64 { … }` repeats its lines 64 times, with `k` counting 0, 1, 2 and on up to 63.
 
@@ -91,7 +91,7 @@ gray(ink)
 
 `hash(a, b)` gives a number between 0 and 1 that looks random but is always the same for the same `a` and `b`. Each flake gets its own place across and its own start down. `frac(… + t/4)` makes each one fall the whole height of the panel once a loop and start again at the top. A frame can run 2,048 turns of `for` loops in all.
 
-## A small picture
+## Sprites
 
 A sprite is a little picture drawn in characters. The `key` line says what each character stands for: here `.` is nothing and `R` is a red.
 
@@ -129,4 +129,4 @@ layer {
 
 The first layer fills the panel with the `ocean` palette, another name for `ice`: black at the top, through blue, to white at the bottom. The second has a fourth value, how much of the pixel it covers, from 0 to 1. `r` is the distance from the middle of the panel, so `r < 0.3` is 1 inside a disc and 0 outside it. Where it is 0, the sea below shows through.
 
-That's the tour. The [gallery](/formulas/) has finished Formulas to open in the editor and change. [How Psi thinks](psi.md) takes the ideas behind it one at a time. When you want every name and function, [the language reference](../psi-spec.md) lists them all.
+The [gallery](/formulas/) has finished Formulas to open in the editor and change. [How a Formula is run](psi.md) explains what the display does with a Formula and what makes one slow. [The language reference](../psi-spec.md) lists every name and function.

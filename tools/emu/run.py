@@ -688,6 +688,30 @@ def main():
             print(f"golden: {golden[1]} match, {golden[2]} differ; VM {v_ok} match, {v_skip} skipped of {v_cases} cases; through kernels: {k_ok} match, {k_vm} on the VM, {k_skip} skipped; JIT spike kernels tiny ({len(tiny)}), call, floor as the VM")
             print(f"EMU_PROBE_OK ({took:.0f} s wall)")
             return
+        # The psi-refresh image (firmware/src/psi_probe/refresh.rs): the
+        # goldens (VM and kernels), then every row measured, none failed.
+        # (Correctness only: an emulator's timings mean nothing.)
+        if "psi-probe: done: refresh" in done_at:
+            if not golden:
+                die("the golden-frames result line is missing")
+            if golden[1] == 0 or golden[2] != 0:
+                die(f"golden frames: {golden[1]} match, {golden[2]} differ")
+            (v_ok, v_skip, v_cases), (k_ok, k_vm, k_skip) = golden_checks()
+            rows = [l for l in lines if "psi-probe: refresh|" in l]
+            failed = [l for l in lines if "psi-probe: refresh-failed|" in l]
+            summ = [re.search(r"psi-probe: refresh rows: (\d+) measured, (\d+) failed, of (\d+)", l) for l in lines]
+            summ = [m for m in summ if m]
+            if not summ:
+                die("the refresh rows' summary line is missing")
+            n, f, of = (int(x) for x in summ[-1].groups())
+            if failed or f or n != of or n == 0:
+                die(f"refresh rows: {n} measured, {f} failed, of {of}\n" + "\n".join(l[:300] for l in failed))
+            print("--- refresh rows:")
+            for l in rows:
+                print(l[l.index("psi-probe:"):][:300])
+            print(f"golden: {golden[1]} match, {golden[2]} differ; VM {v_ok} match, {v_skip} skipped of {v_cases} cases; through kernels: {k_ok} match, {k_vm} on the VM, {k_skip} skipped; refresh rows {n} of {of}")
+            print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+            return
         # The paint probe's image (`make emu-image-paint`): its own summary
         # line (each case's kernel frames against the VM's), nothing else.
         if "psi-probe: done: paint" in done_at:

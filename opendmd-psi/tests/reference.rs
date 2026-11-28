@@ -387,3 +387,92 @@ fn every_guide_example_compiles_and_lights_the_panel() {
     }
     assert!(n >= 25, "the guide's Psi pages have only {n} examples");
 }
+
+/// The guide pages whose running text is checked below (the pages above,
+/// and the Formulas page, which has no blocks).
+const PROSE: [&str; 6] = [
+    "docs/guide/psi-1.md",
+    "docs/guide/psi-2.md",
+    "docs/guide/psi-3.md",
+    "docs/guide/psi.md",
+    "docs/guide/editor.md",
+    "docs/guide/formulas.md",
+];
+
+/// A page's lines outside its fenced blocks: (line number, text).
+fn prose(text: &str) -> Vec<(usize, &str)> {
+    let mut fence = false;
+    let mut out = Vec::new();
+    for (k, l) in text.lines().enumerate() {
+        if l.starts_with("```") {
+            fence = !fence;
+        } else if !fence {
+            out.push((k + 1, l));
+        }
+    }
+    out
+}
+
+/// The `code spans` of a line.
+fn spans(line: &str) -> Vec<&str> {
+    line.split('`').skip(1).step_by(2).collect()
+}
+
+/// A colour line written in the guide's running text (`gray(2 * x)`,
+/// `mix(#000, #f80, k)`) compiles as one: after a loop, a palette `P`, some
+/// ink and the placeholder names the pages use (`k`, `v`, `s`). A span with
+/// `…` in it is a pattern, not a line, and is skipped.
+#[test]
+fn the_guides_inline_colour_lines_compile() {
+    const HEAD: &str = "loop 4\npalette P = #000, #fff\ndraw {\n  dot(1, 1)\n}\nk = 0.5\nv = 0.5\ns = 0.5\n";
+    const STARTS: [&str; 7] = ["gray(", "hsv(", "rgb(", "pal(", "mix(", "cycle(", "#"];
+    let mut n = 0;
+    for page in PROSE {
+        let text = std::fs::read_to_string(root(page)).unwrap();
+        for (line, l) in prose(&text) {
+            for s in spans(l) {
+                let whole = s.ends_with(')') || (s.starts_with('#') && s.contains(' '));
+                if s.contains('…') || !whole || !STARTS.iter().any(|p| s.starts_with(p)) {
+                    continue;
+                }
+                n += 1;
+                if let Err(e) = compile(&format!("{HEAD}{s}\n")) {
+                    panic!("{page} line {line}: `{s}` is written as a colour line, but it fails: {}", e.msg);
+                }
+            }
+        }
+    }
+    assert!(n >= 8, "only {n} inline colour lines found: has the pages' markup changed?");
+}
+
+/// Where a guide page quotes the editor's message for a ```psi-bad block
+/// (the "…" in the paragraph after it), the compiler says those words.
+#[test]
+fn the_messages_the_guide_quotes_are_the_compilers() {
+    let mut n = 0;
+    for page in PROSE {
+        let text = std::fs::read_to_string(root(page)).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (start, src) in fenced(&text, "psi-bad") {
+            let e = compile(&src).expect_err("a psi-bad block fails (tested above)");
+            // `start` is the block's first line of code (1-based): its closing fence follows the code.
+            let after = start - 1 + src.lines().count() + 1;
+            let para: Vec<&str> = lines[after.min(lines.len())..]
+                .iter()
+                .skip_while(|l| l.is_empty())
+                .take_while(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("```"))
+                .copied()
+                .collect();
+            for q in para.join(" ").split('"').skip(1).step_by(2) {
+                n += 1;
+                let plain = |s: &str| s.replace('`', "");
+                assert!(
+                    plain(&e.msg).contains(&plain(q)),
+                    "{page} line {start}: the page quotes \"{q}\", but the compiler says: {}",
+                    e.msg
+                );
+            }
+        }
+    }
+    assert!(n >= 3, "only {n} quoted messages found: has the pages' markup changed?");
+}

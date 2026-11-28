@@ -401,9 +401,11 @@ pub enum Command {
     Playlists,
     /// `formulas`; `after`: the page after this stem (5.6), `None` the first.
     Formulas { after: Option<String> },
-    /// `formula-add` (5.7): a Formula's source and compiled file to come.
+    /// `formula-add` (5.7): a Formula's source and compiled file to come,
+    /// and the gallery's signature over them (the witness only
+    /// `gallery_sig::check` makes).
     #[cfg(feature = "connect-formula-add")]
-    FormulaAdd(super::fadd::AddArgs),
+    FormulaAdd(super::fadd::AddArgs, crate::gallery_sig::Signed),
     /// `formula-part`: `data` of the add `id` at stream offset `off`.
     #[cfg(feature = "connect-formula-add")]
     FormulaPart { id: u32, off: u32, data: Vec<u8> },
@@ -586,8 +588,17 @@ pub fn parse_command(c: &str, a: &Value, limits: &Limits, can_add: bool, keys: &
             };
             Command::Formulas { after }
         }
+        // An add needs the gallery's signature, checked here
+        // (`gallery_sig::check`, whose witness `Command::FormulaAdd` takes).
+        // The command carries none yet (the signed-gallery design's step 4),
+        // so there is nothing to check and no witness: after its argument
+        // rules every add is refused. (A part with no add held is the
+        // firmware's `not-allowed`, before the card.)
         #[cfg(feature = "connect-formula-add")]
-        "formula-add" => Command::FormulaAdd(super::fadd::add_args(a)?),
+        "formula-add" => {
+            super::fadd::add_args(a)?;
+            return Err(Refusal::NotAllowed);
+        }
         #[cfg(feature = "connect-formula-add")]
         "formula-part" => {
             let (id, off, data) = super::fadd::part_args(a)?;
@@ -824,12 +835,10 @@ impl FormulaList {
     }
 
     /// [`new`](Self::new), saying first what an add needs (5.7): the
-    /// compiled format this player takes (`abi`) and whether it wants the
-    /// controller's compiled file with the source (`psb`; a board that
-    /// compiles while Connect is open would say false).
+    /// compiled format this player takes (`abi`).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    pub fn with_add(card: bool, abi: u8, psb: bool) -> FormulaList {
-        FormulaList { s: format!(r#"{{"abi":{abi},"psb":{psb},"builtin":["#), has_card: card, card_open: false, more: false }
+    pub fn with_add(card: bool, abi: u8) -> FormulaList {
+        FormulaList { s: format!(r#"{{"abi":{abi},"builtin":["#), has_card: card, card_open: false, more: false }
     }
 
     /// Anything left out yet?
@@ -1325,6 +1334,28 @@ mod tests {
         let mut l = FormulaList::new(false);
         l.builtin("s", &fits);
         assert_eq!(l.finish(false, None).len(), RESULT_ROOM);
+    }
+
+    /// With `connect-formula-add` (test images only) the two commands are
+    /// on the allow-list, but every add is refused `not-allowed` after its
+    /// argument rules: it carries no gallery signature, so no witness is
+    /// made (well-formed ones too). Malformed ones stay `bad-arg`; a part
+    /// parses (the firmware refuses it with no add held).
+    #[cfg(feature = "connect-formula-add")]
+    #[test]
+    fn formula_add_refuses_every_add_until_signatures_are_checked() {
+        use super::super::json;
+        let keys = KeyList::new();
+        let limits = Limits { max_brightness: 128 };
+        let sha = "22".repeat(32);
+        let add = format!(r#"{{"id":3,"stem":"rift-patrol","name":"Rift patrol","src_size":10835,"src_sha256":"{sha}","psb_size":4439,"psb_sha256":"{sha}"}}"#);
+        let part = r#"{"id":3,"off":0,"data":"bmFtZSAiUmlmdCI"}"#;
+        let v = json::parse(add.as_bytes()).unwrap();
+        assert_eq!(parse_command("formula-add", &v, &limits, true, &keys), Err(Refusal::NotAllowed));
+        let v = json::parse(part.as_bytes()).unwrap();
+        assert!(matches!(parse_command("formula-part", &v, &limits, true, &keys), Ok(Command::FormulaPart { id: 3, off: 0, .. })));
+        let bad = json::parse(br#"{"id":3,"stem":"../wifi"}"#).unwrap();
+        assert_eq!(parse_command("formula-add", &bad, &limits, true, &keys), Err(Refusal::BadArg), "malformed: bad-arg first");
     }
 
     /// Without `connect-formula-add` (every release and beta) the two

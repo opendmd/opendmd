@@ -1,7 +1,7 @@
 # The editor
 
-The editor is where a Formula is written and changed. It is in your web
-app under **Formulas**, in the [demo](https://opendmd.dev/demo/), and on
+You write and change a Formula in the editor. It is in your web app
+under **Formulas**, in the [demo](https://opendmd.dev/demo/), and on
 this site behind **Open** in the [formula gallery](https://opendmd.dev/formulas/)
 and **Open in editor** under an example. The preview plays as you type.
 
@@ -15,19 +15,26 @@ scroll. The line under it says how long the loop is, or that the Formula
 follows the clock, how often the panel draws it (every refresh, every 2nd
 or every 4th, with about how many a second: your panel's own figure when
 one is connected), and how hard it is for the panel: **light**, **medium**
-or **heavy**. Hover over that line to see the estimate in milliseconds a
-frame. The preview draws its frames at about the moments the panel would,
+or **heavy**: light is an estimate of 5 ms a frame or less, medium 8 ms
+or less. On a computer, hover over that line to see the estimate in
+milliseconds a frame. The preview draws its frames at about the moments the panel would,
 as far as your screen's own refresh allows.
 
-The rating counts how fast the panel usually draws the Formula. The panel
-also needs to be able to draw it the slow way, when it can't use its
-faster path, and refuses a Formula that would take more than about 40 ms a
-frame that way. (A `smooth` one past 32 ms is drawn every 2nd refresh
-instead, and the line under the preview says so.) Such a Formula is rated
-**too heavy**, and a line under the preview says so, even when it would
-usually be light.
+The rating is for the way the panel usually draws the Formula. A heavy
+Formula still plays. The panel starts it at a slower rate, such as every
+4th refresh, and draws it more often once it can. The line under the
+preview says which rate it starts at.
 
-The row under the preview holds the time.
+The panel can also draw a Formula a slower way, without its faster path,
+and it refuses a Formula that would take more than about 40 ms a frame
+that way, or 12 ms for one that draws over a GIF. (A `smooth` one past
+32 ms is drawn every 2nd refresh instead, and the line under the preview
+says so.) A refused Formula is rated **too heavy**, and a line under the
+preview says so, even when it would usually be light. [What makes a
+Formula heavy](psi.md#what-makes-a-formula-heavy) says how to make one
+lighter.
+
+Under the preview are the controls for time.
 
 - **❚❚** holds the picture still, and **▶** plays on.
 - **‹** and **›** step a frame back or on. With the preview selected, the
@@ -35,8 +42,8 @@ The row under the preview holds the time.
 - The slider drags through the loop, or through the first 10 seconds of a
   Formula that goes on without repeating. `t` is shown beside it.
 
-Edit while the picture is held and the new text is drawn at the same
-moment.
+If you edit while the preview is paused, it draws the new text at the
+same moment of the loop.
 
 A Formula that draws over a GIF is shown over a sample picture. **Pick a
 GIF…** draws it over one of the GIFs in your playlist or a GIF file from
@@ -56,25 +63,25 @@ dimmed.
 
 ## Changing numbers and colours
 
-- **Drag a number** left or right to try other values. On a computer,
+- Drag a number left or right to try other values. On a computer,
   drag it in the text, or put the cursor on it and press Alt+↑ or Alt+↓.
   Hold Shift for steps ten times bigger. On a phone, tap a number and drag
   the bar that appears under the code, or use its **−** and **+**. Ctrl+Z
   (⌘Z on a Mac) undoes a whole drag at once.
-- **Pick a colour.** Each colour in the text, such as `#f80`, has a bar
+- Each colour in the text, such as `#f80`, has a bar
   under it in that colour. Click or tap in one and a swatch appears at the
   end of its line. The swatch opens your browser's colour picker, and the
   colour you pick takes the old one's place. Ctrl+Z (⌘Z) puts the old
   colour back. With the keyboard, put the
   cursor in the colour and press Esc, then Tab.
-- **Paint a sprite.** With the cursor in a `sprite` block, press **Edit
+- To paint a sprite, put the cursor in its `sprite` block and press **Edit
   the picture** at its first line. The picture opens as a grid. Pick a
   character from the key, where the checked one is see-through, then click
   or drag to paint. **+ Column**, **− Column**, **+ Row** and **− Row**
   change its size at the right and the bottom, and **+ Colour** adds a
   colour to the key. Each stroke goes into the text, and **Undo** takes it
   back.
-- **Make a sprite from a picture.** Press **Picture…** under the code,
+- To make a sprite from a picture, press **Picture…** under the code,
   or drop a picture on the code, or paste one into it. PNG, JPEG, GIF,
   WebP, BMP and SVG work, up to 8 MB and 4,096 pixels a side. The picture
   stays in your browser: it is never uploaded. Drag on it to crop it (on
@@ -91,14 +98,14 @@ dimmed.
   **Background** makes a background see-through, or turns the picture
   into one colour. The line by the buttons says what the Formula would
   use with it, or what stops it. **Add the sprite** puts it in after the
-  Formula's first lines, and a `draw { }` line that shows it in the middle
-  if the Formula has none; Ctrl+Z (⌘Z) takes it out again. With the
+  Formula's first lines. With **Draw it in the middle** ticked, it also
+  puts in a `draw { }` line that shows the sprite in the middle. Ctrl+Z (⌘Z) takes it out again. With the
   cursor in a sprite, or from **Replace from a picture…** in its picture
   editor, the picture replaces that sprite and its key keeps the
   characters it had for colours that stay. Use pictures you made or may
   share.
-- **Edit a palette.** With the cursor in a `palette` line, press **Edit
-  the palette**. A strip shows its colours as the panel reads them, from
+- To edit a palette, put the cursor in its `palette` line and press
+  **Edit the palette**. A strip shows its colours as the panel reads them, from
   left to right. Tap a colour to change it, drag it to move it, give it a
   name, take it away with **×**, or add one with **+ Colour**.
 
@@ -113,18 +120,18 @@ dimmed.
   puts the `}` under it.
 - Tab and Shift+Tab indent and unindent. To leave the code with the
   keyboard, press Esc, then Tab.
-- **Cheat sheet** lists every name in the language with a line about
-  each. Tap a name to put it in.
+- **Cheat sheet** lists the language's names, with a line about each.
+  Tap a name to put it in.
 - A line such as `use Plasma as p` puts the Formula called Plasma in as a
   function, `p`, once the cursor leaves the line. It works for your
   Formulas and the bundled ones that have a single colour line and no
-  layers, drawing, tables, sprites or palettes. See [How Psi
-  thinks](psi.md#functions).
+  layers, drawing, tables, sprites or palettes. See [How a Formula is
+  run](psi.md#functions).
 
 ## Settings and controls
 
-**⚙ Settings** opens one sheet for what the Formula says about itself.
-Each change there is a line at the top of the text.
+**⚙ Settings** opens the Formula's name, description, controls and look
+in one sheet. Each change there is a line at the top of the text.
 
 - **Name** and **About** are its `name` and `about` lines.
 - **Controls** are its sliders and buttons, three at most. **+ Add a

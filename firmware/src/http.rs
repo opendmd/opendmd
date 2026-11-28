@@ -1976,11 +1976,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
                 }
-                // A Formula's source deleted takes a remote add's program
-                // with it (the web app knows only `.psi` and `.psb`).
-                if let Some(base) = card.strip_suffix(opendmd_core::synth::FORMULA_EXT).filter(|b| b.starts_with("/formulas/")) {
-                    let _ = std::fs::remove_file(format!("{}{base}{}", config::SD_MOUNT, opendmd_core::synth::REMOTE_EXT));
-                }
                 // The look's Formula deleted: the look goes with it.
                 crate::formula_look::file_changed(&c.settings, &card, true);
                 req.json(r#"{"ok":true}"#)

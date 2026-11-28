@@ -2,17 +2,25 @@
 //! protocol 5.7): the card's half of `opendmd_core::connect::fadd`. Built
 //! only with `connect-formula-add` (test images: never a release).
 //!
+//! **Only signed Formulas.** [`Client::formula_add`] and the landing take
+//! the [`Signed`] witness only `gallery_sig::check` makes (the core's
+//! parser, before any card access), and the core holds an add only with a
+//! witness over exactly its bytes. `formula-add` carries no signature yet
+//! (the signed-gallery design's step 4), so the parser refuses every add,
+//! nothing here runs past a part's first check (no add held:
+//! `not-allowed`), and no program arrives by remote at all.
+//!
 //! - **Before any card read:** the add's own rate, the same add signed
 //!   again (no card read at all), another key's add under way, the day's
 //!   tally (`/formulas/.add-day`, kept across restarts), a LAN transfer or
 //!   update under way (`busy`).
 //! - **One directory pass** (no lookup per name): the Formulas on the card
 //!   (at most [`fadd::MAX_FORMULAS`] sources, else `quota`) and the taken
-//!   stems (a `.psi`, `.psb` or `.psr`); where it lands is the stem or the
+//!   stems (a `.psi` or `.psb`); where it lands is the stem or the
 //!   next free `-2` … `-9`. A taken stem whose `.psi` has the signed
 //!   source's length is hashed, and if it is the signed source it is the
 //!   same Formula: `done`, nothing written.
-//! - **The bytes** go to `/formulas/.add-<id>.psi.part` and `.psr.part`
+//! - **The bytes** go to `/formulas/.add-<id>.psi.part` and `.psb.part`
 //!   (dot names: never listed or played; gone when the add is dropped or
 //!   stale, and at boot).
 //! - **The last part:** both hashes (the core's), the source UTF-8 with no
@@ -20,20 +28,19 @@
 //!   checked (`psb::verify`), behind a heap gate (the bytes, one program, 20
 //!   KB for the rest; below it, or a load short of heap, `busy`: the same
 //!   `formula-add` signed again tries again).
-//! - **Landing, fail closed:** the program renamed to `<stem>.psr` first,
-//!   then the source to `<stem>.psi` (a rename never replaces a file). It is
-//!   never a `.psb`: whatever is read from a `.psr` plays on the VM only
-//!   (`fx_psi::card_program`), until the panel's own compiler writes the
-//!   `.psb` from the source and removes the `.psr` (`card_formulas`). A
-//!   restart between the two renames leaves a `.psr` with no source, which
-//!   the next pass removes; a failed second rename removes the first.
+//! - **Landing:** the compiled file renamed to `<stem>.psb` first, then the
+//!   source to `<stem>.psi` (a rename never replaces a file); a failed
+//!   second rename removes the first. The source's part was written before
+//!   the program's (the stream is the source, then the program), so the
+//!   `.psb` is not older than its source: the mount pass takes it as
+//!   current. A restart between the two renames leaves a `.psb` with no
+//!   source: never listed or played (both go by the `.psi`).
 
 use super::client::{core_now, Client};
 use crate::config;
-use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Tally};
+use opendmd_core::connect::fadd::{self, AddArgs, Part, Pre, Signed, Tally};
 use opendmd_core::connect::keys::KeyId;
 use opendmd_core::connect::proto::Refusal;
-use opendmd_core::synth::REMOTE_EXT;
 use std::io::{Read, Write};
 
 type Done = Result<Option<String>, Refusal>;
@@ -48,7 +55,7 @@ fn dir() -> String {
 const TALLY_SLOTS: [&str; 2] = [".add-day.a", ".add-day.b"];
 
 fn part_path(id: u32, p: Part) -> String {
-    format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psr" })
+    format!("{}/.add-{id}.{}.part", dir(), if p == Part::Source { "psi" } else { "psb" })
 }
 
 fn remove_parts(id: u32) {
@@ -107,7 +114,7 @@ fn scan() -> Option<(Vec<(String, u32)>, usize)> {
         while sys::f_readdir(&mut d, &mut fi) == sys::FRESULT_FR_OK && fi.fname[0] != 0 {
             let Ok(name) = std::ffi::CStr::from_ptr(fi.fname.as_ptr()).to_str() else { continue };
             let l = name.to_ascii_lowercase();
-            for ext in [".psi", ".psb", REMOTE_EXT] {
+            for ext in [".psi", ".psb"] {
                 if let Some(st) = l.strip_suffix(ext) {
                     // (Only a `.psi`'s size matters: 0 for the others.)
                     taken.push((st.to_string(), if ext == ".psi" { fi.fsize as u32 } else { u32::MAX }));
@@ -225,7 +232,7 @@ impl Client {
 
     #[optimize(size)]
     #[inline(never)]
-    pub(super) fn formula_add(&mut self, k: KeyId, args: AddArgs) -> Done {
+    pub(super) fn formula_add(&mut self, k: KeyId, args: AddArgs, signed: Signed) -> Done {
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
@@ -242,8 +249,9 @@ impl Client {
         match self.adds.pre(k, &args, now, today())? {
             Pre::Landed { stem } => return Ok(done(&stem)),
             Pre::Resume { next } => {
-                if self.adds.whole(&k, id).is_some() {
-                    return self.formula_land(k, id);
+                if let Some((_, w)) = self.adds.whole(&k, id) {
+                    let w = w.clone();
+                    return self.formula_land(k, id, &w);
                 }
                 return Ok(Some(format!(r#"{{"next":{next}}}"#)));
             }
@@ -258,7 +266,8 @@ impl Client {
             Err(stem) => return Ok(done(&stem)),
             Ok(stem) => stem,
         };
-        if let Some(old) = self.adds.begin(k, args, stem, now) {
+        // (Held only with a signature over exactly these bytes.)
+        if let Some(old) = self.adds.begin(k, args, signed, stem, now)? {
             remove_parts(old);
         }
         // Its bytes on the tally (fails closed: no part file without it).
@@ -280,6 +289,10 @@ impl Client {
     #[optimize(size)]
     #[inline(never)]
     pub(super) fn formula_part(&mut self, k: KeyId, id: u32, off: u32, data: Vec<u8>) -> Done {
+        // No add admitted (none signed): refused before the card.
+        if self.adds.held.is_none() {
+            return Err(Refusal::NotAllowed);
+        }
         if !self.link.status.lock().unwrap().sd_usable() {
             return Err(Refusal::NoCard);
         }
@@ -308,18 +321,26 @@ impl Client {
             }
         }
         if p.complete {
-            return self.formula_land(k, id);
+            let Some((_, w)) = self.adds.whole(&k, id) else {
+                return Err(Refusal::BadArg);
+            };
+            let w = w.clone();
+            return self.formula_land(k, id, &w);
         }
         Ok(Some(format!(r#"{{"next":{}}}"#, p.next)))
     }
 
-    /// The bytes are in and their hashes match: check, then land.
+    /// The bytes are in and their hashes match: check, then land. Only with
+    /// the gallery's signature over exactly these bytes.
     #[optimize(size)]
     #[inline(never)]
-    fn formula_land(&mut self, k: KeyId, id: u32) -> Done {
-        let Some(h) = self.adds.whole(&k, id) else {
+    fn formula_land(&mut self, k: KeyId, id: u32, signed: &Signed) -> Done {
+        let Some((h, _)) = self.adds.whole(&k, id) else {
             return Err(Refusal::BadArg);
         };
+        if !h.args.signed_by(signed) {
+            return Err(Refusal::NotAllowed);
+        }
         let (stem, psb_size) = (h.target.clone(), h.args.psb_size as usize);
         if lan_busy() || !room(psb_size) {
             // Kept: the same formula-add signed again tries again.
@@ -354,23 +375,22 @@ impl Client {
             return Err(Refusal::BadArg);
         }
         let d = dir();
-        let (psr_to, psi_to) = (format!("{d}/{stem}{REMOTE_EXT}"), format!("{d}/{stem}.psi"));
-        // The program first, as a `.psr` (VM only), then its source; a rename
-        // never replaces a file. Either step failing leaves nothing that plays
-        // on the JIT, and nothing at all from this add.
-        if std::fs::rename(part_path(id, Part::Psb), &psr_to).is_err() {
+        let (psb_to, psi_to) = (format!("{d}/{stem}.psb"), format!("{d}/{stem}.psi"));
+        // The program first, then its source; a rename never replaces a
+        // file. Either step failing leaves nothing at all from this add.
+        if std::fs::rename(part_path(id, Part::Psb), &psb_to).is_err() {
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::Busy);
         }
         if std::fs::rename(part_path(id, Part::Source), &psi_to).is_err() {
-            let _ = std::fs::remove_file(&psr_to);
+            let _ = std::fs::remove_file(&psb_to);
             self.adds.drop_held();
             remove_parts(id);
             return Err(Refusal::Busy);
         }
         crate::fatidx::note_written(&psi_to);
-        log::info!("formula-add: landed as /formulas/{stem}.psi, its program a .psr (on the VM until compiled here)");
+        log::info!("formula-add: landed as /formulas/{stem}.psi and its .psb");
         self.adds.landed(&stem, core_now());
         Ok(done(&stem))
     }

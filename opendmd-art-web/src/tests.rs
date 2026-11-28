@@ -241,3 +241,42 @@ fn build_name_in_the_browser_is_the_cores() {
     assert!(crate::platforms().includes(&"VIRTUAL_BOY".into(), 0));
     assert!(!crate::platforms().includes(&"NINTENDO_DS".into(), 0));
 }
+
+/// An animated WebP's frames as the site's reader hands them over
+/// (`fromPictures`, then `pushFrame` at the source's size, then `end`):
+/// a 2x upscale found and undone, the times and plays kept, and the
+/// timeline's frames there to render.
+#[cfg(feature = "studio")]
+#[test]
+fn from_pictures_is_read_as_a_gif_is() {
+    let rgb = |img: &Image| {
+        img.px
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect::<Vec<u8>>()
+    };
+    let up = |img: &Image| {
+        let mut out = Image::new(img.w * 2, img.h * 2);
+        for y in 0..out.h {
+            for x in 0..out.w {
+                out.px[y * out.w + x] = img.at(x / 2, y / 2);
+            }
+        }
+        out
+    };
+    let frames: Vec<Image> = (0..3).map(|i| pixel_art(96, 40, 7 + i)).collect();
+    let mut st = crate::Studio::from_pictures(&rgb(&up(&frames[0])), 192, 80, 3, 80, 4).unwrap();
+    assert!(!st.push_frame(&rgb(&up(&frames[1])), 40));
+    assert!(st.push_frame(&rgb(&up(&frames[2])), 120));
+    st.end(false);
+    assert_eq!(st.source_frames(), 3);
+    assert_eq!(st.scale(), 2);
+    assert_eq!(st.delays(), [80, 40, 120]);
+    // [width, height, workWidth, workHeight, reduce, damaged, capped, plays, cut]
+    assert_eq!(st.info(), [192, 80, 96, 40, 1, 0, 0, 4, 0]);
+    assert_ne!(
+        st.auto_fit(),
+        "fit",
+        "native pixel art is not fitted smooth"
+    );
+}
